@@ -30,13 +30,16 @@ with `!prefix mention`.
 | --- | --- | --- |
 | `!profile [@member]` | everyone | Full personality report (yourself if no member). Aliases: `!judge`, `!p`, `!me` |
 | `!top [trait]` | everyone | Leaderboard for `funny`, `toxic`, `cringe`, `freaky`, `serious`, `chaotic` or `active`. Aliases: `!leaderboard`, `!lb` |
-| `!optout` / `!optin` | everyone | Exclude yourself from being read or judged |
+| `!mimic [@member]` | everyone | A made-up message in someone's style, from a Markov chain of their messages. Aliases: `!impersonate`, `!copy` |
+| `!markov` | everyone | A made-up sentence stitched together from the whole server. Aliases: `!babble`, `!server` |
+| `!optout` / `!optin` | everyone | Exclude yourself from being read or judged (opting out also deletes your stored messages) |
 | `!help` | everyone | Command list using this server's prefix |
 | `!track #channel` / `!untrack #channel` | Manage Server | Choose which channels SYKE reads |
 | `!channels` | Manage Server | Watched channels, prefix, timezone and demo mode. Alias: `!settings` |
 | `!prefix <new\|mention\|reset>` | Manage Server | Custom prefix (1-5 characters), `mention` so SYKE only answers to `@SYKE profile`, or `reset` for `!`. `!prefix` alone shows the current setting |
 | `!timezone <zone>` | Manage Server | Timezone for "most active" hours, e.g. `Europe/London`. Alias: `!tz` |
 | `!rescan` | Manage Server | Drop the cache and re-read channels now |
+| `!collect [#channel] [limit]` | Manage Server | Read up to 20,000 messages per channel (default 5,000) into the Markov corpus. Without a channel it reads every watched channel |
 | `!demo on\|off` | Manage Server | Add 5 fake members to rankings so you can test alone |
 | `!sample [name]` | Manage Server | Full report for a fake member (Zyro, Mira, bubbles, Dex, Vex) |
 
@@ -53,10 +56,12 @@ with `!prefix mention`.
 
 ## How it works
 
-1. **Collect**: when someone asks for a report, SYKE reads the last `SYKE_SCAN_LIMIT`
-   messages from each watched channel (bots and opted-out users are skipped). The scan
-   is cached in memory for `SYKE_CACHE_MINUTES`. Message content is never written to disk;
-   the SQLite file only holds watched channels, opt-outs, prefixes, timezones and demo mode.
+1. **Collect**: SYKE reads the last `SYKE_SCAN_LIMIT` messages from each watched channel,
+   in parallel, when it starts and whenever the scan is older than `SYKE_CACHE_MINUTES`.
+   Refreshes only fetch messages newer than the last scan, and scores are reused until the
+   scan changes, so most reports skip straight to the roast. Bots and opted-out users are skipped.
+   Text from watched channels (and anything `!collect` reads) is kept in SQLite so `!mimic`
+   and `!markov` have something to learn from. `!optout` deletes a member's stored messages.
 2. **Hard stats** (`syke/stats.py`): message count, first seen, busiest 3-hour window,
    average words, top emojis (including custom ones), and catchphrases (repeated 2-3 word phrases).
 3. **Traits** (`syke/traits.py`): every message gets scored by word lists in
@@ -121,8 +126,8 @@ command and restart policy.
    - `SYKE_DEFAULT_TIMEZONE`, e.g. `Europe/London` (optional)
 4. Deploy. The **Deploy Logs** should show `Synced 2 global commands` and `SYKE online as ...`.
 
-No external database (Supabase, Postgres, etc.) is needed. SYKE only stores watched
-channels, opt-outs and timezones.
+No external database (Supabase, Postgres, etc.) is needed. SYKE stores watched channels,
+opt-outs, per-server settings and the Markov corpus in that SQLite file.
 
 ## Configuration
 
