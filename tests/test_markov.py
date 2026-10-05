@@ -323,3 +323,53 @@ def test_replies_to_yaps_get_a_matching_comeback(lab, monkeypatch):
 
     bot.storage.set_yap(42, 1, False)
     assert run(bot.replied_yap(reply_message(5, yap)[0])) is None
+
+
+def test_scanme_adds_older_messages_to_profile(lab):
+    cog, guild, channel = lab
+    bot = cog.bot
+    bot.scanner.scan_limit = 5
+    server, _ = run(bot.analyze(guild))
+    assert server.users[100].stats.message_count == 5
+
+    ctx = ctx_in(guild)
+    run(cog.scanme.callback(cog, ctx))
+    embed = ctx.replies[-1]
+    assert embed.title == "Scan complete ⛏️"
+    assert "found **12** of yours" in embed.description and "**7** SYKE hadn't seen" in embed.description
+    assert "draws on **12** messages" in embed.description
+
+    server, _ = run(bot.analyze(guild))
+    assert server.users[100].stats.message_count == 12
+    assert server.users[100].name == "user100"
+
+    bot.storage.set_optout(42, 100, True)
+    server, _ = run(bot.analyze(guild))
+    assert 100 not in server.users
+
+
+def test_profile_saves_ai_labels_and_rescores(lab, monkeypatch):
+    cog, guild, _ = lab
+    bot = cog.bot
+    server, _ = run(bot.analyze(guild))
+    seen = {}
+
+    async def fake_roast(profile, settings, emojis=None, avoid=None):
+        seen["avoid"] = avoid
+        profile.summary, profile.ai_used = "roasted", True
+        profile.ai_labels = {m.message_id: frozenset({"freaky"}) for m in profile.messages}
+        return profile
+
+    monkeypatch.setattr("syke.bot.write_roast", fake_roast)
+    ctx = ctx_in(guild)
+    ctx.guild.emojis = []
+    before = server.users[100].scores["freaky"]
+    run(cog.profile.callback(cog, ctx, None))
+    assert ctx.replies[-1].description.endswith("> roasted")
+    assert len(bot.storage.labels(42)) == 12
+    assert "Freaky" in ctx.replies[-1].fields[-1].value
+    server, _ = run(bot.analyze(guild))
+    assert server.users[100].scores["freaky"] > before
+
+    run(cog.profile.callback(cog, ctx, None))
+    assert seen["avoid"] == "roasted"

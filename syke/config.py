@@ -29,6 +29,7 @@ class Settings:
     owner_ids: frozenset[int] = frozenset()
     yap_chance: float = 0.08
     yap_cooldown: int = 120
+    deep_scan_limit: int = 20000
 
 DEFAULT_OWNER_IDS = "1342786189576634398"
 
@@ -71,4 +72,5 @@ def load_settings() -> Settings:
         owner_ids=_ids(os.getenv("SYKE_OWNER_IDS", DEFAULT_OWNER_IDS)),
         yap_chance=min(max(_float("SYKE_YAP_CHANCE", 0.08), 0.0), 1.0),
         yap_cooldown=_int("SYKE_YAP_COOLDOWN", 120),
+        deep_scan_limit=_int("SYKE_DEEP_SCAN_LIMIT", 20000),
     )
