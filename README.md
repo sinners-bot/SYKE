@@ -39,7 +39,7 @@ with `!prefix mention`.
 | `!timezone <zone>` | Manage Server | Timezone for "most active" hours, e.g. `Europe/London`. Alias: `!tz` |
 | `!rescan` | Manage Server | Drop the cache and re-read channels now |
 | `!collect [#channel] [limit]` | Manage Server | Read up to 20,000 messages per channel (default 5,000) into the Markov corpus. Without a channel it reads every watched channel |
-| `!yap on\|off [#channel]` | Manage Server | When on, SYKE now and then answers chat in that channel with a random message a member sent in the past (`SYKE_YAP_CHANCE` per message, at most once per `SYKE_YAP_COOLDOWN` seconds). `!yap` alone lists where it's on |
+| `!yap on\|off [#channel]` | Manage Server | When on, SYKE now and then answers chat in that channel with a random message a member sent in the past (`SYKE_YAP_CHANCE` per message, at most once per `SYKE_YAP_COOLDOWN` seconds). Reply to a yap and SYKE replies with another stored message that fits what you said, picked by the AI (or by shared keywords without an AI key). `!yap` alone lists where it's on |
 | `!demo on\|off` | Manage Server | Add 5 fake members to rankings so you can test alone |
 | `!sample [name]` | Manage Server | Full report for a fake member (Zyro, Mira, bubbles, Dex, Vex) |
 

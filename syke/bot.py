@@ -7,6 +7,7 @@ import contextlib
 import logging
 import os
 import random
+import re
 import sys
 import time
 from typing import Callable, TypeVar
@@ -16,7 +17,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from .ai import write_roast
+from .ai import pick_comeback, write_roast
 from .cards import ProfileView, build_pages
 from .config import Settings, load_settings
 from .demo import PERSONAS, build_demo_server
@@ -42,6 +43,12 @@ NEEDED_PERMISSIONS = ("view_channel", "send_messages", "embed_links", "read_mess
 MIN_MIMIC_MESSAGES = 10
 COLLECT_DEFAULT = 5000
 COLLECT_MAX = 20000
+YAP_REPLY_COOLDOWN = 4
+STOPWORDS = {
+    "the", "and", "you", "your", "are", "was", "but", "not", "that", "this", "with", "have", "just",
+    "like", "what", "for", "its", "it's", "i'm", "im", "dont", "don't", "can", "get", "got", "all",
+    "how", "why", "who", "when", "then", "than", "they", "them", "she", "her", "his", "him", "out",
+}
 
 TRAIT_ALIASES: dict[str, str] = {
     **{t: t for t in TRAITS},
@@ -144,6 +151,7 @@ class Syke(commands.Bot):
         self._background: set[asyncio.Task] = set()
         self._warmed = False
         self._last_yap: dict[int, float] = {}
+        self._last_comeback: dict[tuple[int, int], float] = {}
         self.add_check(self.channel_check)
 
     async def setup_hook(self) -> None:
@@ -226,7 +234,63 @@ class Syke(commands.Bot):
         if message.channel.id in self.storage.tracked(message.guild.id) \
                 and message.author.id not in self.storage.optouts(message.guild.id):
             self.storage.add_corpus(message.guild.id, [corpus_row(message)])
-        await self.maybe_yap(message)
+        said = await self.replied_yap(message)
+        if said is not None:
+            await self.answer_yap_reply(message, said)
+        else:
+            await self.maybe_yap(message)
+
+    async def replied_yap(self, message: discord.Message) -> str | None:
+        """The text of SYKE's yap that `message` replies to, if it is one.
+
+        Yaps are the only plain-text messages SYKE sends (everything else is an embed), so this
+        also recognises yaps sent before a restart.
+        """
+        ref = message.reference
+        if ref is None or ref.message_id is None or self.user is None:
+            return None
+        if message.channel.id not in self.storage.yap_channels(message.guild.id):
+            return None
+        target = ref.resolved if isinstance(ref.resolved, discord.Message) else ref.cached_message
+        if target is None:
+            try:
+                target = await message.channel.fetch_message(ref.message_id)
+            except discord.HTTPException:
+                return None
+        if target.author.id != self.user.id or target.embeds or not target.content:
+            return None
+        return target.content
+
+    def comeback_candidates(self, guild_id: int, reply: str, exclude: set[str]) -> list[str]:
+        words = sorted({w for w in re.findall(r"[a-z0-9']+", reply.lower())
+                        if len(w) >= 3 and w not in STOPWORDS}, key=len, reverse=True)[:6]
+        pool = self.storage.search_messages(guild_id, words, 30) + self.storage.random_messages(guild_id, 30)
+        seen = {e.strip().lower() for e in exclude}
+        candidates = []
+        for text in pool:
+            key = text.strip().lower()
+            if key in seen or len(text.split()) < 2 or self.is_command_text(guild_id, text):
+                continue
+            seen.add(key)
+            candidates.append(text)
+        return candidates
+
+    async def answer_yap_reply(self, message: discord.Message, said: str) -> None:
+        """Someone answered a yap: reply with the stored message that best fits, picked by AI."""
+        key = (message.channel.id, message.author.id)
+        now = time.monotonic()
+        if now - self._last_comeback.get(key, -1e9) < YAP_REPLY_COOLDOWN:
+            return
+        self._last_comeback[key] = now
+        candidates = self.comeback_candidates(message.guild.id, message.content, {said, message.content})
+        if not candidates:
+            return
+        async with message.channel.typing():
+            pick = await pick_comeback(self.settings, said, message.content, candidates)
+        if pick is None:
+            return
+        with contextlib.suppress(discord.HTTPException):
+            await message.reply(candidates[pick], mention_author=False)
 
     def is_command_text(self, guild_id: int, text: str) -> bool:
         text = text.lstrip()
@@ -624,7 +688,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"`{p}timezone <zone>` — e.g. `{p}timezone Europe/London`\n"
                 f"`{p}rescan` — re-read channels now\n"
                 f"`{p}collect [#channel] [limit]` — read more history for mimic/yap\n"
-                f"`{p}yap on|off` — SYKE chimes in with old messages in this channel\n"
+                f"`{p}yap on|off` — SYKE chimes in with old messages here; reply to it and it answers back\n"
                 f"`{p}demo on|off` — add fake members to test alone\n"
                 f"`{p}sample [name]` — report for a fake member\n\n"
                 "SYKE keeps text from watched channels for mimic/yap; "
@@ -832,7 +896,8 @@ class SykeCommands(commands.Cog, name="SYKE"):
             await ctx.reply(embed=notice("Yap off 🤐", f"SYKE will keep quiet in {channel.mention}.", BRAND))
             return
         body = (f"Every so often, when people chat in {channel.mention}, SYKE will drop something a member "
-                f"said in the past. Turn it off with `{p}yap off`.")
+                f"said in the past. Reply to one and SYKE answers with another message that fits. "
+                f"Turn it off with `{p}yap off`.")
         perms = channel.permissions_for(ctx.guild.me)
         if not perms.send_messages:
             body += f"\n⚠️ SYKE can't send messages in {channel.mention} yet."

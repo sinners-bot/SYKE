@@ -244,3 +244,82 @@ def test_yap_on_off_and_chiming_in(lab, monkeypatch):
     by_name = {c.name: c for c in cog.get_commands()}
     assert _admin_predicate in by_name["yap"].checks
     assert "markov" not in by_name
+
+
+def test_keyword_pick_prefers_shared_words():
+    from syke.ai import keyword_pick
+
+    candidates = ["i hate mondays", "pizza is elite", "who wants pizza tonight"]
+    assert keyword_pick("pizza tonight?", candidates) == 2
+    assert keyword_pick("anything", []) is None
+
+
+def test_comeback_uses_ai_pick_and_falls_back(monkeypatch):
+    from syke import ai
+
+    settings = replace(load_settings(), ai_provider="openai", openai_api_key="k")
+    candidates = ["no way", "pizza is elite", "touch grass"]
+
+    async def fake_openai(s, system, user):
+        assert "THEY REPLIED: pizza?" in user and "[2] touch grass" in user
+        return '{"pick": 2}'
+
+    monkeypatch.setattr(ai, "_call_openai", fake_openai)
+    assert run(ai.pick_comeback(settings, "hello", "pizza?", candidates)) == 2
+
+    async def broken(s, system, user):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(ai, "_call_openai", broken)
+    assert run(ai.pick_comeback(settings, "hello", "pizza?", candidates)) == 1
+
+
+def reply_message(mid, target, text="pizza is the best", author=777):
+    replies: list[str] = []
+
+    async def reply(content, **kwargs):
+        replies.append(content)
+
+    channel = types.SimpleNamespace(id=1, typing=lambda: _NullTyping())
+    message = types.SimpleNamespace(
+        id=mid, content=text, guild=types.SimpleNamespace(id=42),
+        author=types.SimpleNamespace(id=author, bot=False), channel=channel, reply=reply,
+        reference=types.SimpleNamespace(message_id=target.id, resolved=target, cached_message=None),
+    )
+    return message, replies
+
+
+class _NullTyping:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def test_replies_to_yaps_get_a_matching_comeback(lab, monkeypatch):
+    cog, guild, _ = lab
+    bot = cog.bot
+    run(bot.analyze(guild))
+    bot.storage.set_yap(42, 1, True)
+
+    yap = types.SimpleNamespace(id=5000, content="memes are so much fun", embeds=[],
+                                author=types.SimpleNamespace(id=999))
+    monkeypatch.setattr("syke.bot.discord.Message", types.SimpleNamespace)  # resolved replies are Messages
+    assert run(bot.replied_yap(reply_message(1, yap)[0])) == "memes are so much fun"
+
+    embed_reply = types.SimpleNamespace(id=5001, content="", embeds=["card"], author=yap.author)
+    assert run(bot.replied_yap(reply_message(2, embed_reply)[0])) is None
+    someone_else = types.SimpleNamespace(id=5002, content="hey", embeds=[], author=types.SimpleNamespace(id=1))
+    assert run(bot.replied_yap(reply_message(3, someone_else)[0])) is None
+
+    message, replies = reply_message(4, yap, text="what about pizza though")
+    run(bot.answer_yap_reply(message, yap.content))
+    assert len(replies) == 1
+    assert "pizza" in replies[0] and replies[0] != "memes are so much fun"
+
+    run(bot.answer_yap_reply(message, yap.content))
+    assert len(replies) == 1, "per-user cooldown"
+
+    bot.storage.set_yap(42, 1, False)
+    assert run(bot.replied_yap(reply_message(5, yap)[0])) is None
