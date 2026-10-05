@@ -5,43 +5,19 @@ A Discord bot that reads the channels your admins pick and writes a brutally hon
 trait breakdown, a hall of fame of their worst messages, an AI-written roast,
 achievements, and how they compare to the rest of the server.
 
-```
-📊 ACTIVITY
-Messages analyzed: 2,847
-Active since: May 2026
-Most active: 22:00–01:00
-Average message length: 5 words
-Top emojis: 💀×588 😭×449 😏×319
-Catchphrases:
-  "bro really" ×461
+`!profile` replies with a three-page card. Buttons switch between pages, and the
+card's colour matches the member's strongest trait:
 
-──────────────────────────────────
+| Page | What's on it |
+| --- | --- |
+| 📊 **Overview** | Archetype (e.g. *The Class Clown*), the roast summary, six stat tiles (messages, active since, peak hours, average length, top emojis, catchphrase) and the personality bars |
+| 🏆 **Highlights** | Funniest, most unhinged, freakiest and most toxic messages, quoted |
+| 🥇 **Ranks** | Achievements and "Top X%" against everyone else judged in the server |
 
-🎭 PERSONALITY BREAKDOWN
-😂 Funny   ██████████░░  80%
-☠️ Toxic   ████░░░░░░░░  31%
-💀 Cringe  ░░░░░░░░░░░░   0%
-😏 Freaky  ████░░░░░░░░  33%
-🧠 Serious █░░░░░░░░░░░   6%
-🔥 Chaotic ██████░░░░░░  50%
+Only the person who ran the command can flip pages; anyone else who clicks gets a
+private copy of that page. Buttons stop working after 10 minutes.
 
-──────────────────────────────────
-
-🏆 YOUR STATS
-
-😂 Funniest message:
-"bro really thought he could solo
-the raid 💀💀"
-
-💀 Most unhinged message:
-"ASDFGHJKL I CANT"
-...
-🧬 PROFILE SUMMARY
-🥇 ACHIEVEMENTS
-📈 Compared with the server
-```
-
-Run `python -m syke.preview` to see a full report generated from a fake server.
+Run `python -m syke.preview` to see a report from a fake server in your terminal.
 
 ## Commands
 

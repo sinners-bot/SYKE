@@ -13,11 +13,12 @@ from discord import app_commands
 from discord.ext import commands
 
 from .ai import write_roast
+from .cards import ProfileView, build_pages
 from .config import Settings, load_settings
 from .demo import PERSONAS, build_demo_server
 from .models import Msg
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile
-from .render import render_leaderboard, render_report
+from .render import render_leaderboard
 from .scanner import Scanner
 from .storage import Storage
 from .traits import TRAIT_META, TRAITS
@@ -135,19 +136,14 @@ class Syke(commands.Bot):
         server = await asyncio.to_thread(analyze_server, messages, self.tz_for(guild.id), self.settings.min_messages)
         return server, skipped
 
-    async def report_embed(self, guild_id: int, profile: Profile, avatar_url: str | None) -> discord.Embed:
+    async def send_report(
+        self, ctx: commands.Context, profile: Profile, avatar_url: str | None, name_suffix: str = ""
+    ) -> None:
         await write_roast(profile, self.settings)
-        embed = discord.Embed(
-            title=f"🧠 SYKE REPORT — {profile.name}",
-            description=f"```\n{render_report(profile)}\n```"[:4096],
-            colour=BRAND,
-        )
-        if avatar_url:
-            embed.set_thumbnail(url=avatar_url)
-        engine = "AI analysis" if profile.ai_used else "offline analysis"
-        demo = " • demo mode: fake members included" if self.storage.demo_mode(guild_id) else ""
-        embed.set_footer(text=f"SYKE • {engine} • for entertainment purposes only{demo}")
-        return embed
+        profile.name += name_suffix
+        pages = build_pages(profile, avatar_url, demo=self.storage.demo_mode(ctx.guild.id))
+        view = ProfileView(pages, owner_id=ctx.author.id)
+        view.message = await ctx.reply(embed=pages["overview"], view=view)
 
     def no_channels(self, guild_id: int) -> discord.Embed:
         p = self.prefix_for(guild_id)
@@ -239,8 +235,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 return
             profile = build_profile(server, target.id)
             profile.name = target.display_name
-            embed = await self.bot.report_embed(ctx.guild.id, profile, target.display_avatar.url)
-        await ctx.reply(embed=embed)
+            await self.bot.send_report(ctx, profile, target.display_avatar.url)
 
     @commands.hybrid_command(name="top", aliases=["leaderboard", "lb"], description="Server leaderboard for a trait")
     @app_commands.describe(trait="funny, toxic, cringe, freaky, serious, chaotic or active")
@@ -464,9 +459,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
                     analyze_server, DEMO_MESSAGES, self.bot.tz_for(ctx.guild.id), self.bot.settings.min_messages
                 )
             profile = build_profile(server, persona_id)
-            embed = await self.bot.report_embed(ctx.guild.id, profile, None)
-        embed.title = f"🧠 SYKE REPORT — {profile.name} (fake demo member)"
-        await ctx.reply(embed=embed)
+            await self.bot.send_report(ctx, profile, None, name_suffix=" (fake demo member)")
 
     @sample.autocomplete("name")
     async def sample_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:

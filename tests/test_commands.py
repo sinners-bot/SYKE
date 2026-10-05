@@ -17,6 +17,7 @@ class FakeCtx:
 
     async def reply(self, content=None, **kwargs):
         self.replies.append(kwargs.get("embed"))
+        self.views = getattr(self, "views", []) + [kwargs.get("view")]
 
     send = reply
 
@@ -63,7 +64,11 @@ def test_demo_toggle_and_sample(cog):
     run(cog.demo.callback(cog, ctx, None))
     assert cog.bot.storage.demo_mode(42)
     run(cog.sample.callback(cog, ctx, "VEX"))
-    assert ctx.replies[-1].title.startswith("🧠 SYKE REPORT — Vex")
+    card = ctx.replies[-1]
+    assert card.title == "Vex (fake demo member)"
+    assert card.author.name == "SYKE REPORT · 📊 Overview"
+    assert "(fake demo member)" not in card.description
+    assert [b.label for b in ctx.views[-1].children] == ["Overview", "Highlights", "Ranks"]
     run(cog.top.callback(cog, ctx, "chaos"))
     assert "Chaotic" in ctx.replies[-1].title
     run(cog.demo.callback(cog, ctx, False))
