@@ -15,11 +15,13 @@ from .profile import Profile
 from .roast import fallback_summary
 from .stats import CUSTOM_EMOJI_RE
 from .traits import HIGHLIGHT_TRAITS, TRAITS
+from .yap import Turn, offline_pick, stitch
 
 log = logging.getLogger("syke.ai")
 
 SAMPLE_SIZE = 250
 AI_TIMEOUT_SECONDS = 30
+COMPOSE_CANDIDATES = 40
 
 TRAIT_GUIDE = """Trait definitions (judge meaning and intent, not just keywords; sarcasm and \
 in-jokes count, a lone "lol" does not make someone funny):
@@ -131,14 +133,14 @@ def _parse_json(text: str) -> dict:
     return json.loads(match.group(0))
 
 
-async def _call_openai(settings: Settings, system: str, user: str) -> str:
+async def _call_openai(settings: Settings, system: str, user: str, temperature: float = 1.0) -> str:
     async with httpx.AsyncClient(timeout=AI_TIMEOUT_SECONDS) as client:
         resp = await client.post(
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {settings.openai_api_key}"},
             json={
                 "model": settings.openai_model,
-                "temperature": 1.0,
+                "temperature": temperature,
                 "response_format": {"type": "json_object"},
                 "messages": [
                     {"role": "system", "content": system},
@@ -150,7 +152,7 @@ async def _call_openai(settings: Settings, system: str, user: str) -> str:
         return resp.json()["choices"][0]["message"]["content"]
 
 
-async def _call_anthropic(settings: Settings, system: str, user: str) -> str:
+async def _call_anthropic(settings: Settings, system: str, user: str, temperature: float = 1.0) -> str:
     async with httpx.AsyncClient(timeout=AI_TIMEOUT_SECONDS) as client:
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
@@ -161,7 +163,7 @@ async def _call_anthropic(settings: Settings, system: str, user: str) -> str:
             json={
                 "model": settings.anthropic_model,
                 "max_tokens": 1500,
-                "temperature": 1.0,
+                "temperature": temperature,
                 "system": system,
                 "messages": [{"role": "user", "content": user}],
             },
@@ -243,42 +245,52 @@ async def write_roast(
     return profile
 
 
-COMEBACK_PROMPT = """You are SYKE, a Discord bot that answers people using ONLY real messages \
-that members of the server sent in the past. Someone just replied to one of your messages. \
-From the numbered candidates, pick the one that works best as a reply: it should follow on from \
-their message, answer it, or make a funny comeback. Prefer candidates that clearly connect to the \
-conversation. Never pick one that attacks identity (race, religion, gender, sexuality, disability).
+COMPOSE_PROMPT = """You are SYKE, a Discord bot that can only speak using real messages members of \
+this server sent in the past. You get the recent chat and numbered CANDIDATES (old server messages).
 
-Reply with JSON only: {"pick": int}"""
+Build the reply that fits best, as if a quick-witted regular said it. You may:
+- use one candidate as it is, or
+- stitch 2-3 pieces together into one line. A piece is a whole candidate or a chunk copied \
+word-for-word from one (e.g. a punchline, a keyword phrase, an emoji).
+
+What makes a great reply: it actually answers or reacts to the TARGET message (questions get \
+answers, insults get comebacks, jokes get played along with), it picks up the topic, names or \
+keywords being discussed, and it is funny. Stitched replies must read naturally, not like word salad; \
+one perfect candidate beats a clumsy combination. Never change, add or reorder words inside a piece. \
+Never use anything that attacks identity (race, religion, gender, sexuality, disability).
+
+Reply with JSON only: {"parts": [{"id": int, "text": "exact chunk, or omit text for the whole message"}]}"""
 
 
-def keyword_pick(reply: str, candidates: list[str], rng: random.Random | None = None) -> int | None:
-    """Offline comeback: the candidate sharing the most words with the reply, ties broken randomly."""
+def _chat_block(chat: list[Turn]) -> str:
+    return "\n".join(f"{t.author[:24]}: {' '.join(t.text.split())[:200]}" for t in chat[-8:]) or "(quiet)"
+
+
+async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], target: Turn,
+                        chat: list[Turn] = (), said: str | None = None) -> str | None:
+    """The best reply to `target` made from real server messages; AI stitches, offline picks. Never raises."""
+    candidates = [text for _, text in ranked[:COMPOSE_CANDIDATES]]
     if not candidates:
         return None
-    rng = rng or random.Random()
-    wanted = {w for w in re.findall(r"[a-z0-9']+", reply.lower()) if len(w) >= 3}
-    scores = [len(wanted & set(re.findall(r"[a-z0-9']+", c.lower()))) for c in candidates]
-    best = max(scores)
-    return rng.choice([i for i, s in enumerate(scores) if s == best])
-
-
-async def pick_comeback(settings: Settings, said: str, reply: str, candidates: list[str]) -> int | None:
-    """Index of the candidate that best answers `reply` (a response to SYKE saying `said`). Never raises."""
-    if not candidates:
-        return None
+    banned = {target.text} | ({said} if said else set())
     if settings.ai_provider != "none":
-        numbered = "\n".join(f"[{i}] {text[:200]}" for i, text in enumerate(candidates))
-        prompt = f"SYKE SAID: {said[:300]}\nTHEY REPLIED: {reply[:300]}\n\nCANDIDATES:\n{numbered}"
+        situation = (f"SYKE SAID: {said[:300]}\nTHEY REPLIED (TARGET): " if said
+                     else "SYKE is jumping into the chat. TARGET (latest message): ")
+        numbered = "\n".join(f"[{i}] {' '.join(text.split())[:220]}" for i, text in enumerate(candidates))
+        prompt = (f"RECENT CHAT:\n{_chat_block(chat)}\n\n{situation}{target.author[:24]}: {target.text[:300]}"
+                  f"\n\nCANDIDATES (best keyword matches first):\n{numbered}")
         try:
             if settings.ai_provider == "openai":
-                answer = await _call_openai(settings, COMEBACK_PROMPT, prompt)
+                answer = await _call_openai(settings, COMPOSE_PROMPT, prompt, temperature=0.8)
             else:
-                answer = await _call_anthropic(settings, COMEBACK_PROMPT, prompt)
-            pick = _parse_json(answer).get("pick")
-            if isinstance(pick, int) and 0 <= pick < len(candidates):
-                return pick
-            log.warning("AI comeback pick out of range: %r", pick)
+                answer = await _call_anthropic(settings, COMPOSE_PROMPT, prompt, temperature=0.8)
+            parts = _parse_json(answer).get("parts")
+            if isinstance(parts, list):
+                reply = stitch(candidates, parts, banned)
+                if reply:
+                    return reply
+            log.warning("AI yap reply unusable: %r", answer[:200])
         except Exception:
-            log.exception("AI comeback failed; matching keywords instead")
-    return keyword_pick(reply, candidates)
+            log.exception("AI yap reply failed; matching keywords instead")
+    usable = [(score, text) for score, text in ranked if text not in banned]
+    return offline_pick(usable)

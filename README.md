@@ -46,7 +46,7 @@ with `!prefix mention`.
 | `!timezone <zone>` | Manage Server | Timezone used to spot late-night posting, e.g. `Europe/London`. Peak hours on cards don't need it: they are Discord timestamps, so every reader sees them in their own timezone. Alias: `!tz` |
 | `!rescan` | Manage Server | Drop the cache and re-read channels now |
 | `!collect [#channel] [limit]` | Manage Server | Read up to 20,000 messages per channel (default 5,000) into the Markov corpus. Without a channel it reads every watched channel |
-| `!yap on\|off [#channel]` | Manage Server | When on, SYKE now and then answers chat in that channel with a random message a member sent in the past (`SYKE_YAP_CHANCE` per message, at most once per `SYKE_YAP_COOLDOWN` seconds). Reply to a yap and SYKE replies with another stored message that fits what you said, picked by the AI (or by shared keywords without an AI key). `!yap` alone lists where it's on |
+| `!yap on\|off [#channel]` | Manage Server | When on, SYKE now and then answers chat in that channel with something a member said in the past that fits the conversation (`SYKE_YAP_CHANCE` per message, at most once per `SYKE_YAP_COOLDOWN` seconds). Reply to a yap and SYKE answers back: it pulls stored messages that share keywords with your reply, the yap and the recent chat, and the AI picks one or stitches up to three exact pieces of them into a single reply (never adding words of its own). Without an AI key it uses the closest keyword match. `!yap` alone lists where it's on |
 | `!demo on\|off` | Manage Server | Add 5 fake members to rankings so you can test alone |
 | `!sample [name]` | Manage Server | Full report for a fake member (Zyro, Mira, bubbles, Dex, Vex) |
 
