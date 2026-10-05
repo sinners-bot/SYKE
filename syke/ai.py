@@ -61,6 +61,8 @@ body, or real mental-health diagnoses. No slurs. Nothing sexual beyond a wink.
 - Use the person's name exactly as given, in the third person.
 - The summary is 2-3 short paragraphs, max 100 words, ending with a deadpan one-line verdict.
 - You may use the server's own custom emojis by writing their :name: exactly as listed. Use at most 3.
+- Never write clock times. To mention when they're most active, write the token PEAK_HOURS; it is \
+replaced with times in each reader's own timezone. You can still say things like "after midnight".
 - Pick highlight messages ONLY by their index from the numbered list, or null if none fit.
 
 """ + TRAIT_GUIDE + """
@@ -98,8 +100,8 @@ def _user_prompt(profile: Profile, sample: list[Msg], style: str, server_emojis:
     payload = {
         "name": profile.name,
         "messages_analyzed": st.message_count,
-        "most_active_hours": st.peak_label,
-        "late_night_ratio": round(st.late_night_ratio, 2),
+        "most_active_hours_utc": st.peak_label,
+        "server_local_late_night_share": round(st.late_night_ratio, 2),
         "avg_words_per_message": round(st.avg_words, 1),
         "top_emojis": [(readable(e), c) for e, c in st.top_emojis],
         "top_words": st.top_words,
@@ -107,6 +109,7 @@ def _user_prompt(profile: Profile, sample: list[Msg], style: str, server_emojis:
         "keyword_trait_scores_0_to_100": profile.scores,
         "server_rank_top_percent": profile.server_ranks,
         "achievements": [n for _, n in profile.achievements],
+        "iq": profile.iq.iq if profile.iq else None,
     }
     parts = [
         f"WRITE THE SUMMARY IN THE STYLE OF: {style}",
@@ -177,6 +180,7 @@ def with_server_emojis(text: str, emojis: dict[str, str]) -> str:
 def _apply_ai_result(profile: Profile, data: dict, sample: list[Msg], emojis: dict[str, str] | None = None) -> None:
     summary = str(data.get("summary", "")).strip()
     if summary:
+        summary = summary.replace("PEAK_HOURS", profile.stats.peak_local())
         profile.summary = with_server_emojis(summary, emojis or {})
         profile.ai_used = True
 

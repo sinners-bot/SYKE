@@ -1,14 +1,9 @@
 import asyncio
 import contextlib
 import types
-from dataclasses import replace
 
 import discord
 import pytest
-
-from syke.bot import Syke, SykeCommands
-from syke.config import load_settings
-
 
 class FakeCtx:
     def __init__(self, guild_id: int = 42):
@@ -25,14 +20,6 @@ class FakeCtx:
 
     def typing(self, **kwargs):
         return contextlib.nullcontext()
-
-
-@pytest.fixture()
-def cog(tmp_path):
-    settings = replace(load_settings(), db_path=str(tmp_path / "t.db"), ai_provider="none")
-    bot = Syke(settings)
-    bot._connection.user = types.SimpleNamespace(id=999, mention="<@999>")
-    return SykeCommands(bot)
 
 
 def run(coro):

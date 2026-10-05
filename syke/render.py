@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import textwrap
 
-from .profile import Profile, ServerAnalysis
+from .profile import Profile, ServerAnalysis, metric
 from .traits import TRAIT_META, TRAITS
 
 WIDTH = 34  # fits a Discord code block on mobile without wrapping
@@ -112,7 +112,12 @@ def render_leaderboard(server: ServerAnalysis, key: str, limit: int = 10) -> str
     out = []
     for i, user in enumerate(rows):
         prefix = medals[i] if i < 3 else f"{i + 1:>2}."
-        value = f"{user.stats.message_count:,} msgs" if key == "active" else f"{user.scores[key]}%"
+        if key == "active":
+            value = f"{user.stats.message_count:,} msgs"
+        elif key == "iq":
+            value = f"IQ {metric(user, key)}"
+        else:
+            value = f"{user.scores[key]}%"
         name = safe(user.name)[:18]
         out.append(f"{prefix} {name:<18} {value:>10}")
     return "\n".join(out) or "Nobody qualifies yet."

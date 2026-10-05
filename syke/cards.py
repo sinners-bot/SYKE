@@ -8,6 +8,7 @@ from typing import Callable
 
 import discord
 
+from .iq import IQResult, bell_curve
 from .profile import Profile
 from .traits import TRAIT_META, TRAITS
 
@@ -59,6 +60,7 @@ RANK_ROWS = [
     ("freaky", "😏 Most freaky"),
     ("cringe", "💀 Most cringe"),
     ("serious", "🧠 Most serious"),
+    ("iq", "🎓 Highest IQ"),
 ]
 
 PAGES = ("overview", "report", "highlights", "ranks")
@@ -101,6 +103,8 @@ def short_summary(summary: str, limit: int = SHORT_SUMMARY) -> str:
     if len(first) <= limit:
         return first
     cut = first[:limit]
+    if cut.rfind("<") > cut.rfind(">"):
+        cut = cut[: cut.rfind("<")]
     end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
     return cut[: end + 1] if end > limit // 3 else cut.rstrip() + "…"
 
@@ -150,7 +154,9 @@ def overview_page(profile: Profile, avatar_url: str | None = None, demo: bool = 
     embed = _base(profile, "overview", avatar_url, demo)
     embed.title = discord.utils.escape_markdown(profile.name)
 
-    facts = [f"💬 {st.message_count:,} msgs", f"🕐 {st.peak_label}", f"✍️ {round(st.avg_words)} words"]
+    facts = [f"💬 {st.message_count:,} msgs", f"🕐 {st.peak_local()}", f"✍️ {round(st.avg_words)} words"]
+    if profile.iq:
+        facts.append(f"🧠 IQ {profile.iq.iq}")
     extras = []
     if st.top_emojis:
         extras.append(" ".join(e for e, _ in st.top_emojis[:3]))
@@ -180,12 +186,14 @@ def report_page(profile: Profile, avatar_url: str | None = None, demo: bool = Fa
 
     embed.add_field(name="💬 Messages", value=f"{st.message_count:,}")
     embed.add_field(name="📅 Active since", value=st.first_seen.strftime("%b %Y"))
-    embed.add_field(name="🕐 Peak hours", value=st.peak_label)
+    embed.add_field(name="🕐 Peak hours", value=st.peak_local())
     embed.add_field(name="✍️ Avg length", value=f"{round(st.avg_words)} words")
     emojis = " ".join(e for e, _ in st.top_emojis[:3]) or "None"
     embed.add_field(name="😀 Top emojis", value=emojis)
     phrase = catchphrase(profile)
     embed.add_field(name="🗣️ Catchphrase", value=f"“{phrase}”" if phrase else "Silence")
+    if profile.iq:
+        embed.add_field(name="🧠 IQ", value=f"**{profile.iq.iq}** · {profile.iq.label}")
 
     rows = []
     for trait in TRAITS:
@@ -213,7 +221,8 @@ def ranks_page(profile: Profile, avatar_url: str | None = None, demo: bool = Fal
     embed.add_field(name="🏅 Unlocked", value=achievements or "*Nothing yet.*", inline=False)
 
     if profile.server_size >= 3:
-        lines = [f"{label} — {rank_badge(profile.server_ranks[key])}" for key, label in RANK_ROWS]
+        lines = [f"{label} — {rank_badge(profile.server_ranks[key])}" for key, label in RANK_ROWS
+                 if key in profile.server_ranks]
         embed.add_field(
             name=f"📈 Compared with {profile.server_size} judged members",
             value="\n".join(lines),
@@ -282,3 +291,37 @@ class ProfileView(discord.ui.View):
         log.error("Profile card button failed", exc_info=error)
         if not interaction.response.is_done():
             await interaction.response.send_message("Couldn't flip the page. Try again.", ephemeral=True)
+
+
+IQ_COLOURS = [(130, "#22D3EE"), (115, "#3B82F6"), (100, "#8B5CF6"), (85, "#F59E0B"), (0, "#EF4444")]
+
+
+def iq_page(name: str, result: IQResult, smarter_than: int | None, avatar_url: str | None = None,
+            demo: bool = False) -> discord.Embed:
+    """The !iq card: the number, a tiny bell curve, what moved it, and the evidence."""
+    colour = next(c for floor, c in IQ_COLOURS if result.iq >= floor)
+    embed = discord.Embed(colour=discord.Colour.from_str(colour))
+    embed.set_author(name="SYKE IQ TEST · 🧠 Results")
+    embed.title = f"{discord.utils.escape_markdown(name)}'s IQ"
+    if avatar_url:
+        embed.set_thumbnail(url=avatar_url)
+    lines = [f"## {result.iq}", f"**{result.label}** — *{result.tagline}*", f"```\n{bell_curve(result.iq)}\n```"]
+    if smarter_than is not None:
+        lines.append(f"Smarter than **{smarter_than}%** of the server.")
+    embed.description = "\n".join(lines)
+
+    factors = "\n".join(
+        f"{f.emoji} {f.name} · {f.detail} · **{'+' if f.points > 0 else ''}{f.points}**" if f.points
+        else f"{f.emoji} {f.name} · {f.detail} · 0"
+        for f in result.factors
+    )
+    embed.add_field(name="🔬 How SYKE measured", value=factors, inline=False)
+    if result.smartest:
+        embed.add_field(name="🎓 Smartest message", value=f"> {clean_quote(result.smartest.content)}", inline=False)
+    if result.dumbest:
+        embed.add_field(name="🤡 Least smart message", value=f"> {clean_quote(result.dumbest.content)}", inline=False)
+    footer = "Starts at 100; each factor adds or subtracts • not a real IQ test"
+    if demo:
+        footer += " • demo mode"
+    embed.set_footer(text=footer)
+    return embed

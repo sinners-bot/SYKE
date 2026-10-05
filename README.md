@@ -30,7 +30,8 @@ with `!prefix mention`.
 | Command | Who | What it does |
 | --- | --- | --- |
 | `!profile [@member]` | everyone | Full personality report (yourself if no member). Aliases: `!judge`, `!p`, `!me` |
-| `!top [trait]` | everyone | Leaderboard for `funny`, `toxic`, `cringe`, `freaky`, `serious`, `chaotic` or `active`. Aliases: `!leaderboard`, `!lb` |
+| `!iq [@member]` | everyone | A very unscientific IQ estimate (55-160) with a bell curve, what raised or lowered it (vocabulary, big words, message length, punctuation, serious takes, brainrot, caps-lock chaos), and their smartest and least smart messages. Also shown on `!profile`. Aliases: `!brain`, `!smarts` |
+| `!top [trait]` | everyone | Leaderboard for `funny`, `toxic`, `cringe`, `freaky`, `serious`, `chaotic`, `active` or `iq`. Aliases: `!leaderboard`, `!lb` |
 | `!scanme` | everyone | Reads back through watched channels (up to `SYKE_DEEP_SCAN_LIMIT` messages each) and adds your older messages to your profile. Aliases: `!scan`, `!addme`. Once per 10 minutes |
 | `!mimic [@member]` | everyone | A made-up message in someone's style, from a Markov chain of their messages. Aliases: `!impersonate`, `!copy` |
 | `!optout` / `!optin` | everyone | Exclude yourself from being read or judged (opting out also deletes your stored messages) |
@@ -38,7 +39,7 @@ with `!prefix mention`.
 | `!track #channel` / `!untrack #channel` | Manage Server | Choose which channels SYKE reads |
 | `!channels` | Manage Server | Watched channels, prefix, timezone and demo mode. Alias: `!settings` |
 | `!prefix <new\|mention\|reset>` | Manage Server | Custom prefix (1-5 characters), `mention` so SYKE only answers to `@SYKE profile`, or `reset` for `!`. `!prefix` alone shows the current setting |
-| `!timezone <zone>` | Manage Server | Timezone for "most active" hours, e.g. `Europe/London`. Alias: `!tz` |
+| `!timezone <zone>` | Manage Server | Timezone used to spot late-night posting, e.g. `Europe/London`. Peak hours on cards don't need it: they are Discord timestamps, so every reader sees them in their own timezone. Alias: `!tz` |
 | `!rescan` | Manage Server | Drop the cache and re-read channels now |
 | `!collect [#channel] [limit]` | Manage Server | Read up to 20,000 messages per channel (default 5,000) into the Markov corpus. Without a channel it reads every watched channel |
 | `!yap on\|off [#channel]` | Manage Server | When on, SYKE now and then answers chat in that channel with a random message a member sent in the past (`SYKE_YAP_CHANCE` per message, at most once per `SYKE_YAP_COOLDOWN` seconds). Reply to a yap and SYKE replies with another stored message that fits what you said, picked by the AI (or by shared keywords without an AI key). `!yap` alone lists where it's on |
