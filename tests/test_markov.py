@@ -246,32 +246,60 @@ def test_yap_on_off_and_chiming_in(lab, monkeypatch):
     assert "markov" not in by_name
 
 
-def test_keyword_pick_prefers_shared_words():
-    from syke.ai import keyword_pick
+def test_ranking_prefers_rare_shared_keywords_and_answers():
+    import random
 
-    candidates = ["i hate mondays", "pizza is elite", "who wants pizza tonight"]
-    assert keyword_pick("pizza tonight?", candidates) == 2
-    assert keyword_pick("anything", []) is None
+    from syke.yap import Turn, query_weights, rank
+
+    candidates = ["i hate mondays", "pizza is elite", "who wants pizzas tonight", "nah pineapple pizza is a crime"]
+    weights = query_weights("is pineapple on pizza good?", chat=[Turn("a", "we're ordering food")])
+    ranked = rank(candidates, weights, "is pineapple on pizza good?", random.Random(1))
+    assert ranked[0][1] == "nah pineapple pizza is a crime"
+    assert ranked[-1][1] == "i hate mondays"
+    assert "pizza" in query_weights("pizzas!!")
 
 
-def test_comeback_uses_ai_pick_and_falls_back(monkeypatch):
+def test_stitch_only_uses_real_words():
+    from syke.yap import stitch
+
+    candidates = ["bro thinks he's him 💀 genuinely", "touch grass immediately", "pizza is elite"]
+    assert stitch(candidates, [{"id": 0, "text": "bro thinks he's him"}, {"id": 1}]) == \
+        "bro thinks he's him touch grass immediately"
+    assert stitch(candidates, [{"id": 0, "text": "thinks he"}]) == "thinks he's"
+    assert stitch(candidates, [{"id": 2, "text": "pizza is mid"}]) is None, "invented words"
+    assert stitch(candidates, [{"id": 9}]) is None
+    assert stitch(candidates, [{"id": 2}], banned={"Pizza  is elite"}) is None, "no parroting"
+
+
+def test_compose_reply_stitches_with_ai_and_falls_back(monkeypatch):
     from syke import ai
+    from syke.yap import Turn
 
     settings = replace(load_settings(), ai_provider="openai", openai_api_key="k")
-    candidates = ["no way", "pizza is elite", "touch grass"]
+    ranked = [(2.0, "pizza is elite"), (1.0, "touch grass"), (0.1, "no way")]
+    target = Turn("Mira", "pizza?")
 
-    async def fake_openai(s, system, user):
-        assert "THEY REPLIED: pizza?" in user and "[2] touch grass" in user
-        return '{"pick": 2}'
+    async def fake_openai(s, system, user, temperature=1.0):
+        assert "THEY REPLIED (TARGET): Mira: pizza?" in user and "[1] touch grass" in user
+        assert "Zyro: who's hungry" in user
+        return '{"parts": [{"id": 0}, {"id": 1, "text": "touch grass"}]}'
 
     monkeypatch.setattr(ai, "_call_openai", fake_openai)
-    assert run(ai.pick_comeback(settings, "hello", "pizza?", candidates)) == 2
+    chat = [Turn("Zyro", "who's hungry")]
+    assert run(ai.compose_reply(settings, ranked, target, chat, said="hello")) == "pizza is elite touch grass"
 
-    async def broken(s, system, user):
+    async def invents(s, system, user, temperature=1.0):
+        return '{"parts": [{"id": 0, "text": "pizza is mid"}]}'
+
+    monkeypatch.setattr(ai, "_call_openai", invents)
+    assert run(ai.compose_reply(settings, ranked, target, chat, said="hello")) == "pizza is elite"
+
+    async def broken(s, system, user, temperature=1.0):
         raise RuntimeError("down")
 
     monkeypatch.setattr(ai, "_call_openai", broken)
-    assert run(ai.pick_comeback(settings, "hello", "pizza?", candidates)) == 1
+    assert run(ai.compose_reply(settings, ranked, target, chat, said="hello")) == "pizza is elite"
+    assert run(ai.compose_reply(settings, [], target)) is None
 
 
 def reply_message(mid, target, text="pizza is the best", author=777):

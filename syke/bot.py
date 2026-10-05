@@ -7,7 +7,6 @@ import contextlib
 import logging
 import os
 import random
-import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -18,7 +17,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from .ai import pick_comeback, write_roast
+from .ai import compose_reply, write_roast
 from .cards import MESSAGE_VIEW_TIMEOUT, ProfileView, build_pages, iq_page
 from .config import Settings, load_settings
 from .demo import PERSONAS, build_demo_server
@@ -30,6 +29,7 @@ from .scanner import Scanner, to_msg
 from .showcase import ShowcaseView, tour_page
 from .storage import Storage
 from .traits import TRAIT_META, TRAITS
+from .yap import Turn, offline_pick, query_weights, rank, search_terms
 
 log = logging.getLogger("syke")
 
@@ -50,12 +50,9 @@ SERVER_LIST_LIMIT = 20
 COLLECT_DEFAULT = 5000
 COLLECT_MAX = 20000
 YAP_REPLY_COOLDOWN = 4
-STOPWORDS = {
-    "the", "and", "you", "your", "are", "was", "but", "not", "that", "this", "with", "have", "just",
-    "like", "what", "for", "its", "it's", "i'm", "im", "dont", "don't", "can", "get", "got", "all",
-    "how", "why", "who", "when", "then", "than", "they", "them", "she", "her", "his", "him", "out",
-}
-
+YAP_SEARCH = 80
+YAP_RANDOM = 25
+YAP_CONTEXT = 8
 TRAIT_ALIASES: dict[str, str] = {
     **{t: t for t in TRAITS},
     "funniest": "funny", "freak": "freaky", "chaos": "chaotic", "smart": "serious",
@@ -70,6 +67,10 @@ TRAIT_TITLES: dict[str, str] = {
 PERSONA_BY_NAME: dict[str, int] = {name.lower(): uid for uid, (name, _, _) in PERSONAS.items()}
 
 F = TypeVar("F", bound=Callable)
+
+
+def author_name(user) -> str:
+    return getattr(user, "display_name", None) or getattr(user, "name", None) or "someone"
 
 
 def install_permissions() -> discord.Permissions:
@@ -337,36 +338,53 @@ class Syke(commands.Bot):
             return None
         return target.content
 
-    def comeback_candidates(self, guild_id: int, reply: str, exclude: set[str]) -> list[str]:
-        words = sorted({w for w in re.findall(r"[a-z0-9']+", reply.lower())
-                        if len(w) >= 3 and w not in STOPWORDS}, key=len, reverse=True)[:6]
-        pool = self.storage.search_messages(guild_id, words, 30) + self.storage.random_messages(guild_id, 30)
-        seen = {e.strip().lower() for e in exclude}
+    def yap_candidates(self, guild_id: int, target: str, weights: dict[str, float],
+                       exclude: set[str]) -> list[tuple[float, str]]:
+        """Stored messages sharing the conversation's keywords (plus a few random ones), ranked."""
+        pool = (self.storage.search_messages(guild_id, search_terms(weights), YAP_SEARCH)
+                + self.storage.random_messages(guild_id, YAP_RANDOM))
+        seen = {" ".join(e.lower().split()) for e in exclude}
         candidates = []
         for text in pool:
-            key = text.strip().lower()
+            key = " ".join(text.lower().split())
             if key in seen or len(text.split()) < 2 or self.is_command_text(guild_id, text):
                 continue
             seen.add(key)
             candidates.append(text)
-        return candidates
+        return rank(candidates, weights, target)
+
+    async def recent_chat(self, message: discord.Message, limit: int = YAP_CONTEXT) -> list[Turn]:
+        """The last few messages before `message`, oldest first, for context."""
+        history = getattr(message.channel, "history", None)
+        if history is None:
+            return []
+        turns: list[Turn] = []
+        try:
+            async for m in history(limit=limit, before=message):
+                if not m.content or self.is_command_text(message.guild.id, m.content):
+                    continue
+                name = "SYKE" if self.user and m.author.id == self.user.id else m.author.display_name
+                turns.append(Turn(name, m.content))
+        except discord.HTTPException:
+            return []
+        return turns[::-1]
 
     async def answer_yap_reply(self, message: discord.Message, said: str) -> None:
-        """Someone answered a yap: reply with the stored message that best fits, picked by AI."""
+        """Someone answered a yap: reply with real server messages that fit, picked and stitched by AI."""
         key = (message.channel.id, message.author.id)
         now = time.monotonic()
         if now - self._last_comeback.get(key, -1e9) < YAP_REPLY_COOLDOWN:
             return
         self._last_comeback[key] = now
-        candidates = self.comeback_candidates(message.guild.id, message.content, {said, message.content})
-        if not candidates:
-            return
         async with message.channel.typing():
-            pick = await pick_comeback(self.settings, said, message.content, candidates)
-        if pick is None:
-            return
-        with contextlib.suppress(discord.HTTPException):
-            await message.reply(candidates[pick], mention_author=False)
+            chat = await self.recent_chat(message)
+            target = Turn(author_name(message.author), message.content)
+            ranked = self.yap_candidates(message.guild.id, message.content, query_weights(message.content, said, chat),
+                                         {said, message.content})
+            reply = await compose_reply(self.settings, ranked, target, chat, said)
+        if reply:
+            with contextlib.suppress(discord.HTTPException):
+                await message.reply(reply, mention_author=False)
 
     def is_command_text(self, guild_id: int, text: str) -> bool:
         text = text.lstrip()
@@ -383,6 +401,17 @@ class Syke(commands.Bot):
                 return text
         return None
 
+    async def contextual_yap(self, message: discord.Message) -> str | None:
+        """Something a member once said that fits what's being talked about; random if nothing does."""
+        chat = await self.recent_chat(message, YAP_CONTEXT // 2)
+        ranked = self.yap_candidates(message.guild.id, message.content,
+                                     query_weights(message.content, None, chat), {message.content})
+        if not ranked:
+            return self.pick_yap(message.guild.id, exclude_id=message.id)
+        if self.settings.ai_provider == "none":
+            return offline_pick(ranked)
+        return await compose_reply(self.settings, ranked, Turn(author_name(message.author), message.content), chat)
+
     async def maybe_yap(self, message: discord.Message) -> None:
         """In yap channels, now and then answer chat with something a member said in the past."""
         if message.channel.id not in self.storage.yap_channels(message.guild.id):
@@ -392,10 +421,10 @@ class Syke(commands.Bot):
             return
         if random.random() >= self.settings.yap_chance:
             return
-        line = self.pick_yap(message.guild.id, exclude_id=message.id)
+        self._last_yap[message.channel.id] = now
+        line = await self.contextual_yap(message)
         if line is None:
             return
-        self._last_yap[message.channel.id] = now
         with contextlib.suppress(discord.HTTPException):
             await message.channel.send(line)
 
