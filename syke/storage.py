@@ -1,4 +1,7 @@
-"""Per-server settings in SQLite. SYKE never stores message content."""
+"""Per-server settings in SQLite, plus the text corpus used by the Markov commands.
+
+The corpus only holds messages from watched channels, and opted-out members' rows are deleted.
+"""
 
 from __future__ import annotations
 
@@ -20,6 +23,20 @@ CREATE TABLE IF NOT EXISTS optouts (
 CREATE TABLE IF NOT EXISTS guild_settings (
     guild_id INTEGER PRIMARY KEY,
     timezone TEXT
+);
+CREATE TABLE IF NOT EXISTS corpus (
+    guild_id   INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    channel_id INTEGER NOT NULL,
+    author_id  INTEGER NOT NULL,
+    content    TEXT NOT NULL,
+    PRIMARY KEY (guild_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS corpus_author ON corpus (guild_id, author_id);
+CREATE TABLE IF NOT EXISTS yap_channels (
+    guild_id   INTEGER NOT NULL,
+    channel_id INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, channel_id)
 );
 """
 
@@ -65,6 +82,7 @@ class Storage:
 
     def set_optout(self, guild_id: int, user_id: int, opted_out: bool) -> bool:
         if opted_out:
+            self.forget(guild_id, user_id)
             return self._write("INSERT OR IGNORE INTO optouts VALUES (?, ?)", (guild_id, user_id)) > 0
         return self._write(
             "DELETE FROM optouts WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)
@@ -95,6 +113,56 @@ class Storage:
             "ON CONFLICT(guild_id) DO UPDATE SET prefix = excluded.prefix",
             (guild_id, prefix),
         )
+
+    def add_corpus(self, guild_id: int, rows: list[tuple[int, int, int, str]]) -> int:
+        """Store (message_id, channel_id, author_id, content) rows; returns how many were new."""
+        if not rows:
+            return 0
+        with self._lock:
+            before = self._conn.total_changes
+            self._conn.executemany(
+                "INSERT OR IGNORE INTO corpus VALUES (?, ?, ?, ?, ?)",
+                [(guild_id, *row) for row in rows],
+            )
+            self._conn.commit()
+            return self._conn.total_changes - before
+
+    def corpus(self, guild_id: int, author_id: int | None = None) -> list[tuple[int, str]]:
+        """(author_id, content) pairs, for one member or the whole server."""
+        if author_id is None:
+            return self._read("SELECT author_id, content FROM corpus WHERE guild_id = ?", (guild_id,))
+        return self._read(
+            "SELECT author_id, content FROM corpus WHERE guild_id = ? AND author_id = ?", (guild_id, author_id)
+        )
+
+    def random_messages(self, guild_id: int, count: int, exclude_id: int = 0) -> list[str]:
+        rows = self._read(
+            "SELECT content FROM corpus WHERE guild_id = ? AND message_id != ? "
+            "AND length(content) BETWEEN 8 AND 300 ORDER BY RANDOM() LIMIT ?",
+            (guild_id, exclude_id, count),
+        )
+        return [r[0] for r in rows]
+
+    def set_yap(self, guild_id: int, channel_id: int, enabled: bool) -> bool:
+        if enabled:
+            return self._write("INSERT OR IGNORE INTO yap_channels VALUES (?, ?)", (guild_id, channel_id)) > 0
+        return self._write(
+            "DELETE FROM yap_channels WHERE guild_id = ? AND channel_id = ?", (guild_id, channel_id)
+        ) > 0
+
+    def yap_channels(self, guild_id: int) -> set[int]:
+        rows = self._read("SELECT channel_id FROM yap_channels WHERE guild_id = ?", (guild_id,))
+        return {r[0] for r in rows}
+
+    def corpus_size(self, guild_id: int) -> tuple[int, int]:
+        """(messages, distinct authors) collected for a server."""
+        rows = self._read("SELECT COUNT(*), COUNT(DISTINCT author_id) FROM corpus WHERE guild_id = ?", (guild_id,))
+        return rows[0][0], rows[0][1]
+
+    def forget(self, guild_id: int, author_id: int | None = None) -> int:
+        if author_id is None:
+            return self._write("DELETE FROM corpus WHERE guild_id = ?", (guild_id,))
+        return self._write("DELETE FROM corpus WHERE guild_id = ? AND author_id = ?", (guild_id, author_id))
 
     def demo_mode(self, guild_id: int) -> bool:
         rows = self._read("SELECT demo_mode FROM guild_settings WHERE guild_id = ?", (guild_id,))

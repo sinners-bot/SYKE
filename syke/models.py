@@ -15,3 +15,4 @@ class Msg:
     channel_id: int = 0
     laugh_reactions: int = 0
     total_reactions: int = 0
+    message_id: int = 0
