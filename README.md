@@ -5,12 +5,13 @@ A Discord bot that reads the channels your admins pick and writes a brutally hon
 trait breakdown, a hall of fame of their worst messages, an AI-written roast,
 achievements, and how they compare to the rest of the server.
 
-`!profile` replies with a three-page card. Buttons switch between pages, and the
+`!profile` replies with a compact four-page card. Buttons switch between pages, and the
 card's colour matches the member's strongest trait:
 
 | Page | What's on it |
 | --- | --- |
-| 📊 **Overview** | Archetype (e.g. *The Class Clown*), the roast summary, six stat tiles (messages, active since, peak hours, average length, top emojis, catchphrase) and the personality bars |
+| 📊 **Overview** | The compact card posted in chat: archetype (e.g. *The Class Clown*), the first paragraph of the roast, one line of key numbers, top emojis and catchphrase, and the top 3 traits |
+| 📋 **Full report** | The whole roast, six stat tiles (messages, active since, peak hours, average length, top emojis, catchphrase) and all six personality bars |
 | 🏆 **Highlights** | Funniest, most unhinged, freakiest and most toxic messages, quoted |
 | 🥇 **Ranks** | Achievements and "Top X%" against everyone else judged in the server |
 

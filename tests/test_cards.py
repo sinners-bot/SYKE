@@ -16,7 +16,7 @@ def demo_profile(user_id: int):
 def test_pages_fit_discord_limits():
     for uid in range(1, 6):
         pages = build_pages(demo_profile(uid), "https://example.com/a.png", demo=True)
-        assert list(pages) == ["overview", "highlights", "ranks"]
+        assert list(pages) == ["overview", "report", "highlights", "ranks"]
         for embed in pages.values():
             assert len(embed) <= 6000
             assert len(embed.fields) <= 25
@@ -24,16 +24,33 @@ def test_pages_fit_discord_limits():
             assert "demo mode" in embed.footer.text
 
 
-def test_overview_layout():
+def test_overview_is_compact_and_report_has_everything():
     profile = demo_profile(1)
-    page = build_pages(profile)["overview"]
+    pages = build_pages(profile)
+    page = pages["overview"]
     assert page.title == "Zyro"
     assert page.description.startswith(f"**{archetype(profile)[0]}**")
-    assert "> First paragraph.\n>\n> Second *paragraph*." in page.description
-    names = [f.name for f in page.fields]
-    assert names[:6] == ["💬 Messages", "📅 Active since", "🕐 Peak hours", "✍️ Avg length", "😀 Top emojis", "🗣️ Catchphrase"]
-    assert names[-1] == "🎭 Personality" and not page.fields[-1].inline
+    assert "> First paragraph.\n" in page.description and "Second" not in page.description
+    assert "💬 " in page.description and "msgs" in page.description
+    assert page.description.count("%") == 3 and not page.fields
+    assert len(page) < len(pages["report"]) * 0.7
     assert page.colour == colour_for(profile)
+
+    report = pages["report"]
+    assert "> First paragraph.\n>\n> Second *paragraph*." in report.description
+    names = [f.name for f in report.fields]
+    assert names[:6] == ["💬 Messages", "📅 Active since", "🕐 Peak hours", "✍️ Avg length", "😀 Top emojis", "🗣️ Catchphrase"]
+    assert names[-1] == "🎭 Personality" and not report.fields[-1].inline
+
+
+def test_short_summary_cuts_at_a_sentence():
+    from syke.cards import short_summary
+
+    assert short_summary("One. Two.\n\nThree.") == "One. Two."
+    long = "This is a sentence. " * 30
+    cut = short_summary(long, limit=100)
+    assert len(cut) <= 100 and cut.endswith(".")
+    assert short_summary("x" * 300, limit=50).endswith("…")
 
 
 def test_highlights_quote_and_escape():
@@ -83,7 +100,7 @@ def test_view_switches_pages_for_owner_only():
         assert edits[-1][0] == "ephemeral" and edits[-1][2]["embed"] is pages["highlights"]
 
         restarted = ProfileView(cards.get)
-        await restarted.children[1].callback(Inter(7))
+        await restarted.children[2].callback(Inter(7))
         assert edits[-1]["embed"] is pages["highlights"]
 
         await buttons["Ranks"].callback(Inter(7, message_id=999))
