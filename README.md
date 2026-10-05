@@ -45,37 +45,41 @@ Run `python -m syke.preview` to see a full report generated from a fake server.
 
 ## Commands
 
+Every command works with the server prefix (default `!`) **and** as a slash command
+(`!profile` or `/profile`). Mentioning the bot (`@SYKE profile`) always works, so a
+forgotten prefix is never a problem.
+
 | Command | Who | What it does |
 | --- | --- | --- |
-| `/syke profile [member]` | everyone | Full personality report (yourself if no member given) |
-| `/syke leaderboard <trait>` | everyone | Server ranking for Funny, Toxic, Cringe, Freaky, Serious, Chaotic or Most active |
-| `/syke optout` / `/syke optin` | everyone | Exclude yourself from being read or judged |
-| `/syke help` | everyone | Quick guide |
-| `/syke-admin track <channel>` | Manage Server | Let SYKE read a channel |
-| `/syke-admin untrack <channel>` | Manage Server | Stop reading a channel |
-| `/syke-admin channels` | Manage Server | List watched channels |
-| `/syke-admin timezone <name>` | Manage Server | Timezone for "most active" hours (autocompletes) |
-| `/syke-admin rescan` | Manage Server | Drop the cache and re-read channels now |
-| `/syke-admin demo <on/off>` | Manage Server | Add 5 fake members to rankings so you can test alone |
-| `/syke-admin sample <persona>` | Manage Server | Show a full report for one of the fake members |
+| `!profile [@member]` | everyone | Full personality report (yourself if no member). Aliases: `!judge`, `!p`, `!me` |
+| `!top [trait]` | everyone | Leaderboard for `funny`, `toxic`, `cringe`, `freaky`, `serious`, `chaotic` or `active`. Aliases: `!leaderboard`, `!lb` |
+| `!optout` / `!optin` | everyone | Exclude yourself from being read or judged |
+| `!help` | everyone | Command list using this server's prefix |
+| `!track #channel` / `!untrack #channel` | Manage Server | Choose which channels SYKE reads |
+| `!channels` | Manage Server | Watched channels, prefix, timezone and demo mode. Alias: `!settings` |
+| `!prefix <new>` | Manage Server | Change the prefix (1-5 characters). `!prefix reset` restores `!` |
+| `!timezone <zone>` | Manage Server | Timezone for "most active" hours, e.g. `Europe/London`. Alias: `!tz` |
+| `!rescan` | Manage Server | Drop the cache and re-read channels now |
+| `!demo on\|off` | Manage Server | Add 5 fake members to rankings so you can test alone |
+| `!sample [name]` | Manage Server | Full report for a fake member (Zyro, Mira, bubbles, Dex, Vex) |
 
 ## Testing on your own
 
-1. `/syke-admin demo enabled:True` adds five fake members (Zyro, Mira, bubbles, Dex, Vex)
-   to this server's comparisons and leaderboards. Reports and leaderboards say so in the footer.
-2. `/syke-admin sample persona:Zyro` shows a full report instantly, with no messages needed.
+1. `!demo on` adds five fake members (Zyro, Mira, bubbles, Dex, Vex) to this server's
+   comparisons and leaderboards. Reports and leaderboards say so in the footer.
+2. `!sample zyro` shows a full report instantly, with no messages needed.
    It also exercises your OpenAI key if one is set.
 3. To judge yourself, send at least `SYKE_MIN_MESSAGES` messages (default 15) in a watched channel,
-   then run `/syke-admin rescan` and `/syke profile`. You'll be ranked against the fake members.
+   then run `!rescan` and `!profile`. You'll be ranked against the fake members.
    For quicker tests, set `SYKE_MIN_MESSAGES=5` in Railway's Variables.
-4. Turn it off with `/syke-admin demo enabled:False` before real members start using SYKE.
+4. Turn it off with `!demo off` before real members start using SYKE.
 
 ## How it works
 
 1. **Collect**: when someone asks for a report, SYKE reads the last `SYKE_SCAN_LIMIT`
    messages from each watched channel (bots and opted-out users are skipped). The scan
    is cached in memory for `SYKE_CACHE_MINUTES`. Message content is never written to disk;
-   the SQLite file only holds watched channels, opt-outs and timezones.
+   the SQLite file only holds watched channels, opt-outs, prefixes, timezones and demo mode.
 2. **Hard stats** (`syke/stats.py`): message count, first seen, busiest 3-hour window,
    average words, top emojis (including custom ones), and catchphrases (repeated 2-3 word phrases).
 3. **Traits** (`syke/traits.py`): every message gets scored by word lists in
@@ -120,9 +124,9 @@ instantly (global commands can take a while to propagate).
 ### 3. In Discord
 
 ```
-/syke-admin track channel:#general
-/syke-admin timezone name:Europe/London
-/syke profile member:@someone
+!track #general
+!timezone Europe/London
+!profile @someone
 ```
 
 ## Deploying to Railway
@@ -158,6 +162,7 @@ All settings live in `.env` (see `.env.example`):
 | `SYKE_MIN_MESSAGES` | `15` | Messages needed to be judged |
 | `SYKE_CACHE_MINUTES` | `15` | How long a scan is reused |
 | `SYKE_DEFAULT_TIMEZONE` | `UTC` | Used until an admin sets one |
+| `SYKE_DEFAULT_PREFIX` | `!` | Used until an admin runs `!prefix` |
 
 ## Development
 

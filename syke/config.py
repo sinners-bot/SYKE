@@ -25,6 +25,7 @@ class Settings:
     min_messages: int
     cache_minutes: int
     default_timezone: str
+    default_prefix: str
 
 
 def load_settings() -> Settings:
@@ -52,4 +53,5 @@ def load_settings() -> Settings:
         min_messages=_int("SYKE_MIN_MESSAGES", 15),
         cache_minutes=_int("SYKE_CACHE_MINUTES", 15),
         default_timezone=os.getenv("SYKE_DEFAULT_TIMEZONE", "UTC").strip() or "UTC",
+        default_prefix=os.getenv("SYKE_DEFAULT_PREFIX", "!").strip() or "!",
     )

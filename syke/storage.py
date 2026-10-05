@@ -34,6 +34,8 @@ class Storage:
             columns = {row[1] for row in self._conn.execute("PRAGMA table_info(guild_settings)")}
             if "demo_mode" not in columns:
                 self._conn.execute("ALTER TABLE guild_settings ADD COLUMN demo_mode INTEGER NOT NULL DEFAULT 0")
+            if "prefix" not in columns:
+                self._conn.execute("ALTER TABLE guild_settings ADD COLUMN prefix TEXT")
             self._conn.commit()
 
     def _write(self, sql: str, params: tuple) -> int:
@@ -81,6 +83,17 @@ class Storage:
             "INSERT INTO guild_settings (guild_id, timezone) VALUES (?, ?) "
             "ON CONFLICT(guild_id) DO UPDATE SET timezone = excluded.timezone",
             (guild_id, tz_name),
+        )
+
+    def prefix(self, guild_id: int) -> str | None:
+        rows = self._read("SELECT prefix FROM guild_settings WHERE guild_id = ?", (guild_id,))
+        return rows[0][0] if rows else None
+
+    def set_prefix(self, guild_id: int, prefix: str | None) -> None:
+        self._write(
+            "INSERT INTO guild_settings (guild_id, prefix) VALUES (?, ?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET prefix = excluded.prefix",
+            (guild_id, prefix),
         )
 
     def demo_mode(self, guild_id: int) -> bool:
