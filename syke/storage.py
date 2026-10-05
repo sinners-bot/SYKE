@@ -31,6 +31,9 @@ class Storage:
         self._lock = threading.Lock()
         with self._lock:
             self._conn.executescript(SCHEMA)
+            columns = {row[1] for row in self._conn.execute("PRAGMA table_info(guild_settings)")}
+            if "demo_mode" not in columns:
+                self._conn.execute("ALTER TABLE guild_settings ADD COLUMN demo_mode INTEGER NOT NULL DEFAULT 0")
             self._conn.commit()
 
     def _write(self, sql: str, params: tuple) -> int:
@@ -78,4 +81,15 @@ class Storage:
             "INSERT INTO guild_settings (guild_id, timezone) VALUES (?, ?) "
             "ON CONFLICT(guild_id) DO UPDATE SET timezone = excluded.timezone",
             (guild_id, tz_name),
+        )
+
+    def demo_mode(self, guild_id: int) -> bool:
+        rows = self._read("SELECT demo_mode FROM guild_settings WHERE guild_id = ?", (guild_id,))
+        return bool(rows and rows[0][0])
+
+    def set_demo_mode(self, guild_id: int, enabled: bool) -> None:
+        self._write(
+            "INSERT INTO guild_settings (guild_id, demo_mode) VALUES (?, ?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET demo_mode = excluded.demo_mode",
+            (guild_id, int(enabled)),
         )

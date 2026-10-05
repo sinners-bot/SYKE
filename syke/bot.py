@@ -12,7 +12,9 @@ from discord import app_commands
 
 from .ai import write_roast
 from .config import Settings, load_settings
-from .profile import ServerAnalysis, analyze_server, build_profile
+from .demo import PERSONAS, build_demo_server
+from .models import Msg
+from .profile import Profile, ServerAnalysis, analyze_server, build_profile
 from .render import render_leaderboard, render_report
 from .scanner import Scanner
 from .storage import Storage
@@ -23,6 +25,8 @@ log = logging.getLogger("syke")
 BRAND = discord.Colour.from_str("#8B5CF6")
 WARN = discord.Colour.from_str("#F59E0B")
 ALL_TIMEZONES = sorted(available_timezones())
+DEMO_MESSAGES = build_demo_server(headline_volume=400)
+PERSONA_CHOICES = [app_commands.Choice(name=name, value=uid) for uid, (name, _, _) in PERSONAS.items()]
 
 LEADERBOARD_CHOICES = [
     app_commands.Choice(name=f"{TRAIT_META[t][0]} {TRAIT_META[t][1]}", value=t) for t in TRAITS
@@ -69,13 +73,34 @@ class Syke(discord.Client):
 
     async def analyze(self, guild: discord.Guild) -> tuple[ServerAnalysis, list[int]] | None:
         tracked = self.storage.tracked(guild.id)
-        if not tracked:
+        demo = self.storage.demo_mode(guild.id)
+        if not tracked and not demo:
             return None
-        scan = await self.scanner.scan(guild, tracked)
-        optouts = self.storage.optouts(guild.id)
-        messages = [m for m in scan.messages if m.author_id not in optouts]
+        messages: list[Msg] = []
+        skipped: list[int] = []
+        if tracked:
+            scan = await self.scanner.scan(guild, tracked)
+            optouts = self.storage.optouts(guild.id)
+            messages = [m for m in scan.messages if m.author_id not in optouts]
+            skipped = scan.skipped_channels
+        if demo:
+            messages = messages + DEMO_MESSAGES
         server = await asyncio.to_thread(analyze_server, messages, self.tz_for(guild.id), self.settings.min_messages)
-        return server, scan.skipped_channels
+        return server, skipped
+
+    async def report_embed(self, guild_id: int, profile: Profile, avatar_url: str | None) -> discord.Embed:
+        await write_roast(profile, self.settings)
+        embed = discord.Embed(
+            title=f"🧠 SYKE REPORT — {profile.name}",
+            description=f"```\n{render_report(profile)}\n```"[:4096],
+            colour=BRAND,
+        )
+        if avatar_url:
+            embed.set_thumbnail(url=avatar_url)
+        engine = "AI analysis" if profile.ai_used else "offline analysis"
+        demo = " • demo mode: fake members included" if self.storage.demo_mode(guild_id) else ""
+        embed.set_footer(text=f"SYKE • {engine} • for entertainment purposes only{demo}")
+        return embed
 
     async def on_tree_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
         if isinstance(error, app_commands.CommandOnCooldown):
@@ -141,16 +166,7 @@ class PublicCommands(app_commands.Group, name="syke", description="Get judged by
 
         profile = build_profile(server, target.id)
         profile.name = target.display_name
-        await write_roast(profile, self.bot.settings)
-
-        embed = discord.Embed(
-            title=f"🧠 SYKE REPORT — {target.display_name}",
-            description=f"```\n{render_report(profile)}\n```"[:4096],
-            colour=BRAND,
-        )
-        embed.set_thumbnail(url=target.display_avatar.url)
-        engine = "AI analysis" if profile.ai_used else "offline analysis"
-        embed.set_footer(text=f"SYKE • {engine} • for entertainment purposes only")
+        embed = await self.bot.report_embed(interaction.guild.id, profile, target.display_avatar.url)
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="leaderboard", description="See who tops the server for a trait")
@@ -176,7 +192,8 @@ class PublicCommands(app_commands.Group, name="syke", description="Get judged by
             description=f"```\n{render_leaderboard(server, trait.value)}\n```",
             colour=BRAND,
         )
-        embed.set_footer(text=f"{len(server.users)} members judged")
+        demo = " • includes fake demo members" if self.bot.storage.demo_mode(interaction.guild.id) else ""
+        embed.set_footer(text=f"{len(server.users)} members judged{demo}")
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="optout", description="Stop SYKE from reading or judging your messages here")
@@ -213,7 +230,9 @@ class PublicCommands(app_commands.Group, name="syke", description="Get judged by
                 "`/syke-admin track` / `untrack` — choose watched channels\n"
                 "`/syke-admin channels` — see what's watched\n"
                 "`/syke-admin timezone` — set the server timezone for activity hours\n"
-                "`/syke-admin rescan` — force a fresh read of the channels\n\n"
+                "`/syke-admin rescan` — force a fresh read of the channels\n"
+                "`/syke-admin demo` — add fake members so you can test SYKE alone\n"
+                "`/syke-admin sample` — see a report for one of the fake members\n\n"
                 "SYKE doesn't store message content. Reports are for fun only."
             ),
         )
@@ -307,6 +326,42 @@ class AdminCommands(app_commands.Group, name="syke-admin", description="Configur
         if skipped:
             body += f"\n⚠️ Couldn't read {len(skipped)} channel(s). Check SYKE's permissions."
         await interaction.followup.send(embed=notice("Rescan complete 🔬", body, BRAND), ephemeral=True)
+
+    @app_commands.command(name="demo", description="Add fake members so you can test SYKE on your own")
+    @app_commands.describe(enabled="On: fake members join rankings and leaderboards. Off: real members only.")
+    async def demo(self, interaction: discord.Interaction, enabled: bool) -> None:
+        assert interaction.guild is not None
+        self.bot.storage.set_demo_mode(interaction.guild.id, enabled)
+        names = ", ".join(name for name, _, _ in PERSONAS.values())
+        if enabled:
+            body = (
+                f"Fake members **{names}** now count towards server comparisons and leaderboards.\n\n"
+                f"Send at least **{self.bot.settings.min_messages}** messages in a watched channel, then run "
+                "`/syke profile`. Use `/syke-admin sample` to see a fake member's report.\n\n"
+                "Turn this off before real members start using SYKE."
+            )
+            await interaction.response.send_message(embed=notice("Demo mode on 🧪", body, BRAND), ephemeral=True)
+        else:
+            body = "Fake members removed. Rankings now use real members only."
+            await interaction.response.send_message(embed=notice("Demo mode off", body, BRAND), ephemeral=True)
+
+    @app_commands.command(name="sample", description="Show the report for one of SYKE's fake demo members")
+    @app_commands.describe(persona="Which fake member to judge")
+    @app_commands.choices(persona=PERSONA_CHOICES)
+    @app_commands.checks.cooldown(1, 10, key=lambda i: (i.guild_id, i.user.id))
+    async def sample(self, interaction: discord.Interaction, persona: app_commands.Choice[int]) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer(thinking=True)
+        result = await self.bot.analyze(interaction.guild)
+        server = result[0] if result else None
+        if server is None or persona.value not in server.users:
+            server = await asyncio.to_thread(
+                analyze_server, DEMO_MESSAGES, self.bot.tz_for(interaction.guild.id), self.bot.settings.min_messages
+            )
+        profile = build_profile(server, persona.value)
+        embed = await self.bot.report_embed(interaction.guild.id, profile, None)
+        embed.title = f"🧠 SYKE REPORT — {profile.name} (fake demo member)"
+        await interaction.followup.send(embed=embed)
 
 
 def main() -> None:

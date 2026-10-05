@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from syke.ai import _apply_ai_result, write_roast
 from syke.config import load_settings
 from syke.models import Msg
-from syke.preview import build_demo_server
+from syke.demo import build_demo_server
 from syke.profile import analyze_server, build_profile
 from syke.render import render_report
 from syke.stats import compute_stats, peak_window
@@ -68,6 +68,34 @@ def test_full_report_renders_offline():
     assert not profile.ai_used
     assert "```" not in report
     assert all(len(line) <= 40 for line in report.splitlines())
+
+
+def test_solo_user_ranked_against_demo_members():
+    me = [msg("LMAOOO bro 💀 i cant", i * 30, author=987654321098765432, laughs=1) for i in range(15)]
+    server = analyze_server(me + build_demo_server(headline_volume=400), UTC, min_messages=15)
+    profile = build_profile(server, 987654321098765432)
+    assert profile.server_size == 6
+    assert "Top" in render_report(profile)
+
+
+def test_storage_migrates_old_guild_settings(tmp_path):
+    import sqlite3
+
+    from syke.storage import Storage
+
+    db = tmp_path / "old.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE guild_settings (guild_id INTEGER PRIMARY KEY, timezone TEXT)")
+    conn.execute("INSERT INTO guild_settings VALUES (1, 'Europe/London')")
+    conn.commit()
+    conn.close()
+
+    store = Storage(str(db))
+    assert store.timezone(1) == "Europe/London" and not store.demo_mode(1)
+    store.set_demo_mode(1, True)
+    assert store.demo_mode(1) and store.timezone(1) == "Europe/London"
+    store.set_timezone(2, "UTC")
+    assert not store.demo_mode(2)
 
 
 def test_ai_result_only_accepts_known_messages():

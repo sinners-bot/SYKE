@@ -56,6 +56,19 @@ Run `python -m syke.preview` to see a full report generated from a fake server.
 | `/syke-admin channels` | Manage Server | List watched channels |
 | `/syke-admin timezone <name>` | Manage Server | Timezone for "most active" hours (autocompletes) |
 | `/syke-admin rescan` | Manage Server | Drop the cache and re-read channels now |
+| `/syke-admin demo <on/off>` | Manage Server | Add 5 fake members to rankings so you can test alone |
+| `/syke-admin sample <persona>` | Manage Server | Show a full report for one of the fake members |
+
+## Testing on your own
+
+1. `/syke-admin demo enabled:True` adds five fake members (Zyro, Mira, bubbles, Dex, Vex)
+   to this server's comparisons and leaderboards. Reports and leaderboards say so in the footer.
+2. `/syke-admin sample persona:Zyro` shows a full report instantly, with no messages needed.
+   It also exercises your OpenAI key if one is set.
+3. To judge yourself, send at least `SYKE_MIN_MESSAGES` messages (default 15) in a watched channel,
+   then run `/syke-admin rescan` and `/syke profile`. You'll be ranked against the fake members.
+   For quicker tests, set `SYKE_MIN_MESSAGES=5` in Railway's Variables.
+4. Turn it off with `/syke-admin demo enabled:False` before real members start using SYKE.
 
 ## How it works
 
