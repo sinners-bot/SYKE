@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from pathlib import Path
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tracked_channels (
@@ -25,6 +26,7 @@ CREATE TABLE IF NOT EXISTS guild_settings (
 
 class Storage:
     def __init__(self, path: str) -> None:
+        Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._lock = threading.Lock()
         with self._lock:

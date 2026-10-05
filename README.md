@@ -112,6 +112,24 @@ instantly (global commands can take a while to propagate).
 /syke profile member:@someone
 ```
 
+## Deploying to Railway
+
+SYKE is a background worker (no web port), and `railway.json` already sets the start
+command and restart policy.
+
+1. Push this repo to GitHub, then in Railway: **New Project → Deploy from GitHub repo**.
+2. **Add a volume** to the service (right-click the service → *Attach volume*) mounted at `/data`.
+   Without it, the SQLite file is wiped on every redeploy and admins lose their channel setup.
+3. In the service's **Variables** tab, set:
+   - `DISCORD_TOKEN` = your bot token
+   - `SYKE_DB_PATH` = `/data/syke.db`
+   - `OPENAI_API_KEY` = your key (optional; omit to use the offline roaster)
+   - `SYKE_DEFAULT_TIMEZONE`, e.g. `Europe/London` (optional)
+4. Deploy. The **Deploy Logs** should show `Synced 2 global commands` and `SYKE online as ...`.
+
+No external database (Supabase, Postgres, etc.) is needed. SYKE only stores watched
+channels, opt-outs and timezones.
+
 ## Configuration
 
 All settings live in `.env` (see `.env.example`):
