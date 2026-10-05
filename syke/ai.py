@@ -150,6 +150,47 @@ async def write_roast(profile: Profile, settings: Settings) -> Profile:
     return profile
 
 
+COMEBACK_PROMPT = """You are SYKE, a Discord bot that answers people using ONLY real messages \
+that members of the server sent in the past. Someone just replied to one of your messages. \
+From the numbered candidates, pick the one that works best as a reply: it should follow on from \
+their message, answer it, or make a funny comeback. Prefer candidates that clearly connect to the \
+conversation. Never pick one that attacks identity (race, religion, gender, sexuality, disability).
+
+Reply with JSON only: {"pick": int}"""
+
+
+def keyword_pick(reply: str, candidates: list[str], rng: random.Random | None = None) -> int | None:
+    """Offline comeback: the candidate sharing the most words with the reply, ties broken randomly."""
+    if not candidates:
+        return None
+    rng = rng or random.Random()
+    wanted = {w for w in re.findall(r"[a-z0-9']+", reply.lower()) if len(w) >= 3}
+    scores = [len(wanted & set(re.findall(r"[a-z0-9']+", c.lower()))) for c in candidates]
+    best = max(scores)
+    return rng.choice([i for i, s in enumerate(scores) if s == best])
+
+
+async def pick_comeback(settings: Settings, said: str, reply: str, candidates: list[str]) -> int | None:
+    """Index of the candidate that best answers `reply` (a response to SYKE saying `said`). Never raises."""
+    if not candidates:
+        return None
+    if settings.ai_provider != "none":
+        numbered = "\n".join(f"[{i}] {text[:200]}" for i, text in enumerate(candidates))
+        prompt = f"SYKE SAID: {said[:300]}\nTHEY REPLIED: {reply[:300]}\n\nCANDIDATES:\n{numbered}"
+        try:
+            if settings.ai_provider == "openai":
+                answer = await _call_openai(settings, COMEBACK_PROMPT, prompt)
+            else:
+                answer = await _call_anthropic(settings, COMEBACK_PROMPT, prompt)
+            pick = _parse_json(answer).get("pick")
+            if isinstance(pick, int) and 0 <= pick < len(candidates):
+                return pick
+            log.warning("AI comeback pick out of range: %r", pick)
+        except Exception:
+            log.exception("AI comeback failed; matching keywords instead")
+    return keyword_pick(reply, candidates)
+
+
 TRAIT_LINES: dict[str, list[str]] = {
     "funny": [
         "is considerably funnier than average, which is a low bar but still impressive",

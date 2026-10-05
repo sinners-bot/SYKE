@@ -153,6 +153,19 @@ class Storage:
         )
         return [r[0] for r in rows]
 
+    def search_messages(self, guild_id: int, words: list[str], limit: int) -> list[str]:
+        """Random stored messages containing any of `words`."""
+        if not words:
+            return []
+        likes = " OR ".join("content LIKE ? ESCAPE '\\'" for _ in words)
+        escaped = ["%" + w.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%" for w in words]
+        rows = self._read(
+            f"SELECT content FROM corpus WHERE guild_id = ? AND length(content) BETWEEN 3 AND 300 "
+            f"AND ({likes}) ORDER BY RANDOM() LIMIT ?",
+            (guild_id, *escaped, limit),
+        )
+        return [r[0] for r in rows]
+
     def set_yap(self, guild_id: int, channel_id: int, enabled: bool) -> bool:
         if enabled:
             return self._write("INSERT OR IGNORE INTO yap_channels VALUES (?, ?)", (guild_id, channel_id)) > 0
