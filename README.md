@@ -10,7 +10,8 @@ card's colour matches the member's strongest trait:
 
 | Page | What's on it |
 | --- | --- |
-| 📊 **Overview** | Archetype (e.g. *The Class Clown*), the roast summary, six stat tiles (messages, active since, peak hours, average length, top emojis, catchphrase) and the personality bars |
+| 📊 **Overview** | The compact card posted in chat: archetype (e.g. *The Class Clown*), the first paragraph of the roast, one line of key numbers, top emojis and catchphrase, and the top 3 traits |
+| 📋 **Full report** | The whole roast, six stat tiles (messages, active since, peak hours, average length, top emojis, catchphrase) and all six personality bars |
 | 🏆 **Highlights** | Funniest, most unhinged, freakiest and most toxic messages, quoted |
 | 🥇 **Ranks** | Achievements and "Top X%" against everyone else judged in the server |
 

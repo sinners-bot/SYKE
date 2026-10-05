@@ -365,9 +365,9 @@ def test_profile_saves_ai_labels_and_rescores(lab, monkeypatch):
     ctx.guild.emojis = []
     before = server.users[100].scores["freaky"]
     run(cog.profile.callback(cog, ctx, None))
-    assert ctx.replies[-1].description.endswith("> roasted")
+    assert "\n> roasted\n" in ctx.replies[-1].description
     assert len(bot.storage.labels(42)) == 12
-    assert "Freaky" in ctx.replies[-1].fields[-1].value
+    assert "😏 Freaky" in ctx.replies[-1].description
     server, _ = run(bot.analyze(guild))
     assert server.users[100].scores["freaky"] > before
 

@@ -61,8 +61,16 @@ RANK_ROWS = [
     ("serious", "🧠 Most serious"),
 ]
 
-PAGES = ("overview", "highlights", "ranks")
-PAGE_LABELS = {"overview": ("📊", "Overview"), "highlights": ("🏆", "Highlights"), "ranks": ("🥇", "Ranks")}
+PAGES = ("overview", "report", "highlights", "ranks")
+PAGE_LABELS = {
+    "overview": ("📊", "Overview"),
+    "report": ("📋", "Full report"),
+    "highlights": ("🏆", "Highlights"),
+    "ranks": ("🥇", "Ranks"),
+}
+SHORT_SUMMARY = 260
+TOP_TRAITS_SHOWN = 3
+MINI_BAR_CELLS = 8
 
 
 def dominant_trait(profile: Profile) -> str | None:
@@ -81,9 +89,29 @@ def colour_for(profile: Profile) -> discord.Colour:
     return TRAIT_COLOURS[trait] if trait else NEUTRAL
 
 
-def bar(value: int) -> str:
-    filled = round(value / 100 * BAR_CELLS)
-    return "█" * filled + "░" * (BAR_CELLS - filled)
+def bar(value: int, cells: int = BAR_CELLS) -> str:
+    filled = round(value / 100 * cells)
+    return "█" * filled + "░" * (cells - filled)
+
+
+def short_summary(summary: str, limit: int = SHORT_SUMMARY) -> str:
+    """The first paragraph, cut at a sentence end if it's still too long."""
+    first = next((p.strip() for p in summary.strip().split("\n\n") if p.strip()), "")
+    first = " ".join(first.split())
+    if len(first) <= limit:
+        return first
+    cut = first[:limit]
+    end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+    return cut[: end + 1] if end > limit // 3 else cut.rstrip() + "…"
+
+
+def catchphrase(profile: Profile) -> str | None:
+    st = profile.stats
+    if st.top_phrases:
+        return clean_quote(st.top_phrases[0][0])
+    if st.top_words:
+        return clean_quote(st.top_words[0][0])
+    return None
 
 
 def clean_quote(text: str) -> str:
@@ -116,9 +144,35 @@ def _base(profile: Profile, page: str, avatar_url: str | None, demo: bool) -> di
 
 
 def overview_page(profile: Profile, avatar_url: str | None = None, demo: bool = False) -> discord.Embed:
+    """The compact card posted in chat: verdict, one-paragraph roast, key numbers and top traits."""
     st = profile.stats
     name, tagline = archetype(profile)
     embed = _base(profile, "overview", avatar_url, demo)
+    embed.title = discord.utils.escape_markdown(profile.name)
+
+    facts = [f"💬 {st.message_count:,} msgs", f"🕐 {st.peak_label}", f"✍️ {round(st.avg_words)} words"]
+    extras = []
+    if st.top_emojis:
+        extras.append(" ".join(e for e, _ in st.top_emojis[:3]))
+    phrase = catchphrase(profile)
+    if phrase:
+        extras.append(f"🗣️ “{phrase}”")
+    top = sorted(TRAITS, key=lambda t: profile.scores[t], reverse=True)[:TOP_TRAITS_SHOWN]
+    rows = [f"{TRAIT_META[t][0]} {TRAIT_META[t][1]:<8} {bar(profile.scores[t], MINI_BAR_CELLS)} {profile.scores[t]:>3}%"
+            for t in top]
+
+    lines = [f"**{name}** — *{tagline}*", "", f"> {short_summary(profile.summary)}", "", " · ".join(facts)]
+    if extras:
+        lines.append(" · ".join(extras))
+    lines.append("```\n" + "\n".join(rows) + "\n```")
+    embed.description = "\n".join(lines)
+    return embed
+
+
+def report_page(profile: Profile, avatar_url: str | None = None, demo: bool = False) -> discord.Embed:
+    st = profile.stats
+    name, tagline = archetype(profile)
+    embed = _base(profile, "report", avatar_url, demo)
     embed.title = discord.utils.escape_markdown(profile.name)
 
     summary = "\n".join(f"> {line}" if line.strip() else ">" for line in profile.summary.strip().splitlines())
@@ -130,13 +184,8 @@ def overview_page(profile: Profile, avatar_url: str | None = None, demo: bool = 
     embed.add_field(name="✍️ Avg length", value=f"{round(st.avg_words)} words")
     emojis = " ".join(e for e, _ in st.top_emojis[:3]) or "None"
     embed.add_field(name="😀 Top emojis", value=emojis)
-    if st.top_phrases:
-        catchphrase = f"“{clean_quote(st.top_phrases[0][0])}”"
-    elif st.top_words:
-        catchphrase = f"“{clean_quote(st.top_words[0][0])}”"
-    else:
-        catchphrase = "Silence"
-    embed.add_field(name="🗣️ Catchphrase", value=catchphrase)
+    phrase = catchphrase(profile)
+    embed.add_field(name="🗣️ Catchphrase", value=f"“{phrase}”" if phrase else "Silence")
 
     rows = []
     for trait in TRAITS:
@@ -182,6 +231,7 @@ def ranks_page(profile: Profile, avatar_url: str | None = None, demo: bool = Fal
 def build_pages(profile: Profile, avatar_url: str | None = None, demo: bool = False) -> dict[str, discord.Embed]:
     return {
         "overview": overview_page(profile, avatar_url, demo),
+        "report": report_page(profile, avatar_url, demo),
         "highlights": highlights_page(profile, avatar_url, demo),
         "ranks": ranks_page(profile, avatar_url, demo),
     }
@@ -220,11 +270,12 @@ class ProfileView(discord.ui.View):
                 )
                 return
             owner_id, pages = card
+            embed = pages.get(page) or pages["overview"]
             if interaction.user.id != owner_id:
-                await interaction.response.send_message(embed=pages[page], ephemeral=True)
+                await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             view = ProfileView(self.load, page, timeout=MESSAGE_VIEW_TIMEOUT)
-            await interaction.response.edit_message(embed=pages[page], view=view)
+            await interaction.response.edit_message(embed=embed, view=view)
         return callback
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item) -> None:

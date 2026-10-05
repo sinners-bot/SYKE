@@ -99,7 +99,7 @@ def test_demo_toggle_and_sample(cog):
     assert card.title == "Vex (fake demo member)"
     assert card.author.name == "SYKE REPORT · 📊 Overview"
     assert "(fake demo member)" not in card.description
-    assert [b.label for b in ctx.views[-1].children] == ["Overview", "Highlights", "Ranks"]
+    assert [b.label for b in ctx.views[-1].children] == ["Overview", "Full report", "Highlights", "Ranks"]
     owner_id, pages = cog.bot.load_card(len(ctx.replies))
     assert owner_id == 1234 and pages["ranks"].title == "Vex (fake demo member)'s Achievements"
     run(cog.top.callback(cog, ctx, "chaos"))
