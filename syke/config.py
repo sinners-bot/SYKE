@@ -30,6 +30,7 @@ class Settings:
     yap_chance: float = 0.08
     yap_cooldown: int = 120
     deep_scan_limit: int = 20000
+    manage_install: bool = True
 
 DEFAULT_OWNER_IDS = "1342786189576634398"
 
@@ -73,4 +74,5 @@ def load_settings() -> Settings:
         yap_chance=min(max(_float("SYKE_YAP_CHANCE", 0.08), 0.0), 1.0),
         yap_cooldown=_int("SYKE_YAP_COOLDOWN", 120),
         deep_scan_limit=_int("SYKE_DEEP_SCAN_LIMIT", 20000),
+        manage_install=os.getenv("SYKE_MANAGE_INSTALL", "1").strip().lower() not in {"0", "false", "no", "off"},
     )

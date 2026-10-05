@@ -27,6 +27,7 @@ from .models import Msg
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
 from .render import render_leaderboard
 from .scanner import Scanner, to_msg
+from .showcase import ShowcaseView, tour_page
 from .storage import Storage
 from .traits import TRAIT_META, TRAITS
 
@@ -41,7 +42,11 @@ MENTION_ONLY = "<mention>"
 MENTION_WORDS = {"mention", "@", "ping", "@mention"}
 VERSION = (os.getenv("RAILWAY_GIT_COMMIT_SHA") or "dev")[:7]
 NEEDED_PERMISSIONS = ("view_channel", "send_messages", "embed_links", "read_message_history")
+# Requested on invite: what SYKE needs to work, plus posting server emojis from elsewhere and reactions.
+INVITE_PERMISSIONS = NEEDED_PERMISSIONS + ("use_external_emojis", "add_reactions")
+INSTALL_SCOPES = ["bot", "applications.commands"]
 MIN_MIMIC_MESSAGES = 10
+SERVER_LIST_LIMIT = 20
 COLLECT_DEFAULT = 5000
 COLLECT_MAX = 20000
 YAP_REPLY_COOLDOWN = 4
@@ -65,6 +70,16 @@ TRAIT_TITLES: dict[str, str] = {
 PERSONA_BY_NAME: dict[str, int] = {name.lower(): uid for uid, (name, _, _) in PERSONAS.items()}
 
 F = TypeVar("F", bound=Callable)
+
+
+def install_permissions() -> discord.Permissions:
+    return discord.Permissions(**{p: True for p in INVITE_PERMISSIONS})
+
+
+def invite_view(url: str) -> discord.ui.View:
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(label="Add SYKE to your server", emoji="➕", url=url))
+    return view
 
 
 def notice(title: str, body: str, colour: discord.Colour = WARN) -> discord.Embed:
@@ -170,11 +185,15 @@ class Syke(commands.Bot):
         self._history_version: dict[int, int] = {}
         self._last_summary: dict[tuple[int, int], str] = {}
         self._deep_scans: set[tuple[int, int]] = set()
+        self._started = time.time()
+        self.app_public: bool | None = None
         self.add_check(self.channel_check)
 
     async def setup_hook(self) -> None:
         await self.add_cog(SykeCommands(self))
         self.add_view(ProfileView(self.load_card))
+        self.add_view(ShowcaseView(self.tour_prefix, self.invite_url()))
+        self.spawn(self._configure_install())
         log.info("SYKE %s starting: %d prefix commands, default prefix %r",
                  VERSION, len(self.commands), self.settings.default_prefix)
         try:
@@ -201,9 +220,47 @@ class Syke(commands.Bot):
     def invite_url(self) -> str:
         return discord.utils.oauth_url(
             self.application_id or (self.user.id if self.user else 0),
-            permissions=discord.Permissions(**{p: True for p in NEEDED_PERMISSIONS}),
-            scopes=("bot", "applications.commands"),
+            permissions=install_permissions(),
+            scopes=INSTALL_SCOPES,
         )
+
+    def tour_prefix(self, guild_id: int | None) -> str:
+        return self.display_prefix(guild_id) if guild_id else self.settings.default_prefix
+
+    async def _configure_install(self) -> None:
+        """Make Discord's "Add App" button on SYKE's profile add it to a server with the right permissions."""
+        try:
+            app = await self.application_info()
+        except discord.HTTPException:
+            log.exception("Couldn't read application info")
+            return
+        self.app_public = app.bot_public
+        if not app.bot_public:
+            log.warning("'Public Bot' is off in the Developer Portal (Bot tab): only you can add SYKE to servers")
+        if app.custom_install_url:
+            log.info("Using the custom install link from the Developer Portal: %s", app.custom_install_url)
+            return
+        if not self.settings.manage_install:
+            return
+        config = app.guild_integration_config
+        current = config.oauth2_install_params if config else None
+        if current and set(current.scopes) == set(INSTALL_SCOPES) and current.permissions == install_permissions():
+            log.info("Add App button already installs SYKE to servers")
+            return
+        try:
+            await app.edit(
+                guild_install_scopes=INSTALL_SCOPES,
+                guild_install_permissions=install_permissions(),
+                reason="Let the Add App button add SYKE to servers",
+            )
+            log.info("Add App button now installs SYKE to servers with scopes %s", ", ".join(INSTALL_SCOPES))
+        except discord.HTTPException as exc:
+            log.warning("Couldn't set install settings (%s); set Installation > Install Link to "
+                        "'Discord Provided Link' in the Developer Portal instead", exc)
+
+    def reach(self) -> tuple[int, int]:
+        """Servers SYKE is in, and the members across them."""
+        return len(self.guilds), sum(g.member_count or 0 for g in self.guilds)
 
     async def on_command(self, ctx: commands.Context) -> None:
         where = f"{ctx.guild.id}/#{getattr(ctx.channel, 'name', ctx.channel.id)}" if ctx.guild else "DM"
@@ -812,6 +869,74 @@ class SykeCommands(commands.Cog, name="SYKE"):
         embed.set_footer(text=f"SYKE version {VERSION}")
         await ctx.reply(embed=embed, ephemeral=True)
 
+    @commands.hybrid_command(name="showcase", aliases=["features", "tour", "showoff"],
+                             description="A tour of everything SYKE can do, with examples")
+    async def showcase(self, ctx: commands.Context) -> None:
+        embeds = tour_page("home", self.bot.tour_prefix(ctx.guild.id if ctx.guild else None))
+        await ctx.reply(embeds=embeds, view=ShowcaseView(self.bot.tour_prefix, self.bot.invite_url()))
+
+    @commands.hybrid_command(name="about", aliases=["stats", "info", "botinfo", "servercount"],
+                             description="How many servers use SYKE, and other bot stats")
+    async def about(self, ctx: commands.Context) -> None:
+        servers, members = self.bot.reach()
+        storage = self.bot.storage
+        embed = discord.Embed(
+            title="👁️ SYKE",
+            colour=BRAND,
+            description="Personality judgement, scientifically questionable. "
+                        f"See everything it does with `{self.bot.tour_prefix(ctx.guild.id if ctx.guild else None)}showcase`.",
+        )
+        embed.add_field(name="Servers", value=f"**{servers:,}**")
+        embed.add_field(name="Members watched", value=f"**{members:,}**")
+        embed.add_field(name="Messages remembered", value=f"**{storage.corpus_total():,}**")
+        embed.add_field(name="Watched channels", value=f"**{storage.tracked_total():,}**")
+        embed.add_field(name="Online since", value=f"<t:{int(self.bot._started)}:R>")
+        embed.add_field(name="Ping", value=f"{round(self.bot.latency * 1000)} ms" if self.bot.latency == self.bot.latency else "—")
+        embed.set_footer(text=f"Version {VERSION} • AI: {self.bot.settings.ai_provider}")
+        await ctx.reply(embed=embed, view=invite_view(self.bot.invite_url()))
+
+    @commands.hybrid_command(name="invite", aliases=["add", "addapp", "install"],
+                             description="Add SYKE to your own server")
+    async def invite(self, ctx: commands.Context) -> None:
+        p = self.bot.settings.default_prefix
+        embed = discord.Embed(
+            title="➕ Add SYKE to your server",
+            colour=BRAND,
+            description=(
+                "Press the button below, pick a server you manage and authorise.\n\n"
+                "You can also click SYKE's name or avatar anywhere in Discord and press **Add App**.\n\n"
+                f"Once it's in, run `{p}track #channel` so SYKE knows where to read, then `{p}profile`."
+            ),
+        )
+        await ctx.reply(embed=embed, view=invite_view(self.bot.invite_url()), ephemeral=True)
+
+    @commands.hybrid_command(name="servers", aliases=["guilds"], description="SYKE owners only: every server using SYKE")
+    @app_commands.default_permissions(administrator=True)
+    async def servers(self, ctx: commands.Context) -> None:
+        if ctx.author.id not in self.bot.settings.owner_ids:
+            await ctx.reply(embed=notice("Owners only", "Only SYKE's owners can list its servers. "
+                                         "Try `about` for the server count."), ephemeral=True)
+            return
+        count, members = self.bot.reach()
+        tracked = self.bot.storage.tracked_counts()
+        lines = []
+        for g in sorted(self.bot.guilds, key=lambda g: g.member_count or 0, reverse=True)[:SERVER_LIST_LIMIT]:
+            joined = f"<t:{int(g.me.joined_at.timestamp())}:d>" if g.me and g.me.joined_at else "?"
+            lines.append(f"**{discord.utils.escape_markdown(g.name)[:40]}** — {g.member_count or 0:,} members, "
+                         f"{tracked.get(g.id, 0)} watched, joined {joined}")
+        if count > SERVER_LIST_LIMIT:
+            lines.append(f"…and {count - SERVER_LIST_LIMIT} more")
+        embed = discord.Embed(
+            title=f"🌐 SYKE is in {count:,} server{'s' if count != 1 else ''}",
+            colour=BRAND,
+            description=f"{members:,} members in total\n\n" + ("\n".join(lines) or "No servers yet."),
+        )
+        if self.bot.app_public is False:
+            embed.add_field(name="⚠️ Public Bot is off", value=(
+                "Only you can add SYKE right now. Turn on **Public Bot** in the Developer Portal "
+                "(Bot tab) so others can use Add App and the invite link."), inline=False)
+        await ctx.reply(embed=embed, ephemeral=True)
+
     @commands.hybrid_command(name="help", aliases=["commands"], description="How to use SYKE")
     @public()
     async def help(self, ctx: commands.Context) -> None:
@@ -828,6 +953,8 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"`{p}mimic [@member]` — SYKE talks like them (Markov chain)\n"
                 f"`{p}scanme` — dig up your older messages so they count towards your profile\n"
                 f"`{p}optout` / `{p}optin` — control whether you're judged\n"
+                f"`{p}showcase` — a tour of every feature, with examples\n"
+                f"`{p}about` — how many servers use SYKE • `{p}invite` — add it to yours\n"
                 "`/diagnose` — check why prefix commands might not work here\n\n"
                 "**Admins (Manage Server)**\n"
                 f"`{p}track #channel` / `{p}untrack #channel` — choose what SYKE reads\n"

@@ -109,6 +109,16 @@ class Storage:
         rows = self._read("SELECT channel_id FROM tracked_channels WHERE guild_id = ?", (guild_id,))
         return [r[0] for r in rows]
 
+    def tracked_counts(self) -> dict[int, int]:
+        """Watched channels per guild."""
+        return dict(self._read("SELECT guild_id, COUNT(*) FROM tracked_channels GROUP BY guild_id", ()))
+
+    def tracked_total(self) -> int:
+        return self._read("SELECT COUNT(*) FROM tracked_channels", ())[0][0]
+
+    def corpus_total(self) -> int:
+        return self._read("SELECT COUNT(*) FROM corpus", ())[0][0]
+
     def set_optout(self, guild_id: int, user_id: int, opted_out: bool) -> bool:
         if opted_out:
             self.forget(guild_id, user_id)

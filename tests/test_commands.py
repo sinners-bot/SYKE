@@ -190,3 +190,77 @@ def test_unknown_inputs_are_explained(cog):
     run(cog.top.callback(cog, ctx, "funny"))
     assert ctx.replies[-1].title == "No channels are being watched"
     assert "`!track #general`" in ctx.replies[-1].description
+
+
+def _fake_guilds(monkeypatch, bot, sizes):
+    guilds = [types.SimpleNamespace(id=i, name=f"Server {i}", member_count=n, me=None) for i, n in enumerate(sizes, 1)]
+    monkeypatch.setattr(type(bot), "guilds", property(lambda self: guilds))
+
+
+def test_about_shows_server_count_and_invite(cog, monkeypatch):
+    _fake_guilds(monkeypatch, cog.bot, [120, 30, 5])
+    ctx = FakeCtx()
+    run(cog.about.callback(cog, ctx))
+    fields = {f.name: f.value for f in ctx.replies[-1].fields}
+    assert fields["Servers"] == "**3**"
+    assert fields["Members watched"] == "**155**"
+    button = ctx.views[-1].children[0]
+    assert "scope=bot+applications.commands" in button.url
+
+
+def test_servers_is_owner_only(cog, monkeypatch):
+    _fake_guilds(monkeypatch, cog.bot, [10, 900])
+    ctx = FakeCtx()
+    run(cog.servers.callback(cog, ctx))
+    assert ctx.replies[-1].title == "Owners only"
+
+    ctx.author.id = next(iter(cog.bot.settings.owner_ids))
+    run(cog.servers.callback(cog, ctx))
+    embed = ctx.replies[-1]
+    assert embed.title == "🌐 SYKE is in 2 servers"
+    assert embed.description.index("Server 2") < embed.description.index("Server 1")
+
+
+def test_showcase_pages_have_examples(cog):
+    from syke.showcase import TOUR, ShowcaseView, tour_page
+
+    sent = {}
+
+    class Ctx(FakeCtx):
+        async def reply(self, content=None, **kwargs):
+            sent.update(kwargs)
+
+    run(cog.showcase.callback(cog, Ctx()))
+    assert isinstance(sent["view"], ShowcaseView) and sent["view"].is_persistent()
+    assert "Personality reports" in sent["embeds"][0].description
+    for key, *_ in TOUR:
+        embeds = tour_page(key, "?")
+        assert all(len(e) < 6000 for e in embeds)
+    assert len(tour_page("profile", "?")) == 2
+    assert "`?iq [@member]`" in tour_page("iq", "?")[0].description
+
+
+def test_install_settings_are_configured_once(cog):
+    from syke.bot import INSTALL_SCOPES, install_permissions
+
+    edits = []
+
+    def app(params):
+        config = types.SimpleNamespace(oauth2_install_params=params) if params else None
+        async def edit(**kwargs):
+            edits.append(kwargs)
+        return types.SimpleNamespace(bot_public=True, custom_install_url=None,
+                                     guild_integration_config=config, edit=edit)
+
+    async def info(current):
+        return current
+
+    cog.bot.application_info = lambda: info(app(None))
+    run(cog.bot._configure_install())
+    assert edits[-1]["guild_install_scopes"] == INSTALL_SCOPES
+    assert edits[-1]["guild_install_permissions"] == install_permissions()
+
+    done = types.SimpleNamespace(scopes=list(INSTALL_SCOPES), permissions=install_permissions())
+    cog.bot.application_info = lambda: info(app(done))
+    run(cog.bot._configure_install())
+    assert len(edits) == 1

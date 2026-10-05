@@ -32,6 +32,10 @@ with `!prefix mention`.
 | `!profile [@member]` | everyone | Full personality report (yourself if no member). Aliases: `!judge`, `!p`, `!me` |
 | `!iq [@member]` | everyone | A very unscientific IQ estimate (55-160) with a bell curve, what raised or lowered it (vocabulary, big words, message length, punctuation, serious takes, brainrot, caps-lock chaos), and their smartest and least smart messages. Also shown on `!profile`. Aliases: `!brain`, `!smarts` |
 | `!top [trait]` | everyone | Leaderboard for `funny`, `toxic`, `cringe`, `freaky`, `serious`, `chaotic`, `active` or `iq`. Aliases: `!leaderboard`, `!lb` |
+| `!showcase` | everyone | A tour of every feature with live example cards. Aliases: `!features`, `!tour` |
+| `!about` | everyone | How many servers use SYKE, members watched, uptime. Aliases: `!stats`, `!info` |
+| `!invite` | everyone | Button to add SYKE to your own server |
+| `!servers` | SYKE owners | Every server SYKE is in, biggest first, with watched channels and join dates |
 | `!scanme` | everyone | Reads back through watched channels (up to `SYKE_DEEP_SCAN_LIMIT` messages each) and adds your older messages to your profile. Aliases: `!scan`, `!addme`. Once per 10 minutes |
 | `!mimic [@member]` | everyone | A made-up message in someone's style, from a Markov chain of their messages. Aliases: `!impersonate`, `!copy` |
 | `!optout` / `!optin` | everyone | Exclude yourself from being read or judged (opting out also deletes your stored messages) |
@@ -101,6 +105,10 @@ Members need `SYKE_MIN_MESSAGES` (default 15) messages in watched channels befor
 3. **OAuth2 → URL Generator**: scopes `bot` and `applications.commands`; permissions
    **View Channels**, **Read Message History**, **Send Messages**, **Embed Links**.
    Open the generated URL to invite SYKE to your server.
+4. **Add App button**: keep **Public Bot** on (Bot tab) so other people can add SYKE. On startup SYKE sets
+   its own guild-install settings (scopes `bot` + `applications.commands`, the permissions above plus
+   Use External Emojis and Add Reactions), so **Add App** on SYKE's profile adds it to a server.
+   If you set a custom install link in *Installation*, SYKE leaves it alone; `SYKE_MANAGE_INSTALL=0` turns this off.
 
 ### 2. Run it
 
@@ -158,6 +166,7 @@ All settings live in `.env` (see `.env.example`):
 | `SYKE_DEFAULT_TIMEZONE` | `UTC` | Used until an admin sets one |
 | `SYKE_DEFAULT_PREFIX` | `!` | Used until an admin runs `!prefix` |
 | `SYKE_DEEP_SCAN_LIMIT` | `20000` | Messages per channel `!scanme` reads back through |
+| `SYKE_MANAGE_INSTALL` | `1` | Set the app's guild-install settings on startup so **Add App** works (`0` to manage them yourself) |
 | `SYKE_YAP_CHANCE` | `0.08` | Chance that a message in a yap channel gets an answer |
 | `SYKE_YAP_COOLDOWN` | `120` | Minimum seconds between yaps in one channel |
 | `SYKE_OWNER_IDS` | `1342786189576634398` | Comma-separated user IDs that can use every admin command in every server, even without Manage Server. Owners without the permission use the prefix or @mention form, since Discord hides admin slash commands from them |
