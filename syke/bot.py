@@ -143,6 +143,7 @@ class Syke(commands.Bot):
         self._ingested: dict[int, float] = {}
         self._background: set[asyncio.Task] = set()
         self._warmed = False
+        self._last_yap: dict[int, float] = {}
         self.add_check(self.channel_check)
 
     async def setup_hook(self) -> None:
@@ -220,9 +221,43 @@ class Syke(commands.Bot):
         await self.process_commands(message)
         if message.author.bot or not message.guild or not message.content:
             return
+        if self.is_command_text(message.guild.id, message.content):
+            return
         if message.channel.id in self.storage.tracked(message.guild.id) \
                 and message.author.id not in self.storage.optouts(message.guild.id):
             self.storage.add_corpus(message.guild.id, [corpus_row(message)])
+        await self.maybe_yap(message)
+
+    def is_command_text(self, guild_id: int, text: str) -> bool:
+        text = text.lstrip()
+        starts = {self.settings.default_prefix}
+        if self.prefix_for(guild_id) != MENTION_ONLY:
+            starts.add(self.prefix_for(guild_id))
+        if self.user:
+            starts |= {f"<@{self.user.id}>", f"<@!{self.user.id}>"}
+        return any(text.startswith(s) for s in starts)
+
+    def pick_yap(self, guild_id: int, exclude_id: int = 0) -> str | None:
+        for text in self.storage.random_messages(guild_id, 15, exclude_id):
+            if len(text.split()) >= 3 and not self.is_command_text(guild_id, text):
+                return text
+        return None
+
+    async def maybe_yap(self, message: discord.Message) -> None:
+        """In yap channels, now and then answer chat with something a member said in the past."""
+        if message.channel.id not in self.storage.yap_channels(message.guild.id):
+            return
+        now = time.monotonic()
+        if now - self._last_yap.get(message.channel.id, -1e9) < self.settings.yap_cooldown:
+            return
+        if random.random() >= self.settings.yap_chance:
+            return
+        line = self.pick_yap(message.guild.id, exclude_id=message.id)
+        if line is None:
+            return
+        self._last_yap[message.channel.id] = now
+        with contextlib.suppress(discord.HTTPException):
+            await message.channel.send(line)
 
     def prefix_for(self, guild_id: int) -> str:
         if guild_id not in self._prefixes:
@@ -264,7 +299,8 @@ class Syke(commands.Bot):
             scanned_at = scan.finished_at
             if self._ingested.get(guild.id) != scanned_at:
                 self._ingested[guild.id] = scanned_at
-                rows = [(m.message_id, m.channel_id, m.author_id, m.content) for m in messages if m.message_id]
+                rows = [(m.message_id, m.channel_id, m.author_id, m.content) for m in messages
+                        if m.message_id and not self.is_command_text(guild.id, m.content)]
                 await asyncio.to_thread(self.storage.add_corpus, guild.id, rows)
         tz = self.tz_for(guild.id)
         key = (scanned_at, demo, str(tz), frozenset(optouts), self.settings.min_messages)
@@ -459,7 +495,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
         self.bot.storage.set_optout(ctx.guild.id, ctx.author.id, False)
         await ctx.reply(embed=notice("Welcome back to the lab 🧪", "Your messages count again. Brace yourself.", BRAND), ephemeral=True)
 
-    async def corpus(self, guild: discord.Guild, author_id: int | None) -> list[str] | None:
+    async def corpus(self, guild: discord.Guild, author_id: int) -> list[str] | None:
         """Texts to learn from; a scan of watched channels tops up a thin corpus. None if nothing is set up."""
         rows = self.bot.storage.corpus(guild.id, author_id)
         if len(rows) < MIN_MIMIC_MESSAGES and self.bot.storage.tracked(guild.id):
@@ -470,7 +506,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
         optouts = self.bot.storage.optouts(guild.id)
         return [text for uid, text in rows if uid not in optouts]
 
-    async def babble(self, ctx: commands.Context, author_id: int | None) -> tuple[str | None, int] | None:
+    async def babble(self, ctx: commands.Context, author_id: int) -> tuple[str | None, int] | None:
         async with ctx.typing():
             texts = await self.corpus(ctx.guild, author_id)
             if texts is None:
@@ -506,27 +542,6 @@ class SykeCommands(commands.Cog, name="SYKE"):
             return
         embed = discord.Embed(description=line, colour=BRAND)
         embed.set_author(name=f"{target.display_name} (probably)", icon_url=target.display_avatar.url)
-        embed.set_footer(text=f"Markov chain of {count} messages • not a real quote")
-        await ctx.reply(embed=embed)
-
-    @commands.hybrid_command(name="markov", aliases=["babble", "server"], description="A sentence stitched together from the whole server's messages")
-    @commands.cooldown(1, 5, commands.BucketType.member)
-    @public()
-    async def markov(self, ctx: commands.Context) -> None:
-        result = await self.babble(ctx, None)
-        if result is None:
-            await ctx.reply(embed=self.bot.no_channels(ctx.guild.id))
-            return
-        line, count = result
-        if line is None:
-            await ctx.reply(embed=notice(
-                "Not enough to go on 🔬",
-                f"SYKE has only **{count}** message{'s' if count != 1 else ''} to learn from. "
-                f"An admin can run `{self.p(ctx)}collect` to read more history.",
-            ))
-            return
-        embed = discord.Embed(description=line, colour=BRAND)
-        embed.set_author(name=f"{ctx.guild.name}, collectively")
         embed.set_footer(text=f"Markov chain of {count} messages • not a real quote")
         await ctx.reply(embed=embed)
 
@@ -600,7 +615,6 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"`{p}profile [@member]` — the full personality report\n"
                 f"`{p}top [trait]` — leaderboard: funny, toxic, cringe, freaky, serious, chaotic, active\n"
                 f"`{p}mimic [@member]` — SYKE talks like them (Markov chain)\n"
-                f"`{p}markov` — a sentence stitched from the whole server\n"
                 f"`{p}optout` / `{p}optin` — control whether you're judged\n"
                 "`/diagnose` — check why prefix commands might not work here\n\n"
                 "**Admins (Manage Server)**\n"
@@ -609,10 +623,11 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"`{p}prefix <new|mention|reset>` — custom prefix, @mention only, or back to `{self.bot.settings.default_prefix}`\n"
                 f"`{p}timezone <zone>` — e.g. `{p}timezone Europe/London`\n"
                 f"`{p}rescan` — re-read channels now\n"
-                f"`{p}collect [#channel] [limit]` — read more history for mimic/markov\n"
+                f"`{p}collect [#channel] [limit]` — read more history for mimic/yap\n"
+                f"`{p}yap on|off` — SYKE chimes in with old messages in this channel\n"
                 f"`{p}demo on|off` — add fake members to test alone\n"
                 f"`{p}sample [name]` — report for a fake member\n\n"
-                "SYKE keeps text from watched channels for mimic/markov; "
+                "SYKE keeps text from watched channels for mimic/yap; "
                 f"`{p}optout` deletes yours. Reports are for fun only."
             ),
         )
@@ -739,14 +754,15 @@ class SykeCommands(commands.Cog, name="SYKE"):
             body += f"\n⚠️ Couldn't read {len(skipped)} channel(s). Check SYKE's permissions."
         await ctx.reply(embed=notice("Rescan complete 🔬", body, BRAND), ephemeral=True)
 
-    async def _collect_channel(self, channel, limit: int, optouts: set[int]) -> list[tuple[int, int, int, str]]:
+    async def _collect_channel(self, guild_id: int, channel, limit: int, optouts: set[int]) -> list[tuple[int, int, int, str]]:
         rows = []
         async for message in channel.history(limit=limit):
-            if not message.author.bot and message.content and message.author.id not in optouts:
+            if not message.author.bot and message.content and message.author.id not in optouts \
+                    and not self.bot.is_command_text(guild_id, message.content):
                 rows.append(corpus_row(message))
         return rows
 
-    @commands.hybrid_command(name="collect", description="Read channel history so mimic and markov have more to learn from")
+    @commands.hybrid_command(name="collect", description="Read channel history so mimic and yap have more to work with")
     @app_commands.describe(channel="Channel to read. Leave empty for all watched channels.",
                            limit=f"Messages to read per channel, up to {COLLECT_MAX}")
     @commands.cooldown(1, 30, commands.BucketType.guild)
@@ -776,7 +792,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
         started = time.monotonic()
         async with ctx.typing():
             results = await asyncio.gather(
-                *(self._collect_channel(ch, limit, optouts) for ch in readable), return_exceptions=True
+                *(self._collect_channel(ctx.guild.id, ch, limit, optouts) for ch in readable), return_exceptions=True
             )
             rows: list[tuple[int, int, int, str]] = []
             for ch, result in zip(readable, results):
@@ -790,10 +806,40 @@ class SykeCommands(commands.Cog, name="SYKE"):
         log.info("Collected %d messages (%d new) in %s in %.1fs", len(rows), added, ctx.guild.id, time.monotonic() - started)
         body = (f"Read **{len(rows)}** messages from {', '.join(ch.mention for ch in readable if ch not in unreadable)} "
                 f"(**{added}** new).\nSYKE now knows **{total}** messages from **{authors}** members. "
-                f"Try `{self.p(ctx)}mimic @someone` or `{self.p(ctx)}markov`.")
+                f"Try `{self.p(ctx)}mimic @someone` or `{self.p(ctx)}yap on`.")
         if unreadable:
             body += f"\n⚠️ Couldn't read {', '.join(ch.mention for ch in unreadable)}."
         await ctx.reply(embed=notice("Collection complete 🧫", body, BRAND))
+
+    @commands.hybrid_command(name="yap", description="Let SYKE chime in with random things members have said before")
+    @app_commands.describe(enabled="On: SYKE yaps in this channel now and then. Off: it stops.",
+                           channel="Channel to change. Leave empty for this one.")
+    @admin()
+    async def yap(self, ctx: commands.Context, enabled: bool | None = None,
+                  channel: discord.TextChannel | None = None) -> None:
+        channel = channel or ctx.channel
+        p = self.p(ctx)
+        if enabled is None:
+            active = [ch.mention for cid in self.bot.storage.yap_channels(ctx.guild.id)
+                      if (ch := ctx.guild.get_channel(cid))]
+            body = (f"SYKE is yapping in {', '.join(active)}." if active else "SYKE isn't yapping anywhere.")
+            body += f"\nUse `{p}yap on` or `{p}yap off` in a channel to change it."
+            await ctx.reply(embed=notice("Yap settings 🗣️", body, BRAND), ephemeral=True)
+            return
+
+        self.bot.storage.set_yap(ctx.guild.id, channel.id, enabled)
+        if not enabled:
+            await ctx.reply(embed=notice("Yap off 🤐", f"SYKE will keep quiet in {channel.mention}.", BRAND))
+            return
+        body = (f"Every so often, when people chat in {channel.mention}, SYKE will drop something a member "
+                f"said in the past. Turn it off with `{p}yap off`.")
+        perms = channel.permissions_for(ctx.guild.me)
+        if not perms.send_messages:
+            body += f"\n⚠️ SYKE can't send messages in {channel.mention} yet."
+        if self.bot.pick_yap(ctx.guild.id) is None:
+            body += (f"\n⚠️ SYKE hasn't stored any messages yet. Watch a channel with `{p}track #channel` "
+                     f"or read history with `{p}collect`.")
+        await ctx.reply(embed=notice("Yap on 🗣️", body, BRAND))
 
     @commands.hybrid_command(name="demo", description="Add fake members so you can test SYKE on your own")
     @app_commands.describe(enabled="On: fake members join rankings. Off: real members only.")

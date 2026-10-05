@@ -31,7 +31,6 @@ with `!prefix mention`.
 | `!profile [@member]` | everyone | Full personality report (yourself if no member). Aliases: `!judge`, `!p`, `!me` |
 | `!top [trait]` | everyone | Leaderboard for `funny`, `toxic`, `cringe`, `freaky`, `serious`, `chaotic` or `active`. Aliases: `!leaderboard`, `!lb` |
 | `!mimic [@member]` | everyone | A made-up message in someone's style, from a Markov chain of their messages. Aliases: `!impersonate`, `!copy` |
-| `!markov` | everyone | A made-up sentence stitched together from the whole server. Aliases: `!babble`, `!server` |
 | `!optout` / `!optin` | everyone | Exclude yourself from being read or judged (opting out also deletes your stored messages) |
 | `!help` | everyone | Command list using this server's prefix |
 | `!track #channel` / `!untrack #channel` | Manage Server | Choose which channels SYKE reads |
@@ -40,6 +39,7 @@ with `!prefix mention`.
 | `!timezone <zone>` | Manage Server | Timezone for "most active" hours, e.g. `Europe/London`. Alias: `!tz` |
 | `!rescan` | Manage Server | Drop the cache and re-read channels now |
 | `!collect [#channel] [limit]` | Manage Server | Read up to 20,000 messages per channel (default 5,000) into the Markov corpus. Without a channel it reads every watched channel |
+| `!yap on\|off [#channel]` | Manage Server | When on, SYKE now and then answers chat in that channel with a random message a member sent in the past (`SYKE_YAP_CHANCE` per message, at most once per `SYKE_YAP_COOLDOWN` seconds). `!yap` alone lists where it's on |
 | `!demo on\|off` | Manage Server | Add 5 fake members to rankings so you can test alone |
 | `!sample [name]` | Manage Server | Full report for a fake member (Zyro, Mira, bubbles, Dex, Vex) |
 
@@ -61,7 +61,7 @@ with `!prefix mention`.
    Refreshes only fetch messages newer than the last scan, and scores are reused until the
    scan changes, so most reports skip straight to the roast. Bots and opted-out users are skipped.
    Text from watched channels (and anything `!collect` reads) is kept in SQLite so `!mimic`
-   and `!markov` have something to learn from. `!optout` deletes a member's stored messages.
+   and `!yap` have something to work with. `!optout` deletes a member's stored messages.
 2. **Hard stats** (`syke/stats.py`): message count, first seen, busiest 3-hour window,
    average words, top emojis (including custom ones), and catchphrases (repeated 2-3 word phrases).
 3. **Traits** (`syke/traits.py`): every message gets scored by word lists in
@@ -145,6 +145,8 @@ All settings live in `.env` (see `.env.example`):
 | `SYKE_CACHE_MINUTES` | `15` | How long a scan is reused |
 | `SYKE_DEFAULT_TIMEZONE` | `UTC` | Used until an admin sets one |
 | `SYKE_DEFAULT_PREFIX` | `!` | Used until an admin runs `!prefix` |
+| `SYKE_YAP_CHANCE` | `0.08` | Chance that a message in a yap channel gets an answer |
+| `SYKE_YAP_COOLDOWN` | `120` | Minimum seconds between yaps in one channel |
 | `SYKE_OWNER_IDS` | `1342786189576634398` | Comma-separated user IDs that can use every admin command in every server, even without Manage Server. Owners without the permission use the prefix or @mention form, since Discord hides admin slash commands from them |
 
 ## Development

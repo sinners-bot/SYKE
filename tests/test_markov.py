@@ -152,9 +152,6 @@ def test_mimic_learns_from_watched_channels(lab):
     assert embed.description
     assert "Markov chain of 12 messages" in embed.footer.text
 
-    run(cog.markov.callback(cog, ctx))
-    assert ctx.replies[-1].author.name == "Lab, collectively"
-
     stranger = ctx_in(guild, author_id=555)
     run(cog.mimic.callback(cog, stranger, None))
     assert stranger.replies[-1].title == "Not enough to go on 🔬"
@@ -168,8 +165,9 @@ def test_mimic_respects_optout_and_needs_setup(lab, tmp_path):
     assert ctx.replies[-1].title == "Off limits"
 
     cog.bot.storage.untrack(42, 1)
-    run(cog.markov.callback(cog, ctx))
-    assert ctx.replies[-1].title == "No channels are being watched"
+    stranger = ctx_in(guild, author_id=555)
+    run(cog.mimic.callback(cog, stranger, None))
+    assert stranger.replies[-1].title == "No channels are being watched"
 
 
 def test_collect_reads_history_into_corpus(lab):
@@ -186,3 +184,63 @@ def test_collect_reads_history_into_corpus(lab):
     by_name = {c.name: c for c in cog.get_commands()}
     assert _admin_predicate in by_name["collect"].checks
     assert _admin_predicate not in by_name["mimic"].checks
+
+
+def test_collect_skips_commands(lab):
+    cog, guild, channel = lab
+    channel.messages += [fake_message(200, 1, 300, "!profile @someone"), fake_message(201, 1, 300, "<@999> help")]
+    run(cog.collect.callback(cog, ctx_in(guild), channel, 50))
+    assert all(not text.startswith(("!", "<@")) for _, text in cog.bot.storage.corpus(42, 300))
+
+
+def yap_message(mid, channel_id=1):
+    sent: list[str] = []
+
+    async def send(text):
+        sent.append(text)
+
+    return types.SimpleNamespace(
+        id=mid, content="anyone here", guild=types.SimpleNamespace(id=42),
+        author=types.SimpleNamespace(id=777, bot=False),
+        channel=types.SimpleNamespace(id=channel_id, send=send),
+    ), sent
+
+
+def test_yap_on_off_and_chiming_in(lab, monkeypatch):
+    cog, guild, channel = lab
+    bot = cog.bot
+    ctx = ctx_in(guild)
+    ctx.channel = channel
+    run(cog.yap.callback(cog, ctx, True, None))
+    assert ctx.replies[-1].title == "Yap on 🗣️"
+    assert "hasn't stored any messages" in ctx.replies[-1].description
+    assert bot.storage.yap_channels(42) == {1}
+
+    run(bot.analyze(guild))
+    bot.storage.add_corpus(42, [(500, 1, 100, "!top funny please")])
+    stored = {text for _, text in bot.storage.corpus(42, 100)}
+
+    monkeypatch.setattr("syke.bot.random.random", lambda: 0.99)
+    message, sent = yap_message(900)
+    run(bot.maybe_yap(message))
+    assert sent == []
+
+    monkeypatch.setattr("syke.bot.random.random", lambda: 0.0)
+    run(bot.maybe_yap(message))
+    assert len(sent) == 1 and sent[0] in stored and not sent[0].startswith("!")
+    run(bot.maybe_yap(yap_message(901)[0]))
+    assert len(sent) == 1, "cooldown should stop a second yap"
+
+    quiet, quiet_sent = yap_message(902, channel_id=2)
+    run(bot.maybe_yap(quiet))
+    assert quiet_sent == []
+
+    run(cog.yap.callback(cog, ctx, None, None))
+    assert "<#1>" in ctx.replies[-1].description
+    run(cog.yap.callback(cog, ctx, False, None))
+    assert ctx.replies[-1].title == "Yap off 🤐"
+    assert bot.storage.yap_channels(42) == set()
+
+    by_name = {c.name: c for c in cog.get_commands()}
+    assert _admin_predicate in by_name["yap"].checks
+    assert "markov" not in by_name

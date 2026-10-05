@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS corpus (
     PRIMARY KEY (guild_id, message_id)
 );
 CREATE INDEX IF NOT EXISTS corpus_author ON corpus (guild_id, author_id);
+CREATE TABLE IF NOT EXISTS yap_channels (
+    guild_id   INTEGER NOT NULL,
+    channel_id INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, channel_id)
+);
 """
 
 
@@ -129,6 +134,25 @@ class Storage:
         return self._read(
             "SELECT author_id, content FROM corpus WHERE guild_id = ? AND author_id = ?", (guild_id, author_id)
         )
+
+    def random_messages(self, guild_id: int, count: int, exclude_id: int = 0) -> list[str]:
+        rows = self._read(
+            "SELECT content FROM corpus WHERE guild_id = ? AND message_id != ? "
+            "AND length(content) BETWEEN 8 AND 300 ORDER BY RANDOM() LIMIT ?",
+            (guild_id, exclude_id, count),
+        )
+        return [r[0] for r in rows]
+
+    def set_yap(self, guild_id: int, channel_id: int, enabled: bool) -> bool:
+        if enabled:
+            return self._write("INSERT OR IGNORE INTO yap_channels VALUES (?, ?)", (guild_id, channel_id)) > 0
+        return self._write(
+            "DELETE FROM yap_channels WHERE guild_id = ? AND channel_id = ?", (guild_id, channel_id)
+        ) > 0
+
+    def yap_channels(self, guild_id: int) -> set[int]:
+        rows = self._read("SELECT channel_id FROM yap_channels WHERE guild_id = ?", (guild_id,))
+        return {r[0] for r in rows}
 
     def corpus_size(self, guild_id: int) -> tuple[int, int]:
         """(messages, distinct authors) collected for a server."""
