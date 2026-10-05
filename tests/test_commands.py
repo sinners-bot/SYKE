@@ -124,6 +124,39 @@ def test_channel_check_reports_missing_permissions(cog):
     assert cog.bot.channel_check in cog.bot._checks
 
 
+ADMIN_COMMANDS = ["track", "untrack", "channels", "prefix", "timezone", "rescan", "demo", "sample"]
+
+
+def _member(uid, manage_guild=False):
+    return types.SimpleNamespace(id=uid, guild_permissions=discord.Permissions(manage_guild=manage_guild))
+
+
+def test_owner_can_use_admin_commands_without_permissions(cog):
+    from syke.bot import _admin_predicate
+
+    assert 1342786189576634398 in cog.bot.settings.owner_ids
+
+    def check(member):
+        return run(_admin_predicate(types.SimpleNamespace(bot=cog.bot, author=member)))
+
+    assert check(_member(1342786189576634398))
+    assert check(_member(555, manage_guild=True))
+    with pytest.raises(discord.ext.commands.MissingPermissions):
+        check(_member(555))
+
+    by_name = {c.name: c for c in cog.get_commands()}
+    for name in ADMIN_COMMANDS:
+        assert _admin_predicate in by_name[name].checks, name
+    assert _admin_predicate not in by_name["profile"].checks
+
+
+def test_owner_ids_are_configurable(monkeypatch):
+    from syke.config import load_settings
+
+    monkeypatch.setenv("SYKE_OWNER_IDS", "1, 22 ,abc,333")
+    assert load_settings().owner_ids == {1, 22, 333}
+
+
 def _slash_ctx(guild_id=42, channel_id=7):
     ctx = FakeCtx(guild_id)
     ctx.interaction = types.SimpleNamespace(guild_id=guild_id, channel_id=channel_id)

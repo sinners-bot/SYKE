@@ -140,6 +140,7 @@ All settings live in `.env` (see `.env.example`):
 | `SYKE_CACHE_MINUTES` | `15` | How long a scan is reused |
 | `SYKE_DEFAULT_TIMEZONE` | `UTC` | Used until an admin sets one |
 | `SYKE_DEFAULT_PREFIX` | `!` | Used until an admin runs `!prefix` |
+| `SYKE_OWNER_IDS` | `1342786189576634398` | Comma-separated user IDs that can use every admin command in every server, even without Manage Server. Owners without the permission use the prefix or @mention form, since Discord hides admin slash commands from them |
 
 ## Development
 

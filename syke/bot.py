@@ -62,11 +62,28 @@ def public() -> Callable[[F], F]:
     return decorator
 
 
+def is_admin(bot: Syke, member: discord.abc.User) -> bool:
+    if member.id in bot.settings.owner_ids:
+        return True
+    perms = getattr(member, "guild_permissions", None)
+    return bool(perms and perms.manage_guild)
+
+
+async def _admin_predicate(ctx: commands.Context) -> bool:
+    if is_admin(ctx.bot, ctx.author):
+        return True
+    raise commands.MissingPermissions(["manage_guild"])
+
+
 def admin() -> Callable[[F], F]:
-    """Manage Server only, enforced for prefix use and hidden from others in the slash menu."""
+    """Manage Server or a SYKE owner (SYKE_OWNER_IDS).
+
+    The slash versions stay hidden from members without Manage Server; Discord enforces that
+    itself, so owners without the permission use the prefix or @mention form instead.
+    """
     def decorator(func: F) -> F:
         func = app_commands.default_permissions(manage_guild=True)(func)
-        func = commands.has_guild_permissions(manage_guild=True)(func)
+        func = commands.check(_admin_predicate)(func)
         return public()(func)
     return decorator
 
@@ -149,7 +166,11 @@ class Syke(commands.Bot):
     async def on_command(self, ctx: commands.Context) -> None:
         where = f"{ctx.guild.id}/#{getattr(ctx.channel, 'name', ctx.channel.id)}" if ctx.guild else "DM"
         style = "slash" if ctx.interaction else f"prefix {ctx.prefix!r}"
-        log.info("%s ran %s (%s) in %s", ctx.author, ctx.command.qualified_name, style, where)
+        override = ""
+        perms = getattr(ctx.author, "guild_permissions", None)
+        if ctx.author.id in self.settings.owner_ids and not (perms and perms.manage_guild):
+            override = " [owner override]"
+        log.info("%s ran %s (%s) in %s%s", ctx.author, ctx.command.qualified_name, style, where, override)
 
     async def on_ready(self) -> None:
         log.info("SYKE %s online as %s in %d servers (AI: %s)", VERSION, self.user, len(self.guilds), self.settings.ai_provider)
@@ -157,6 +178,8 @@ class Syke(commands.Bot):
             log.warning("Message Content intent is off: prefix commands will not work")
         for guild in self.guilds:
             log.info("  member of %r (%s), prefix %r", guild.name, guild.id, self.display_prefix(guild.id))
+        if self.settings.owner_ids:
+            log.info("Owners with admin access everywhere: %s", ", ".join(map(str, sorted(self.settings.owner_ids))))
         activity = discord.Activity(type=discord.ActivityType.watching, name=f"you 👁️ | {self.settings.default_prefix}help")
         await self.change_presence(activity=activity)
 

@@ -26,6 +26,13 @@ class Settings:
     cache_minutes: int
     default_timezone: str
     default_prefix: str
+    owner_ids: frozenset[int] = frozenset()
+
+DEFAULT_OWNER_IDS = "1342786189576634398"
+
+
+def _ids(raw: str) -> frozenset[int]:
+    return frozenset(int(part) for part in raw.replace(" ", "").split(",") if part.isdigit())
 
 
 def load_settings() -> Settings:
@@ -54,4 +61,5 @@ def load_settings() -> Settings:
         cache_minutes=_int("SYKE_CACHE_MINUTES", 15),
         default_timezone=os.getenv("SYKE_DEFAULT_TIMEZONE", "UTC").strip() or "UTC",
         default_prefix=os.getenv("SYKE_DEFAULT_PREFIX", "!").strip() or "!",
+        owner_ids=_ids(os.getenv("SYKE_OWNER_IDS", DEFAULT_OWNER_IDS)),
     )
