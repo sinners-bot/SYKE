@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import os
 import sys
 from typing import Callable, TypeVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
@@ -30,6 +32,8 @@ WARN = discord.Colour.from_str("#F59E0B")
 ALL_TIMEZONES = sorted(available_timezones())
 DEMO_MESSAGES = build_demo_server(headline_volume=400)
 MAX_PREFIX_LENGTH = 5
+VERSION = (os.getenv("RAILWAY_GIT_COMMIT_SHA") or "dev")[:7]
+NEEDED_PERMISSIONS = ("view_channel", "send_messages", "embed_links", "read_message_history")
 
 TRAIT_ALIASES: dict[str, str] = {
     **{t: t for t in TRAITS},
@@ -70,6 +74,25 @@ async def resolve_prefix(bot: Syke, message: discord.Message) -> list[str]:
     return commands.when_mentioned_or(prefix)(bot, message)
 
 
+class MissingChannelPermissions(commands.CheckFailure):
+    def __init__(self, missing: list[str]) -> None:
+        super().__init__(f"missing {', '.join(missing)}")
+        self.missing = missing
+
+
+class SykeContext(commands.Context):
+    async def reply(self, content=None, **kwargs):
+        """Fall back to a plain message when Discord refuses a reply (e.g. no Read Message History)."""
+        try:
+            return await super().reply(content, **kwargs)
+        except discord.HTTPException:
+            if self.interaction is not None:
+                raise
+            log.warning("Reply failed in #%s; retrying without a message reference", getattr(self.channel, "name", "?"))
+            kwargs.pop("mention_author", None)
+            return await self.send(content, **kwargs)
+
+
 class Syke(commands.Bot):
     def __init__(self, settings: Settings) -> None:
         intents = discord.Intents.default()
@@ -85,20 +108,36 @@ class Syke(commands.Bot):
         self.storage = Storage(settings.db_path)
         self.scanner = Scanner(settings.scan_limit, settings.cache_minutes)
         self._prefixes: dict[int, str] = {}
+        self.add_check(self.channel_check)
 
     async def setup_hook(self) -> None:
         await self.add_cog(SykeCommands(self))
-        if self.settings.dev_guild_id:
-            guild = discord.Object(id=self.settings.dev_guild_id)
-            self.tree.copy_global_to(guild=guild)
-            synced = await self.tree.sync(guild=guild)
-            log.info("Synced %d commands to dev guild %s", len(synced), guild.id)
-        else:
-            synced = await self.tree.sync()
-            log.info("Synced %d global commands (may take a while to appear)", len(synced))
+        log.info("SYKE %s starting: %d prefix commands, default prefix %r",
+                 VERSION, len(self.commands), self.settings.default_prefix)
+        try:
+            if self.settings.dev_guild_id:
+                guild = discord.Object(id=self.settings.dev_guild_id)
+                self.tree.copy_global_to(guild=guild)
+                synced = await self.tree.sync(guild=guild)
+                log.info("Synced %d slash commands to dev guild %s", len(synced), guild.id)
+            else:
+                synced = await self.tree.sync()
+                log.info("Synced %d global slash commands (may take a while to appear)", len(synced))
+        except discord.HTTPException:
+            log.exception("Slash command sync failed; prefix commands still work")
+
+    async def get_context(self, origin, *, cls=None):
+        return await super().get_context(origin, cls=cls or SykeContext)
+
+    async def on_command(self, ctx: commands.Context) -> None:
+        where = f"{ctx.guild.id}/#{getattr(ctx.channel, 'name', ctx.channel.id)}" if ctx.guild else "DM"
+        style = "slash" if ctx.interaction else f"prefix {ctx.prefix!r}"
+        log.info("%s ran %s (%s) in %s", ctx.author, ctx.command.qualified_name, style, where)
 
     async def on_ready(self) -> None:
-        log.info("SYKE online as %s in %d servers (AI: %s)", self.user, len(self.guilds), self.settings.ai_provider)
+        log.info("SYKE %s online as %s in %d servers (AI: %s)", VERSION, self.user, len(self.guilds), self.settings.ai_provider)
+        if not self.intents.message_content:
+            log.warning("Message Content intent is off: prefix commands will not work")
         activity = discord.Activity(type=discord.ActivityType.watching, name=f"you 👁️ | {self.settings.default_prefix}help")
         await self.change_presence(activity=activity)
 
@@ -152,8 +191,29 @@ class Syke(commands.Bot):
             f"An admin needs to pick which channels SYKE can read:\n`{p}track #general`",
         )
 
+    async def channel_check(self, ctx: commands.Context) -> bool:
+        if ctx.interaction is not None or ctx.guild is None:
+            return True
+        perms = ctx.channel.permissions_for(ctx.me)
+        missing = [p for p in NEEDED_PERMISSIONS if not getattr(perms, p)]
+        if missing:
+            raise MissingChannelPermissions(missing)
+        return True
+
     async def on_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
         if isinstance(error, commands.CommandNotFound):
+            return
+        if isinstance(error, MissingChannelPermissions):
+            pretty = ", ".join(p.replace("_", " ").title() for p in error.missing)
+            channel = getattr(ctx.channel, "mention", "this channel")
+            log.warning("Can't respond in #%s (guild %s): missing %s",
+                        getattr(ctx.channel, "name", "?"), ctx.guild.id, pretty)
+            with contextlib.suppress(discord.HTTPException):
+                await ctx.author.send(embed=notice(
+                    "I can't reply there 🙊",
+                    f"You ran `{ctx.message.content[:50]}` in {channel}, but SYKE is missing **{pretty}** there. "
+                    "Ask an admin to allow those for SYKE's role in that channel, or use the slash command instead.",
+                ))
             return
         err: BaseException = error
         while isinstance(err, (commands.HybridCommandError, commands.CommandInvokeError,
@@ -180,7 +240,10 @@ class Syke(commands.Bot):
         else:
             log.error("Command %s failed", ctx.command, exc_info=err)
             embed = notice("Experiment failed 💥", "Something went wrong while judging. Try again in a moment.")
-        await ctx.send(embed=embed, ephemeral=True)
+        try:
+            await ctx.send(embed=embed, ephemeral=True)
+        except discord.HTTPException:
+            log.warning("Could not report an error for %s", ctx.command, exc_info=True)
 
 
 class SykeCommands(commands.Cog, name="SYKE"):
@@ -317,6 +380,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 "SYKE doesn't store message content. Reports are for fun only."
             ),
         )
+        embed.set_footer(text=f"SYKE version {VERSION}")
         await ctx.reply(embed=embed, ephemeral=True)
 
     # Admins

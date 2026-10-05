@@ -3,6 +3,7 @@ import contextlib
 import types
 from dataclasses import replace
 
+import discord
 import pytest
 
 from syke.bot import Syke, SykeCommands
@@ -73,6 +74,25 @@ def test_demo_toggle_and_sample(cog):
     assert "Chaotic" in ctx.replies[-1].title
     run(cog.demo.callback(cog, ctx, False))
     assert not cog.bot.storage.demo_mode(42)
+
+
+def _perm_ctx(perms, interaction=None):
+    channel = types.SimpleNamespace(permissions_for=lambda me: perms)
+    return types.SimpleNamespace(interaction=interaction, guild=object(), channel=channel, me=object())
+
+
+def test_channel_check_reports_missing_permissions(cog):
+    from syke.bot import MissingChannelPermissions
+
+    ok = discord.Permissions(view_channel=True, send_messages=True, embed_links=True, read_message_history=True)
+    assert run(cog.bot.channel_check(_perm_ctx(ok)))
+
+    with pytest.raises(MissingChannelPermissions) as exc:
+        run(cog.bot.channel_check(_perm_ctx(discord.Permissions(view_channel=True, send_messages=True))))
+    assert exc.value.missing == ["embed_links", "read_message_history"]
+
+    assert run(cog.bot.channel_check(_perm_ctx(discord.Permissions.none(), interaction=object())))
+    assert cog.bot.channel_check in cog.bot._checks
 
 
 def test_unknown_inputs_are_explained(cog):
