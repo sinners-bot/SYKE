@@ -53,6 +53,35 @@ def test_prefix_set_reset_and_validate(cog):
     assert cog.bot.storage.prefix(42) is None
 
 
+def test_mention_only_prefix(cog):
+    from syke.bot import MENTION_ONLY, resolve_prefix
+
+    cog.bot._connection.user = types.SimpleNamespace(id=999, mention="<@999>", name="SYKE")
+    msg = types.SimpleNamespace(guild=types.SimpleNamespace(id=42), content="")
+    ctx = FakeCtx()
+
+    run(cog.prefix.callback(cog, ctx, "mention"))
+    assert cog.bot.prefix_for(42) == MENTION_ONLY
+    assert run(resolve_prefix(cog.bot, msg)) == ["<@999> ", "<@!999> "]
+    assert cog.bot.display_prefix(42) == "@SYKE "
+    assert "only answers when mentioned" in ctx.replies[-1].description
+
+    run(cog.help.callback(cog, ctx))
+    assert "`@SYKE profile [@member]`" in ctx.replies[-1].description
+
+    run(cog.prefix.callback(cog, ctx, None))
+    assert "mentions only" in ctx.replies[-1].description
+
+    run(cog.prefix.callback(cog, ctx, "<@999>"))
+    assert cog.bot.prefix_for(42) == MENTION_ONLY
+    run(cog.prefix.callback(cog, ctx, "<x>"))
+    assert ctx.replies[-1].title == "Invalid prefix"
+
+    run(cog.prefix.callback(cog, ctx, "!"))
+    assert run(resolve_prefix(cog.bot, msg)) == ["<@999> ", "<@!999> ", "!"]
+    assert cog.bot.storage.prefix(42) is None
+
+
 def test_help_uses_server_prefix(cog):
     cog.bot.set_prefix(42, "s.")
     ctx = FakeCtx()

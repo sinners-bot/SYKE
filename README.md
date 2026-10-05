@@ -23,7 +23,8 @@ Run `python -m syke.preview` to see a report from a fake server in your terminal
 
 Every command works with the server prefix (default `!`) **and** as a slash command
 (`!profile` or `/profile`). Mentioning the bot (`@SYKE profile`) always works, so a
-forgotten prefix is never a problem.
+forgotten prefix is never a problem. Admins can also switch a server to mentions only
+with `!prefix mention`.
 
 | Command | Who | What it does |
 | --- | --- | --- |
@@ -33,7 +34,7 @@ forgotten prefix is never a problem.
 | `!help` | everyone | Command list using this server's prefix |
 | `!track #channel` / `!untrack #channel` | Manage Server | Choose which channels SYKE reads |
 | `!channels` | Manage Server | Watched channels, prefix, timezone and demo mode. Alias: `!settings` |
-| `!prefix <new>` | Manage Server | Change the prefix (1-5 characters). `!prefix reset` restores `!` |
+| `!prefix <new\|mention\|reset>` | Manage Server | Custom prefix (1-5 characters), `mention` so SYKE only answers to `@SYKE profile`, or `reset` for `!`. `!prefix` alone shows the current setting |
 | `!timezone <zone>` | Manage Server | Timezone for "most active" hours, e.g. `Europe/London`. Alias: `!tz` |
 | `!rescan` | Manage Server | Drop the cache and re-read channels now |
 | `!demo on\|off` | Manage Server | Add 5 fake members to rankings so you can test alone |

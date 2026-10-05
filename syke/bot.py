@@ -32,6 +32,8 @@ WARN = discord.Colour.from_str("#F59E0B")
 ALL_TIMEZONES = sorted(available_timezones())
 DEMO_MESSAGES = build_demo_server(headline_volume=400)
 MAX_PREFIX_LENGTH = 5
+MENTION_ONLY = "<mention>"
+MENTION_WORDS = {"mention", "@", "ping", "@mention"}
 VERSION = (os.getenv("RAILWAY_GIT_COMMIT_SHA") or "dev")[:7]
 NEEDED_PERMISSIONS = ("view_channel", "send_messages", "embed_links", "read_message_history")
 
@@ -71,6 +73,8 @@ def admin() -> Callable[[F], F]:
 
 async def resolve_prefix(bot: Syke, message: discord.Message) -> list[str]:
     prefix = bot.prefix_for(message.guild.id) if message.guild else bot.settings.default_prefix
+    if prefix == MENTION_ONLY:
+        return commands.when_mentioned(bot, message)
     return commands.when_mentioned_or(prefix)(bot, message)
 
 
@@ -151,6 +155,13 @@ class Syke(commands.Bot):
         self._prefixes.pop(guild_id, None)
         return self.prefix_for(guild_id)
 
+    def display_prefix(self, guild_id: int) -> str:
+        """What users should type before a command, e.g. '!' or '@SYKE '."""
+        prefix = self.prefix_for(guild_id)
+        if prefix == MENTION_ONLY:
+            return f"@{self.user.name if self.user else 'SYKE'} "
+        return prefix
+
     def tz_for(self, guild_id: int) -> ZoneInfo:
         name = self.storage.timezone(guild_id) or self.settings.default_timezone
         try:
@@ -185,7 +196,7 @@ class Syke(commands.Bot):
         view.message = await ctx.reply(embed=pages["overview"], view=view)
 
     def no_channels(self, guild_id: int) -> discord.Embed:
-        p = self.prefix_for(guild_id)
+        p = self.display_prefix(guild_id)
         return notice(
             "No channels are being watched",
             f"An admin needs to pick which channels SYKE can read:\n`{p}track #general`",
@@ -220,7 +231,7 @@ class Syke(commands.Bot):
                                app_commands.CommandInvokeError)) and getattr(err, "original", None):
             err = err.original
 
-        p = self.prefix_for(ctx.guild.id) if ctx.guild else self.settings.default_prefix
+        p = self.display_prefix(ctx.guild.id) if ctx.guild else self.settings.default_prefix
         usage = ""
         if ctx.command:
             signature = f" {ctx.command.signature}" if ctx.command.signature else ""
@@ -251,19 +262,20 @@ class SykeCommands(commands.Cog, name="SYKE"):
         self.bot = bot
 
     def p(self, ctx: commands.Context) -> str:
-        return self.bot.prefix_for(ctx.guild.id)
+        return self.bot.display_prefix(ctx.guild.id)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot or not message.guild or not self.bot.user:
             return
         if message.content.strip() in {f"<@{self.bot.user.id}>", f"<@!{self.bot.user.id}>"}:
-            p = self.bot.prefix_for(message.guild.id)
-            await message.reply(embed=notice(
-                "👁️ SYKE is watching",
-                f"My prefix here is `{p}`. Try `{p}profile` or `{p}help`. Slash commands work too.",
-                BRAND,
-            ), mention_author=False)
+            p = self.bot.display_prefix(message.guild.id)
+            if self.bot.prefix_for(message.guild.id) == MENTION_ONLY:
+                how = f"This server uses mentions as the prefix. Try `{p}profile` or `{p}help`."
+            else:
+                how = f"My prefix here is `{p}`. Try `{p}profile` or `{p}help`."
+            await message.reply(embed=notice("👁️ SYKE is watching", f"{how} Slash commands work too.", BRAND),
+                                mention_author=False)
 
     # Everyone
 
@@ -372,7 +384,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 "**Admins (Manage Server)**\n"
                 f"`{p}track #channel` / `{p}untrack #channel` — choose what SYKE reads\n"
                 f"`{p}channels` — show settings and watched channels\n"
-                f"`{p}prefix <new>` — change the prefix (`{p}prefix reset` for `{self.bot.settings.default_prefix}`)\n"
+                f"`{p}prefix <new|mention|reset>` — custom prefix, @mention only, or back to `{self.bot.settings.default_prefix}`\n"
                 f"`{p}timezone <zone>` — e.g. `{p}timezone Europe/London`\n"
                 f"`{p}rescan` — re-read channels now\n"
                 f"`{p}demo on|off` — add fake members to test alone\n"
@@ -425,30 +437,48 @@ class SykeCommands(commands.Cog, name="SYKE"):
         embed.add_field(name="Demo mode", value=demo)
         await ctx.reply(embed=embed, ephemeral=True)
 
-    @commands.hybrid_command(name="prefix", description="Change SYKE's prefix for this server")
-    @app_commands.describe(new="The new prefix (up to 5 characters), or 'reset'")
+    @commands.hybrid_command(name="prefix", description="Choose SYKE's prefix: a custom one, mentions only, or reset")
+    @app_commands.describe(new="A prefix of up to 5 characters, 'mention' to use @SYKE only, or 'reset'")
     @admin()
     async def prefix(self, ctx: commands.Context, new: str | None = None) -> None:
-        current = self.p(ctx)
         default = self.bot.settings.default_prefix
+        mention = self.bot.user.mention if self.bot.user else "@SYKE"
         if new is None:
-            await ctx.reply(embed=notice(
-                "Current prefix", f"The prefix here is `{current}`. Change it with `{current}prefix ?`.", BRAND
-            ), ephemeral=True)
+            p = self.p(ctx)
+            mode = "mentions only" if self.bot.prefix_for(ctx.guild.id) == MENTION_ONLY else f"`{p}`"
+            embed = notice("Prefix settings ⚙️", f"Current prefix: **{mode}**", BRAND)
+            embed.add_field(name="Use a custom prefix", value=f"`{p}prefix ?` (1-{MAX_PREFIX_LENGTH} characters)", inline=False)
+            embed.add_field(name="Use mentions only", value=f"`{p}prefix mention` → commands become `{mention} profile`", inline=False)
+            embed.add_field(name="Back to default", value=f"`{p}prefix reset` → `{default}`", inline=False)
+            embed.set_footer(text="Mentioning SYKE always works, whatever the prefix.")
+            await ctx.reply(embed=embed, ephemeral=True)
             return
+
         new = new.strip()
+        bot_mentions = {f"<@{self.bot.user.id}>", f"<@!{self.bot.user.id}>"} if self.bot.user else set()
+        if new.lower() in MENTION_WORDS or new in bot_mentions:
+            self.bot.set_prefix(ctx.guild.id, MENTION_ONLY)
+            await ctx.reply(embed=notice(
+                "Prefix updated ✅",
+                f"SYKE now only answers when mentioned, e.g. {mention} `profile` or {mention} `help`.\n"
+                f"Switch back any time with {mention} `prefix {default}`.",
+                BRAND,
+            ))
+            return
+
         if new.lower() == "reset":
             new = default
-        if not new or len(new) > MAX_PREFIX_LENGTH or any(c.isspace() for c in new) or "`" in new:
+        if not new or len(new) > MAX_PREFIX_LENGTH or any(c.isspace() for c in new) or "`" in new or new.startswith("<"):
             await ctx.reply(embed=notice(
-                "Invalid prefix", f"Use 1-{MAX_PREFIX_LENGTH} characters with no spaces or backticks."
+                "Invalid prefix",
+                f"Use 1-{MAX_PREFIX_LENGTH} characters with no spaces or backticks, or `mention` for mentions only.",
             ), ephemeral=True)
             return
         applied = self.bot.set_prefix(ctx.guild.id, None if new == default else new)
         await ctx.reply(embed=notice(
             "Prefix updated ✅",
             f"Commands now start with `{applied}`, for example `{applied}profile`. "
-            f"Mentioning {self.bot.user.mention} always works if you forget it.",
+            f"Mentioning {mention} always works if you forget it.",
             BRAND,
         ))
 
