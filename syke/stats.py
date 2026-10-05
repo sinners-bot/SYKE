@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, tzinfo
+from datetime import date, datetime, timedelta, timezone, tzinfo
 
 import emoji as emoji_lib
 
@@ -27,7 +27,7 @@ class UserStats:
     avg_words: float
     peak_start_hour: int
     peak_end_hour: int
-    hour_histogram: list[int]
+    hour_histogram: list[int]  # UTC hours
     top_emojis: list[tuple[str, int]] = field(default_factory=list)
     top_words: list[tuple[str, int]] = field(default_factory=list)
     top_phrases: list[tuple[str, int]] = field(default_factory=list)
@@ -36,7 +36,14 @@ class UserStats:
 
     @property
     def peak_label(self) -> str:
-        return f"{self.peak_start_hour:02d}:00–{self.peak_end_hour:02d}:00"
+        return f"{self.peak_start_hour:02d}:00–{self.peak_end_hour:02d}:00 UTC"
+
+    def peak_local(self, today: date | None = None) -> str:
+        """Peak hours as Discord timestamps, which every viewer sees in their own timezone."""
+        day = today or datetime.now(timezone.utc).date()
+        start = datetime(day.year, day.month, day.day, self.peak_start_hour, tzinfo=timezone.utc)
+        end = start + timedelta(hours=(self.peak_end_hour - self.peak_start_hour) % 24 or 24)
+        return f"<t:{int(start.timestamp())}:t>–<t:{int(end.timestamp())}:t>"
 
 
 def clean_text(content: str) -> str:
@@ -68,11 +75,11 @@ def _overlaps(a: str, b: str) -> bool:
 
 def peak_window(hours: list[int], width: int = 3) -> tuple[int, int]:
     """Busiest contiguous `width`-hour window, wrapping around midnight."""
-    best_start, best_total = 0, -1
-    for start in range(24):
+    def weight(start: int) -> tuple[int, int]:
         total = sum(hours[(start + i) % 24] for i in range(width))
-        if total > best_total:
-            best_start, best_total = start, total
+        return total, hours[(start + width // 2) % 24]  # ties: centre the window on the busiest hour
+
+    best_start = max(range(24), key=weight)
     return best_start, (best_start + width) % 24
 
 
@@ -88,8 +95,8 @@ def compute_stats(messages: list[Msg], tz: tzinfo) -> UserStats:
     late_night = 0
 
     for msg in messages:
+        hours[msg.created_at.astimezone(timezone.utc).hour] += 1
         local = msg.created_at.astimezone(tz)
-        hours[local.hour] += 1
         if local.hour < 5:
             late_night += 1
 

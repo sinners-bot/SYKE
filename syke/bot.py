@@ -19,7 +19,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from .ai import pick_comeback, write_roast
-from .cards import MESSAGE_VIEW_TIMEOUT, ProfileView, build_pages
+from .cards import MESSAGE_VIEW_TIMEOUT, ProfileView, build_pages, iq_page
 from .config import Settings, load_settings
 from .demo import PERSONAS, build_demo_server
 from .markov import build_chain
@@ -55,10 +55,12 @@ TRAIT_ALIASES: dict[str, str] = {
     **{t: t for t in TRAITS},
     "funniest": "funny", "freak": "freaky", "chaos": "chaotic", "smart": "serious",
     "active": "active", "messages": "active", "yap": "active", "yapper": "active",
+    "iq": "iq", "smartest": "iq", "brain": "iq", "brains": "iq",
 }
 TRAIT_TITLES: dict[str, str] = {
     **{t: f"{TRAIT_META[t][0]} {TRAIT_META[t][1]}" for t in TRAITS},
     "active": "💬 Most active",
+    "iq": "🧠 Highest IQ",
 }
 PERSONA_BY_NAME: dict[str, int] = {name.lower(): uid for uid, (name, _, _) in PERSONAS.items()}
 
@@ -545,28 +547,58 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 return
             server, _ = result
             if target.id not in server.users:
-                have = server.below_threshold.get(target.id, 0)
-                need = self.bot.settings.min_messages
-                await ctx.reply(embed=notice(
-                    "Insufficient evidence 🔬",
-                    f"{target.display_name} has only **{have}** message{'s' if have != 1 else ''} in the watched "
-                    f"channels. SYKE needs at least **{need}** before it can pass judgement."
-                    + (f" Run `{self.p(ctx)}scanme` to dig up older ones." if target.id == ctx.author.id else ""),
-                ))
+                await ctx.reply(embed=self.not_enough(ctx, target, server))
                 return
             profile = build_profile(server, target.id)
             profile.name = target.display_name
             await self.bot.send_report(ctx, profile, target.display_avatar.url, server=server)
 
+    @commands.hybrid_command(name="iq", aliases=["brain", "smarts", "iqtest"], description="SYKE's (very unscientific) IQ estimate for someone")
+    @app_commands.describe(member="Whose IQ to measure. Leave empty for your own.")
+    @commands.cooldown(1, 10, commands.BucketType.member)
+    @public()
+    async def iq(self, ctx: commands.Context, member: discord.Member | None = None) -> None:
+        target = member or ctx.author
+        if target.bot:
+            await ctx.reply(embed=notice("Nice try", "Bots are artificially intelligent. It's in the name."), ephemeral=True)
+            return
+        if target.id in self.bot.storage.optouts(ctx.guild.id):
+            await ctx.reply(embed=notice("Off limits", f"{target.display_name} has opted out of being judged."), ephemeral=True)
+            return
+        async with ctx.typing():
+            result = await self.bot.analyze(ctx.guild)
+        if result is None:
+            await ctx.reply(embed=self.bot.no_channels(ctx.guild.id))
+            return
+        server, _ = result
+        user = server.users.get(target.id)
+        if user is None or user.iq is None:
+            await ctx.reply(embed=self.not_enough(ctx, target, server))
+            return
+        others = [u.iq.iq for uid, u in server.users.items() if uid != target.id and u.iq]
+        smarter_than = round(sum(v < user.iq.iq for v in others) / len(others) * 100) if len(others) >= 2 else None
+        await ctx.reply(embed=iq_page(target.display_name, user.iq, smarter_than, target.display_avatar.url,
+                                      demo=self.bot.storage.demo_mode(ctx.guild.id)))
+
+    def not_enough(self, ctx: commands.Context, target: discord.abc.User, server: ServerAnalysis) -> discord.Embed:
+        have = server.below_threshold.get(target.id, 0)
+        need = self.bot.settings.min_messages
+        return notice(
+            "Insufficient evidence 🔬",
+            f"{target.display_name} has only **{have}** message{'s' if have != 1 else ''} in the watched "
+            f"channels. SYKE needs at least **{need}** before it can pass judgement."
+            + (f" Run `{self.p(ctx)}scanme` to dig up older ones." if target.id == ctx.author.id else ""),
+        )
+
     @commands.hybrid_command(name="top", aliases=["leaderboard", "lb"], description="Server leaderboard for a trait")
-    @app_commands.describe(trait="funny, toxic, cringe, freaky, serious, chaotic or active")
+    @app_commands.describe(trait="funny, toxic, cringe, freaky, serious, chaotic, active or iq")
     @commands.cooldown(1, 15, commands.BucketType.member)
     @public()
     async def top(self, ctx: commands.Context, trait: str = "funny") -> None:
         assert ctx.guild is not None
         key = TRAIT_ALIASES.get(trait.lower().strip())
         if key is None:
-            options = ", ".join(f"`{t}`" for t in [*TRAITS, "active"])
+            options = ", ".join(f"`{t}`" for t in [*TRAITS, "active", "iq"])
             await ctx.reply(embed=notice("Unknown trait", f"Pick one of: {options}"), ephemeral=True)
             return
         async with ctx.typing():
@@ -791,7 +823,8 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"Prefix here: `{p}` • slash commands work too.\n\n"
                 "**Everyone**\n"
                 f"`{p}profile [@member]` — the full personality report\n"
-                f"`{p}top [trait]` — leaderboard: funny, toxic, cringe, freaky, serious, chaotic, active\n"
+                f"`{p}iq [@member]` — SYKE's very unscientific IQ estimate\n"
+                f"`{p}top [trait]` — leaderboard: funny, toxic, cringe, freaky, serious, chaotic, active, iq\n"
                 f"`{p}mimic [@member]` — SYKE talks like them (Markov chain)\n"
                 f"`{p}scanme` — dig up your older messages so they count towards your profile\n"
                 f"`{p}optout` / `{p}optin` — control whether you're judged\n"
@@ -800,7 +833,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"`{p}track #channel` / `{p}untrack #channel` — choose what SYKE reads\n"
                 f"`{p}channels` — show settings and watched channels\n"
                 f"`{p}prefix <new|mention|reset>` — custom prefix, @mention only, or back to `{self.bot.settings.default_prefix}`\n"
-                f"`{p}timezone <zone>` — e.g. `{p}timezone Europe/London`\n"
+                f"`{p}timezone <zone>` — for late-night detection, e.g. `{p}timezone Europe/London`\n"
                 f"`{p}rescan` — re-read channels now\n"
                 f"`{p}collect [#channel] [limit]` — read more history for mimic/yap\n"
                 f"`{p}yap on|off` — SYKE chimes in with old messages here; reply to it and it answers back\n"
@@ -900,7 +933,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
             BRAND,
         ))
 
-    @commands.hybrid_command(name="timezone", aliases=["tz"], description="Set the timezone used for 'most active' hours")
+    @commands.hybrid_command(name="timezone", aliases=["tz"], description="Set the timezone SYKE uses to spot late-night posting")
     @app_commands.describe(zone="An IANA timezone, e.g. Europe/London or America/New_York")
     @admin()
     async def timezone(self, ctx: commands.Context, zone: str) -> None:
@@ -911,7 +944,10 @@ class SykeCommands(commands.Cog, name="SYKE"):
             ), ephemeral=True)
             return
         self.bot.storage.set_timezone(ctx.guild.id, match)
-        await ctx.reply(embed=notice("Timezone set 🕐", f"Activity hours now use **{match}**.", BRAND), ephemeral=True)
+        await ctx.reply(embed=notice(
+            "Timezone set 🕐",
+            f"Late-night posting is now judged in **{match}**. Peak hours on cards always show in each "
+            "reader's own timezone.", BRAND), ephemeral=True)
 
     @timezone.autocomplete("zone")
     async def timezone_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:

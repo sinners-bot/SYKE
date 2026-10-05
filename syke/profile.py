@@ -7,6 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import tzinfo
 
+from .iq import IQResult, compute_iq
 from .models import Msg
 from .stats import UserStats, compute_stats
 from .traits import TRAITS, MessageSignals, pick_highlights, score_user
@@ -20,6 +21,16 @@ class UserAnalysis:
     stats: UserStats
     scores: dict[str, int]
     signals: list[MessageSignals]
+    iq: IQResult | None = None
+
+
+def metric(user: UserAnalysis, key: str) -> int:
+    """What leaderboards rank by: a trait score, message count ('active') or IQ ('iq')."""
+    if key == "active":
+        return user.stats.message_count
+    if key == "iq":
+        return user.iq.iq if user.iq else 100
+    return user.scores[key]
 
 
 @dataclass
@@ -28,18 +39,13 @@ class ServerAnalysis:
     below_threshold: dict[int, int]  # user_id -> message count for people we can't judge yet
 
     def ranked(self, key: str) -> list[UserAnalysis]:
-        if key == "active":
-            return sorted(self.users.values(), key=lambda u: u.stats.message_count, reverse=True)
-        return sorted(self.users.values(), key=lambda u: u.scores[key], reverse=True)
+        return sorted(self.users.values(), key=lambda u: metric(u, key), reverse=True)
 
     def top_percent(self, user_id: int, key: str) -> int:
         """1-based 'Top X%' position of a user for a trait (or 'active')."""
         me = self.users[user_id]
-        mine = me.stats.message_count if key == "active" else me.scores[key]
-        values = [
-            u.stats.message_count if key == "active" else u.scores[key]
-            for u in self.users.values()
-        ]
+        mine = metric(me, key)
+        values = [metric(u, key) for u in self.users.values()]
         better = sum(v > mine for v in values)
         return max(1, math.ceil((better + 1) / len(values) * 100))
 
@@ -59,6 +65,7 @@ class Profile:
     messages: list[Msg] = field(default_factory=list, repr=False)
     ai_labels: dict[int, frozenset[str]] = field(default_factory=dict, repr=False)
     ai_scores: dict[str, int] = field(default_factory=dict)
+    iq: IQResult | None = None
 
 
 def analyze_server(
@@ -76,7 +83,8 @@ def analyze_server(
             continue
         scores, signals = score_user(msgs, tz, labels)
         latest_name = max(msgs, key=lambda m: m.created_at).author_name
-        users[user_id] = UserAnalysis(user_id, latest_name, msgs, compute_stats(msgs, tz), scores, signals)
+        stats = compute_stats(msgs, tz)
+        users[user_id] = UserAnalysis(user_id, latest_name, msgs, stats, scores, signals, compute_iq(msgs, stats, scores))
     return ServerAnalysis(users, below)
 
 
@@ -128,6 +136,7 @@ def build_profile(server: ServerAnalysis, user_id: int) -> Profile:
     user = server.users[user_id]
     ranks = {trait: server.top_percent(user_id, trait) for trait in TRAITS}
     ranks["active"] = server.top_percent(user_id, "active")
+    ranks["iq"] = server.top_percent(user_id, "iq")
     return Profile(
         user_id=user.user_id,
         name=user.name,
@@ -138,4 +147,5 @@ def build_profile(server: ServerAnalysis, user_id: int) -> Profile:
         server_ranks=ranks,
         server_size=len(server.users),
         messages=user.messages,
+        iq=user.iq,
     )

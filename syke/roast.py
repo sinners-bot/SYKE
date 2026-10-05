@@ -198,7 +198,7 @@ def fallback_summary(
         options.append(rng.choice(CATCHPHRASE).format(phrase=st.top_phrases[0][0]))
     if st.top_emojis:
         options.append(rng.choice(EMOJI_HABIT).format(emoji=st.top_emojis[0][0]))
-    options.append(rng.choice(PEAK).format(hours=st.peak_label))
+    options.append(rng.choice(PEAK).format(hours=st.peak_local()))
     rng.shuffle(options)
     middle.extend(options[:2])
 
