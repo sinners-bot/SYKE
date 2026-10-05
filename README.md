@@ -5,7 +5,7 @@ A Discord bot that reads the channels your admins pick and writes a brutally hon
 trait breakdown, a hall of fame of their worst messages, an AI-written roast,
 achievements, and how they compare to the rest of the server.
 
-`!profile` replies with a three-page card. Buttons switch between pages, and the
+`!profile` replies with a compact four-page card. Buttons switch between pages, and the
 card's colour matches the member's strongest trait:
 
 | Page | What's on it |
