@@ -16,6 +16,7 @@ from .traits import HIGHLIGHT_TRAITS, TRAIT_META, TRAITS
 log = logging.getLogger("syke.ai")
 
 SAMPLE_SIZE = 250
+AI_TIMEOUT_SECONDS = 20
 
 SYSTEM_PROMPT = """You are SYKE, a Discord bot that writes savage-but-affectionate personality \
 reports about server members, in the style of a fake scientific study gone wrong.
@@ -71,7 +72,7 @@ def _parse_json(text: str) -> dict:
 
 
 async def _call_openai(settings: Settings, system: str, user: str) -> str:
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=AI_TIMEOUT_SECONDS) as client:
         resp = await client.post(
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {settings.openai_api_key}"},
@@ -90,7 +91,7 @@ async def _call_openai(settings: Settings, system: str, user: str) -> str:
 
 
 async def _call_anthropic(settings: Settings, system: str, user: str) -> str:
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=AI_TIMEOUT_SECONDS) as client:
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={
