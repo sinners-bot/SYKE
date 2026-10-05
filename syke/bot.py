@@ -10,6 +10,7 @@ import random
 import re
 import sys
 import time
+from datetime import datetime, timezone
 from typing import Callable, TypeVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
@@ -23,9 +24,9 @@ from .config import Settings, load_settings
 from .demo import PERSONAS, build_demo_server
 from .markov import build_chain
 from .models import Msg
-from .profile import Profile, ServerAnalysis, analyze_server, build_profile
+from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
 from .render import render_leaderboard
-from .scanner import Scanner
+from .scanner import Scanner, to_msg
 from .storage import Storage
 from .traits import TRAIT_META, TRAITS
 
@@ -68,8 +69,20 @@ def notice(title: str, body: str, colour: discord.Colour = WARN) -> discord.Embe
     return discord.Embed(title=title, description=body, colour=colour)
 
 
-def corpus_row(message: discord.Message) -> tuple[int, int, int, str]:
-    return message.id, message.channel.id, message.author.id, message.content
+def corpus_row(message: discord.Message) -> tuple:
+    m = to_msg(message)
+    return (m.message_id, m.channel_id, m.author_id, m.content, m.created_at.timestamp(),
+            m.author_name, m.laugh_reactions, m.total_reactions)
+
+
+def msg_row(m: Msg) -> tuple:
+    return (m.message_id, m.channel_id, m.author_id, m.content, m.created_at.timestamp(),
+            m.author_name, m.laugh_reactions, m.total_reactions)
+
+
+def server_emojis(guild: discord.Guild) -> dict[str, str]:
+    """Custom emojis SYKE can post here, by name."""
+    return {e.name: str(e) for e in getattr(guild, "emojis", ()) if getattr(e, "available", True)}
 
 
 def public() -> Callable[[F], F]:
@@ -152,6 +165,9 @@ class Syke(commands.Bot):
         self._warmed = False
         self._last_yap: dict[int, float] = {}
         self._last_comeback: dict[tuple[int, int], float] = {}
+        self._history_version: dict[int, int] = {}
+        self._last_summary: dict[tuple[int, int], str] = {}
+        self._deep_scans: set[tuple[int, int]] = set()
         self.add_check(self.channel_check)
 
     async def setup_hook(self) -> None:
@@ -364,24 +380,52 @@ class Syke(commands.Bot):
             scanned_at = scan.finished_at
             if self._ingested.get(guild.id) != scanned_at:
                 self._ingested[guild.id] = scanned_at
-                rows = [(m.message_id, m.channel_id, m.author_id, m.content) for m in messages
+                rows = [msg_row(m) for m in messages
                         if m.message_id and not self.is_command_text(guild.id, m.content)]
                 await asyncio.to_thread(self.storage.add_corpus, guild.id, rows)
         tz = self.tz_for(guild.id)
-        key = (scanned_at, demo, str(tz), frozenset(optouts), self.settings.min_messages)
+        key = (scanned_at, demo, str(tz), frozenset(optouts), self.settings.min_messages,
+               self._history_version.get(guild.id, 0))
         cached = self._analyses.get(guild.id)
         if cached and cached[0] == key:
             return cached[1], skipped
+        if tracked:
+            messages = messages + await asyncio.to_thread(self.older_messages, guild.id, tracked, messages, optouts)
         if demo:
             messages = messages + DEMO_MESSAGES
-        server = await asyncio.to_thread(analyze_server, messages, tz, self.settings.min_messages)
+        labels = await asyncio.to_thread(self.storage.labels, guild.id)
+        server = await asyncio.to_thread(analyze_server, messages, tz, self.settings.min_messages, labels)
         self._analyses[guild.id] = (key, server)
         return server, skipped
 
+    def older_messages(self, guild_id: int, tracked: list[int], scanned: list[Msg], optouts: set[int]) -> list[Msg]:
+        """Stored messages the live scan didn't reach (e.g. from `scanme` or `collect`)."""
+        seen = {m.message_id for m in scanned}
+        extra = []
+        for mid, cid, author, name, content, created, laughs, total in self.storage.history(guild_id, tracked):
+            if mid in seen or author in optouts or self.is_command_text(guild_id, content):
+                continue
+            extra.append(Msg(author, name, content, datetime.fromtimestamp(created, timezone.utc),
+                             cid, laughs, total, mid))
+        return extra
+
+    def bump_history(self, guild_id: int) -> None:
+        self._history_version[guild_id] = self._history_version.get(guild_id, 0) + 1
+
     async def send_report(
-        self, ctx: commands.Context, profile: Profile, avatar_url: str | None, name_suffix: str = ""
+        self, ctx: commands.Context, profile: Profile, avatar_url: str | None, name_suffix: str = "",
+        server: ServerAnalysis | None = None,
     ) -> None:
-        await write_roast(profile, self.settings)
+        key = (ctx.guild.id, profile.user_id)
+        await write_roast(profile, self.settings, server_emojis(ctx.guild), avoid=self._last_summary.get(key))
+        if profile.ai_used:
+            self._last_summary[key] = profile.summary
+        if profile.ai_labels:
+            await asyncio.to_thread(self.storage.save_labels, ctx.guild.id, profile.ai_labels)
+            self.bump_history(ctx.guild.id)
+        if server is not None and (profile.ai_labels or profile.ai_scores):
+            labels = await asyncio.to_thread(self.storage.labels, ctx.guild.id)
+            refine_scores(profile, server, self.tz_for(ctx.guild.id), labels)
         profile.name += name_suffix
         pages = build_pages(profile, avatar_url, demo=self.storage.demo_mode(ctx.guild.id))
         view = ProfileView(self.load_card, timeout=MESSAGE_VIEW_TIMEOUT)
@@ -506,12 +550,13 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 await ctx.reply(embed=notice(
                     "Insufficient evidence 🔬",
                     f"{target.display_name} has only **{have}** message{'s' if have != 1 else ''} in the watched "
-                    f"channels. SYKE needs at least **{need}** before it can pass judgement.",
+                    f"channels. SYKE needs at least **{need}** before it can pass judgement."
+                    + (f" Run `{self.p(ctx)}scanme` to dig up older ones." if target.id == ctx.author.id else ""),
                 ))
                 return
             profile = build_profile(server, target.id)
             profile.name = target.display_name
-            await self.bot.send_report(ctx, profile, target.display_avatar.url)
+            await self.bot.send_report(ctx, profile, target.display_avatar.url, server=server)
 
     @commands.hybrid_command(name="top", aliases=["leaderboard", "lb"], description="Server leaderboard for a trait")
     @app_commands.describe(trait="funny, toxic, cringe, freaky, serious, chaotic or active")
@@ -568,6 +613,65 @@ class SykeCommands(commands.Cog, name="SYKE"):
     async def optin(self, ctx: commands.Context) -> None:
         self.bot.storage.set_optout(ctx.guild.id, ctx.author.id, False)
         await ctx.reply(embed=notice("Welcome back to the lab 🧪", "Your messages count again. Brace yourself.", BRAND), ephemeral=True)
+
+    async def _deep_read(self, guild_id: int, channel, author_id: int, limit: int) -> list[tuple]:
+        rows = []
+        async for message in channel.history(limit=limit):
+            if message.author.id == author_id and message.content \
+                    and not self.bot.is_command_text(guild_id, message.content):
+                rows.append(corpus_row(message))
+        return rows
+
+    @commands.hybrid_command(name="scanme", aliases=["scan", "addme", "deepscan"],
+                             description="Dig through older history so all your messages count towards your profile")
+    @commands.cooldown(1, 600, commands.BucketType.member)
+    @public()
+    async def scanme(self, ctx: commands.Context) -> None:
+        guild, author = ctx.guild, ctx.author
+        if author.id in self.bot.storage.optouts(guild.id):
+            await ctx.reply(embed=notice("You're opted out", f"Run `{self.p(ctx)}optin` first."), ephemeral=True)
+            return
+        channels = [ch for cid in self.bot.storage.tracked(guild.id) if (ch := guild.get_channel(cid))
+                    and ch.permissions_for(guild.me).read_message_history]
+        if not channels:
+            await ctx.reply(embed=self.bot.no_channels(guild.id), ephemeral=True)
+            return
+        key = (guild.id, author.id)
+        if key in self.bot._deep_scans:
+            await ctx.reply(embed=notice("Already digging ⛏️", "Your scan is still running. Hang tight."), ephemeral=True)
+            return
+        self.bot._deep_scans.add(key)
+        limit = self.bot.settings.deep_scan_limit
+        started = time.monotonic()
+        try:
+            async with ctx.typing():
+                results = await asyncio.gather(
+                    *(self._deep_read(guild.id, ch, author.id, limit) for ch in channels), return_exceptions=True
+                )
+                rows = [row for r in results if not isinstance(r, BaseException) for row in r]
+                for ch, r in zip(channels, results):
+                    if isinstance(r, BaseException):
+                        log.warning("Deep scan failed in #%s: %s", ch.name, r)
+                added = await asyncio.to_thread(self.bot.storage.add_corpus, guild.id, rows)
+                self.bot.bump_history(guild.id)
+                result = await self.bot.analyze(guild)
+        finally:
+            self.bot._deep_scans.discard(key)
+        log.info("Deep scan for %s in %s: %d messages (%d new) in %.1fs",
+                 author, guild.id, len(rows), added, time.monotonic() - started)
+
+        server = result[0] if result else None
+        need = self.bot.settings.min_messages
+        if server and author.id in server.users:
+            total = server.users[author.id].stats.message_count
+            status = f"Your profile now draws on **{total:,}** messages. Run `{self.p(ctx)}profile` to see it."
+        else:
+            total = server.below_threshold.get(author.id, 0) if server else 0
+            status = f"That's **{total}** in total; SYKE needs **{need}** before it can judge you."
+        body = (f"Read back up to **{limit:,}** messages in {len(channels)} watched channel"
+                f"{'s' if len(channels) != 1 else ''} and found **{len(rows):,}** of yours "
+                f"(**{added:,}** SYKE hadn't seen).\n{status}")
+        await ctx.reply(embed=notice("Scan complete ⛏️", body, BRAND))
 
     async def corpus(self, guild: discord.Guild, author_id: int) -> list[str] | None:
         """Texts to learn from; a scan of watched channels tops up a thin corpus. None if nothing is set up."""
@@ -689,6 +793,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"`{p}profile [@member]` — the full personality report\n"
                 f"`{p}top [trait]` — leaderboard: funny, toxic, cringe, freaky, serious, chaotic, active\n"
                 f"`{p}mimic [@member]` — SYKE talks like them (Markov chain)\n"
+                f"`{p}scanme` — dig up your older messages so they count towards your profile\n"
                 f"`{p}optout` / `{p}optin` — control whether you're judged\n"
                 "`/diagnose` — check why prefix commands might not work here\n\n"
                 "**Admins (Manage Server)**\n"
@@ -876,6 +981,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 else:
                     rows.extend(result)
             added = await asyncio.to_thread(self.bot.storage.add_corpus, ctx.guild.id, rows)
+            self.bot.bump_history(ctx.guild.id)
         total, authors = self.bot.storage.corpus_size(ctx.guild.id)
         log.info("Collected %d messages (%d new) in %s in %.1fs", len(rows), added, ctx.guild.id, time.monotonic() - started)
         body = (f"Read **{len(rows)}** messages from {', '.join(ch.mention for ch in readable if ch not in unreadable)} "
@@ -954,7 +1060,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
                     analyze_server, DEMO_MESSAGES, self.bot.tz_for(ctx.guild.id), self.bot.settings.min_messages
                 )
             profile = build_profile(server, persona_id)
-            await self.bot.send_report(ctx, profile, None, name_suffix=" (fake demo member)")
+            await self.bot.send_report(ctx, profile, None, name_suffix=" (fake demo member)", server=server)
 
     @sample.autocomplete("name")
     async def sample_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:

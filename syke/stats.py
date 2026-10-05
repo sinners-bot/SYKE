@@ -13,6 +13,7 @@ from .lexicon import STOPWORDS
 from .models import Msg
 
 CUSTOM_EMOJI_RE = re.compile(r"<a?:(\w+):\d+>")
+CUSTOM_EMOJI_TAG_RE = re.compile(r"<a?:\w+:\d+>")
 MENTION_RE = re.compile(r"<[@#][!&]?\d+>")
 URL_RE = re.compile(r"https?://\S+")
 WORD_RE = re.compile(r"[a-z][a-z']+")
@@ -45,9 +46,16 @@ def clean_text(content: str) -> str:
 
 
 def extract_emojis(content: str) -> list[str]:
-    found = [f":{name}:" for name in CUSTOM_EMOJI_RE.findall(content)]
+    """Unicode emojis plus custom server emojis as full `<:name:id>` tags, so Discord can render them."""
+    found = CUSTOM_EMOJI_TAG_RE.findall(content)
     found.extend(e["emoji"] for e in emoji_lib.emoji_list(content))
     return found
+
+
+def emoji_name(emoji: str) -> str:
+    """Lowercase name of a custom emoji tag (`<:KEKW:1>` -> `kekw`), or '' for unicode emojis."""
+    match = CUSTOM_EMOJI_RE.fullmatch(emoji)
+    return match.group(1).lower() if match else ""
 
 
 def words_of(content: str) -> list[str]:

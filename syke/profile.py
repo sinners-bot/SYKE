@@ -57,9 +57,13 @@ class Profile:
     summary: str = ""
     ai_used: bool = False
     messages: list[Msg] = field(default_factory=list, repr=False)
+    ai_labels: dict[int, frozenset[str]] = field(default_factory=dict, repr=False)
+    ai_scores: dict[str, int] = field(default_factory=dict)
 
 
-def analyze_server(messages: list[Msg], tz: tzinfo, min_messages: int) -> ServerAnalysis:
+def analyze_server(
+    messages: list[Msg], tz: tzinfo, min_messages: int, labels: dict[int, frozenset[str]] | None = None
+) -> ServerAnalysis:
     by_user: dict[int, list[Msg]] = defaultdict(list)
     for msg in messages:
         by_user[msg.author_id].append(msg)
@@ -70,7 +74,7 @@ def analyze_server(messages: list[Msg], tz: tzinfo, min_messages: int) -> Server
         if len(msgs) < min_messages:
             below[user_id] = len(msgs)
             continue
-        scores, signals = score_user(msgs, tz)
+        scores, signals = score_user(msgs, tz, labels)
         latest_name = max(msgs, key=lambda m: m.created_at).author_name
         users[user_id] = UserAnalysis(user_id, latest_name, msgs, compute_stats(msgs, tz), scores, signals)
     return ServerAnalysis(users, below)
@@ -100,6 +104,24 @@ def award_achievements(user: UserAnalysis, server: ServerAnalysis) -> list[tuple
     if not earned:
         earned.append(("🫥", "Aggressively Normal"))
     return earned[:6]
+
+
+AI_SCORE_WEIGHT = 0.4
+
+
+def refine_scores(profile: Profile, server: ServerAnalysis, tz: tzinfo, labels: dict[int, frozenset[str]]) -> None:
+    """Re-score a member with AI message labels, blend in the AI's own ratings, and re-rank them."""
+    scores, _ = score_user(profile.messages, tz, labels)
+    if profile.ai_scores:
+        scores = {
+            t: round((1 - AI_SCORE_WEIGHT) * scores[t] + AI_SCORE_WEIGHT * profile.ai_scores.get(t, scores[t]))
+            for t in TRAITS
+        }
+    profile.scores = scores
+    others = [u for uid, u in server.users.items() if uid != profile.user_id]
+    for trait in TRAITS:
+        better = sum(u.scores[trait] > scores[trait] for u in others)
+        profile.server_ranks[trait] = max(1, math.ceil((better + 1) / (len(others) + 1) * 100))
 
 
 def build_profile(server: ServerAnalysis, user_id: int) -> Profile:

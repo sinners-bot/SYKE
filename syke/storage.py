@@ -1,6 +1,7 @@
-"""Per-server settings in SQLite, plus the text corpus used by the Markov commands.
+"""Per-server settings in SQLite, plus the stored message corpus.
 
-The corpus only holds messages from watched channels, and opted-out members' rows are deleted.
+The corpus holds messages from watched channels (and anything `collect`/`scanme` read). It feeds
+mimic and yap, and, for rows with timestamps, profiles too. Opted-out members' rows are deleted.
 """
 
 from __future__ import annotations
@@ -12,6 +13,14 @@ import time
 from pathlib import Path
 
 CARD_TTL_SECONDS = 30 * 24 * 3600
+CORPUS_EXTRA_COLUMNS = (
+    ("created_at", "REAL"),
+    ("author_name", "TEXT NOT NULL DEFAULT ''"),
+    ("laugh_reactions", "INTEGER NOT NULL DEFAULT 0"),
+    ("total_reactions", "INTEGER NOT NULL DEFAULT 0"),
+)
+# (message_id, channel_id, author_id, content[, created_at, author_name, laugh_reactions, total_reactions])
+CorpusRow = tuple
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tracked_channels (
@@ -37,6 +46,12 @@ CREATE TABLE IF NOT EXISTS corpus (
     PRIMARY KEY (guild_id, message_id)
 );
 CREATE INDEX IF NOT EXISTS corpus_author ON corpus (guild_id, author_id);
+CREATE TABLE IF NOT EXISTS message_labels (
+    guild_id   INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    traits     TEXT NOT NULL,
+    PRIMARY KEY (guild_id, message_id)
+);
 CREATE TABLE IF NOT EXISTS profile_cards (
     message_id INTEGER PRIMARY KEY,
     owner_id   INTEGER NOT NULL,
@@ -63,6 +78,10 @@ class Storage:
                 self._conn.execute("ALTER TABLE guild_settings ADD COLUMN demo_mode INTEGER NOT NULL DEFAULT 0")
             if "prefix" not in columns:
                 self._conn.execute("ALTER TABLE guild_settings ADD COLUMN prefix TEXT")
+            corpus_columns = {row[1] for row in self._conn.execute("PRAGMA table_info(corpus)")}
+            for column, kind in CORPUS_EXTRA_COLUMNS:
+                if column not in corpus_columns:
+                    self._conn.execute(f"ALTER TABLE corpus ADD COLUMN {column} {kind}")
             self._conn.commit()
 
     def _write(self, sql: str, params: tuple) -> int:
@@ -124,18 +143,52 @@ class Storage:
             (guild_id, prefix),
         )
 
-    def add_corpus(self, guild_id: int, rows: list[tuple[int, int, int, str]]) -> int:
-        """Store (message_id, channel_id, author_id, content) rows; returns how many were new."""
+    def add_corpus(self, guild_id: int, rows: list[CorpusRow]) -> int:
+        """Store messages; returns how many were new. Known rows gain any timestamp/reactions they lacked."""
         if not rows:
             return 0
+        full = [(guild_id, *row, *(None, "", 0, 0)[len(row) - 4:]) for row in rows]
         with self._lock:
-            before = self._conn.total_changes
+            before = self._conn.execute("SELECT COUNT(*) FROM corpus WHERE guild_id = ?", (guild_id,)).fetchone()[0]
             self._conn.executemany(
-                "INSERT OR IGNORE INTO corpus VALUES (?, ?, ?, ?, ?)",
-                [(guild_id, *row) for row in rows],
+                "INSERT INTO corpus (guild_id, message_id, channel_id, author_id, content, created_at, "
+                "author_name, laugh_reactions, total_reactions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(guild_id, message_id) DO UPDATE SET "
+                "created_at = COALESCE(corpus.created_at, excluded.created_at), "
+                "author_name = CASE WHEN excluded.author_name != '' THEN excluded.author_name ELSE corpus.author_name END, "
+                "laugh_reactions = MAX(corpus.laugh_reactions, excluded.laugh_reactions), "
+                "total_reactions = MAX(corpus.total_reactions, excluded.total_reactions)",
+                full,
             )
             self._conn.commit()
-            return self._conn.total_changes - before
+            after = self._conn.execute("SELECT COUNT(*) FROM corpus WHERE guild_id = ?", (guild_id,)).fetchone()[0]
+            return after - before
+
+    def history(self, guild_id: int, channel_ids: list[int]) -> list[tuple]:
+        """Timestamped stored messages from these channels:
+        (message_id, channel_id, author_id, author_name, content, created_at, laugh_reactions, total_reactions)."""
+        if not channel_ids:
+            return []
+        marks = ", ".join("?" for _ in channel_ids)
+        return self._read(
+            "SELECT message_id, channel_id, author_id, author_name, content, created_at, laugh_reactions, "
+            f"total_reactions FROM corpus WHERE guild_id = ? AND created_at IS NOT NULL AND channel_id IN ({marks})",
+            (guild_id, *channel_ids),
+        )
+
+    def save_labels(self, guild_id: int, labels: dict[int, frozenset[str]]) -> None:
+        if not labels:
+            return
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO message_labels VALUES (?, ?, ?)",
+                [(guild_id, mid, ",".join(sorted(traits))) for mid, traits in labels.items()],
+            )
+            self._conn.commit()
+
+    def labels(self, guild_id: int) -> dict[int, frozenset[str]]:
+        rows = self._read("SELECT message_id, traits FROM message_labels WHERE guild_id = ?", (guild_id,))
+        return {mid: frozenset(t for t in traits.split(",") if t) for mid, traits in rows}
 
     def corpus(self, guild_id: int, author_id: int | None = None) -> list[tuple[int, str]]:
         """(author_id, content) pairs, for one member or the whole server."""

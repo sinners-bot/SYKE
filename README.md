@@ -30,6 +30,7 @@ with `!prefix mention`.
 | --- | --- | --- |
 | `!profile [@member]` | everyone | Full personality report (yourself if no member). Aliases: `!judge`, `!p`, `!me` |
 | `!top [trait]` | everyone | Leaderboard for `funny`, `toxic`, `cringe`, `freaky`, `serious`, `chaotic` or `active`. Aliases: `!leaderboard`, `!lb` |
+| `!scanme` | everyone | Reads back through watched channels (up to `SYKE_DEEP_SCAN_LIMIT` messages each) and adds your older messages to your profile. Aliases: `!scan`, `!addme`. Once per 10 minutes |
 | `!mimic [@member]` | everyone | A made-up message in someone's style, from a Markov chain of their messages. Aliases: `!impersonate`, `!copy` |
 | `!optout` / `!optin` | everyone | Exclude yourself from being read or judged (opting out also deletes your stored messages) |
 | `!help` | everyone | Command list using this server's prefix |
@@ -60,20 +61,29 @@ with `!prefix mention`.
    in parallel, when it starts and whenever the scan is older than `SYKE_CACHE_MINUTES`.
    Refreshes only fetch messages newer than the last scan, and scores are reused until the
    scan changes, so most reports skip straight to the roast. Bots and opted-out users are skipped.
-   Text from watched channels (and anything `!collect` reads) is kept in SQLite so `!mimic`
-   and `!yap` have something to work with. `!optout` deletes a member's stored messages.
+   Text from watched channels (and anything `!collect` or `!scanme` reads) is kept in SQLite.
+   It feeds `!mimic` and `!yap`, and profiles include stored messages older than the live
+   scan, so `!scanme` permanently adds someone's history. `!optout` deletes a member's stored messages.
 2. **Hard stats** (`syke/stats.py`): message count, first seen, busiest 3-hour window,
-   average words, top emojis (including custom ones), and catchphrases (repeated 2-3 word phrases).
-3. **Traits** (`syke/traits.py`): every message gets scored by word lists in
-   `syke/lexicon.py` plus signals like caps lock, `!!!`, keyboard smashes, late-night posting,
-   rapid-fire bursts and 😂/💀 reactions from *other* people. Scores are 0-100.
+   average words, top emojis (custom server emojis show up as themselves), and catchphrases
+   (repeated 2-3 word phrases).
+3. **Traits** (`syke/traits.py`): every message gets scored by word and phrase lists in
+   `syke/lexicon.py`, custom emoji names (`:KEKW:` reads as laughing, `:pepe_horny:` as freaky),
+   signals like caps lock, `!!!`, keyboard smashes, late-night posting, rapid-fire bursts and
+   😂/💀 reactions from *other* people, plus any labels the AI gave that message. Scores are 0-100.
    Because this is local and deterministic, SYKE scores everyone and computes the
    "Top X%" server comparison and leaderboards without any AI calls.
 4. **Roast** (`syke/ai.py`): the stats, scores and ~250 recent messages go to an LLM
-   (OpenAI or Anthropic), which writes the profile summary, can pick better highlight
-   messages, and awards a bonus achievement. The prompt forbids attacking identity
+   (OpenAI or Anthropic). Each run picks a random format (nature documentary, police report,
+   patch notes, and so on) and is told to avoid its previous report on that member, so
+   summaries read differently every time. The model quotes the member's real messages, can use
+   the server's custom emojis, picks highlights, awards a bonus achievement, and labels which
+   messages are funny, toxic, cringe, freaky or serious. Those labels are saved and feed back into
+   everyone's scores and rankings, and the model's overall ratings are blended into that
+   member's card (40%). The prompt forbids attacking identity
    (race, gender, sexuality, disability, and so on). **No API key? No problem**: SYKE falls back to a
-   built-in offline roaster, so the bot works fully without one.
+   built-in offline roaster (`syke/roast.py`) that mixes hundreds of lines with the member's
+   real quotes, catchphrases, emojis and hours, so the bot works fully without one.
 5. **Render** (`syke/render.py`): everything becomes a 34-column monospace card in an
    embed, sized to read well on mobile.
 
@@ -145,6 +155,7 @@ All settings live in `.env` (see `.env.example`):
 | `SYKE_CACHE_MINUTES` | `15` | How long a scan is reused |
 | `SYKE_DEFAULT_TIMEZONE` | `UTC` | Used until an admin sets one |
 | `SYKE_DEFAULT_PREFIX` | `!` | Used until an admin runs `!prefix` |
+| `SYKE_DEEP_SCAN_LIMIT` | `20000` | Messages per channel `!scanme` reads back through |
 | `SYKE_YAP_CHANCE` | `0.08` | Chance that a message in a yap channel gets an answer |
 | `SYKE_YAP_COOLDOWN` | `120` | Minimum seconds between yaps in one channel |
 | `SYKE_OWNER_IDS` | `1342786189576634398` | Comma-separated user IDs that can use every admin command in every server, even without Manage Server. Owners without the permission use the prefix or @mention form, since Discord hides admin slash commands from them |

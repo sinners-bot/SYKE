@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import random
 from typing import Callable
 
 import discord
@@ -26,15 +27,22 @@ TRAIT_COLOURS: dict[str, discord.Colour] = {
 }
 NEUTRAL = discord.Colour.from_str("#8B5CF6")
 
-ARCHETYPES: dict[str, tuple[str, str]] = {
-    "funny": ("The Class Clown", "Lives for the laugh react."),
-    "toxic": ("The Menace", "Patience: not found."),
-    "cringe": ("The Cringelord", "Has never once hesitated before pressing send."),
-    "freaky": ("The Degenerate", "Messages cannot be read aloud in public."),
-    "serious": ("The Philosopher", "Writes essays where a 'lol' would do."),
-    "chaotic": ("The Wildcard", "Operates on pure impulse and caps lock."),
+ARCHETYPES: dict[str, tuple[str, list[str]]] = {
+    "funny": ("The Class Clown", ["Lives for the laugh react.", "Every chat is an open mic.",
+                                  "Has a bit for everything.", "Comedy first, consequences never."]),
+    "toxic": ("The Menace", ["Patience: not found.", "Types with clenched fists.",
+                             "Has a ratio for every occasion.", "HR's most wanted."]),
+    "cringe": ("The Cringelord", ["Has never once hesitated before pressing send.", "Brainrot, fluent.",
+                                  "Second-hand embarrassment on tap.", "Says 'slay' unironically."]),
+    "freaky": ("The Degenerate", ["Messages cannot be read aloud in public.", "Down bad, professionally.",
+                                  "The mods keep a separate folder.", "Every chat is after midnight."]),
+    "serious": ("The Philosopher", ["Writes essays where a 'lol' would do.", "Brings sources to a meme fight.",
+                                    "Well, actually.", "Reads the whole message. Every time."]),
+    "chaotic": ("The Wildcard", ["Operates on pure impulse and caps lock.", "Types like they're being chased.",
+                                 "Eight messages, one thought.", "A jump scare with a keyboard."]),
 }
-NPC = ("The NPC", "Aggressively, suspiciously normal.")
+NPC = ("The NPC", ["Aggressively, suspiciously normal.", "Default settings, never changed.",
+                   "Could be a bot. We checked twice.", "Background character energy."])
 
 HIGHLIGHTS = [
     ("funniest", "😂 Funniest message", "None found. Tragic."),
@@ -62,9 +70,10 @@ def dominant_trait(profile: Profile) -> str | None:
     return trait if profile.scores[trait] >= 25 else None
 
 
-def archetype(profile: Profile) -> tuple[str, str]:
+def archetype(profile: Profile, rng: random.Random | None = None) -> tuple[str, str]:
     trait = dominant_trait(profile)
-    return ARCHETYPES[trait] if trait else NPC
+    name, taglines = ARCHETYPES[trait] if trait else NPC
+    return name, (rng or random.Random()).choice(taglines)
 
 
 def colour_for(profile: Profile) -> discord.Colour:
