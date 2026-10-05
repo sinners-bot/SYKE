@@ -5,9 +5,13 @@ The corpus only holds messages from watched channels, and opted-out members' row
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
+import time
 from pathlib import Path
+
+CARD_TTL_SECONDS = 30 * 24 * 3600
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tracked_channels (
@@ -33,6 +37,12 @@ CREATE TABLE IF NOT EXISTS corpus (
     PRIMARY KEY (guild_id, message_id)
 );
 CREATE INDEX IF NOT EXISTS corpus_author ON corpus (guild_id, author_id);
+CREATE TABLE IF NOT EXISTS profile_cards (
+    message_id INTEGER PRIMARY KEY,
+    owner_id   INTEGER NOT NULL,
+    pages      TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS yap_channels (
     guild_id   INTEGER NOT NULL,
     channel_id INTEGER NOT NULL,
@@ -163,6 +173,23 @@ class Storage:
         if author_id is None:
             return self._write("DELETE FROM corpus WHERE guild_id = ?", (guild_id,))
         return self._write("DELETE FROM corpus WHERE guild_id = ? AND author_id = ?", (guild_id, author_id))
+
+    def save_card(self, message_id: int, owner_id: int, pages: dict[str, dict]) -> None:
+        now = time.time()
+        with self._lock:
+            self._conn.execute("DELETE FROM profile_cards WHERE created_at < ?", (now - CARD_TTL_SECONDS,))
+            self._conn.execute(
+                "INSERT OR REPLACE INTO profile_cards VALUES (?, ?, ?, ?)",
+                (message_id, owner_id, json.dumps(pages), now),
+            )
+            self._conn.commit()
+
+    def card(self, message_id: int) -> tuple[int, dict[str, dict]] | None:
+        rows = self._read(
+            "SELECT owner_id, pages FROM profile_cards WHERE message_id = ? AND created_at >= ?",
+            (message_id, time.time() - CARD_TTL_SECONDS),
+        )
+        return (rows[0][0], json.loads(rows[0][1])) if rows else None
 
     def demo_mode(self, guild_id: int) -> bool:
         rows = self._read("SELECT demo_mode FROM guild_settings WHERE guild_id = ?", (guild_id,))

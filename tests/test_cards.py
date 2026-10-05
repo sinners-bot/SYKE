@@ -53,7 +53,9 @@ def test_bar():
 def test_view_switches_pages_for_owner_only():
     async def go():
         pages = build_pages(demo_profile(2))
-        view = ProfileView(pages, owner_id=7)
+        cards = {55: (7, pages)}
+        view = ProfileView(cards.get)
+        assert view.timeout is None and view.is_persistent()
         buttons = {b.label: b for b in view.children}
         assert buttons["Overview"].disabled and not buttons["Ranks"].disabled
 
@@ -63,18 +65,38 @@ def test_view_switches_pages_for_owner_only():
             async def edit_message(self, **kw):
                 edits.append(kw)
 
-            async def send_message(self, **kw):
-                edits.append(("ephemeral", kw))
+            async def send_message(self, *args, **kw):
+                edits.append(("ephemeral", args, kw))
 
         class Inter:
-            def __init__(self, uid, page):
+            def __init__(self, uid, message_id=55):
                 self.user = type("U", (), {"id": uid})()
                 self.response = Resp()
-                self.data = {"custom_id": f"syke:{page}"}
+                self.message = type("M", (), {"id": message_id})()
 
-        await buttons["Ranks"].callback(Inter(7, "ranks"))
-        assert edits[-1]["embed"] is pages["ranks"] and buttons["Ranks"].disabled
-        assert not await view.interaction_check(Inter(8, "highlights"))
-        assert edits[-1][0] == "ephemeral" and edits[-1][1]["embed"] is pages["highlights"]
+        await buttons["Ranks"].callback(Inter(7))
+        assert edits[-1]["embed"] is pages["ranks"]
+        flipped = {b.label: b for b in edits[-1]["view"].children}
+        assert flipped["Ranks"].disabled and not flipped["Overview"].disabled
+
+        await buttons["Highlights"].callback(Inter(8))
+        assert edits[-1][0] == "ephemeral" and edits[-1][2]["embed"] is pages["highlights"]
+
+        restarted = ProfileView(cards.get)
+        await restarted.children[1].callback(Inter(7))
+        assert edits[-1]["embed"] is pages["highlights"]
+
+        await buttons["Ranks"].callback(Inter(7, message_id=999))
+        assert edits[-1][0] == "ephemeral" and "expired" in edits[-1][1][0]
 
     asyncio.run(go())
+
+
+def test_cards_survive_a_restart(tmp_path):
+    from syke.storage import Storage
+
+    pages = build_pages(demo_profile(2))
+    Storage(str(tmp_path / "c.db")).save_card(1, 7, {k: e.to_dict() for k, e in pages.items()})
+    owner, stored = Storage(str(tmp_path / "c.db")).card(1)
+    assert owner == 7 and stored["ranks"]["title"] == pages["ranks"].title
+    assert Storage(str(tmp_path / "c.db")).card(2) is None

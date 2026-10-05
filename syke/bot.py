@@ -17,7 +17,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from .ai import write_roast
-from .cards import ProfileView, build_pages
+from .cards import MESSAGE_VIEW_TIMEOUT, ProfileView, build_pages
 from .config import Settings, load_settings
 from .demo import PERSONAS, build_demo_server
 from .markov import build_chain
@@ -148,6 +148,7 @@ class Syke(commands.Bot):
 
     async def setup_hook(self) -> None:
         await self.add_cog(SykeCommands(self))
+        self.add_view(ProfileView(self.load_card))
         log.info("SYKE %s starting: %d prefix commands, default prefix %r",
                  VERSION, len(self.commands), self.settings.default_prefix)
         try:
@@ -319,8 +320,17 @@ class Syke(commands.Bot):
         await write_roast(profile, self.settings)
         profile.name += name_suffix
         pages = build_pages(profile, avatar_url, demo=self.storage.demo_mode(ctx.guild.id))
-        view = ProfileView(pages, owner_id=ctx.author.id)
-        view.message = await ctx.reply(embed=pages["overview"], view=view)
+        view = ProfileView(self.load_card, timeout=MESSAGE_VIEW_TIMEOUT)
+        message = await ctx.reply(embed=pages["overview"], view=view)
+        if message is not None:
+            self.storage.save_card(message.id, ctx.author.id, {k: e.to_dict() for k, e in pages.items()})
+
+    def load_card(self, message_id: int) -> tuple[int, dict[str, discord.Embed]] | None:
+        card = self.storage.card(message_id)
+        if card is None:
+            return None
+        owner_id, pages = card
+        return owner_id, {k: discord.Embed.from_dict(v) for k, v in pages.items()}
 
     def no_channels(self, guild_id: int) -> discord.Embed:
         p = self.display_prefix(guild_id)

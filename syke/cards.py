@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import logging
+from typing import Callable
+
 import discord
 
 from .profile import Profile
 from .traits import TRAIT_META, TRAITS
 
+log = logging.getLogger("syke.cards")
+
 BAR_CELLS = 10
 MAX_QUOTE = 180
+MESSAGE_VIEW_TIMEOUT = 600
 
 TRAIT_COLOURS: dict[str, discord.Colour] = {
     "funny": discord.Colour.from_str("#FACC15"),
@@ -172,51 +178,47 @@ def build_pages(profile: Profile, avatar_url: str | None = None, demo: bool = Fa
     }
 
 
-class ProfileView(discord.ui.View):
-    """Page buttons. Only the person who ran the command can flip pages."""
+CardLoader = Callable[[int], "tuple[int, dict[str, discord.Embed]] | None"]
 
-    def __init__(self, pages: dict[str, discord.Embed], owner_id: int, timeout: float = 600) -> None:
+
+class ProfileView(discord.ui.View):
+    """Page buttons for every profile card. Only the person who ran the command can flip pages.
+
+    Pages are looked up by message id, and one view with no timeout is registered at startup, so
+    buttons keep working after SYKE restarts. Views attached to single messages time out only so they
+    don't pile up in memory; the registered one picks up clicks after that.
+    """
+
+    def __init__(self, load: CardLoader, current: str = "overview", timeout: float | None = None) -> None:
         super().__init__(timeout=timeout)
-        self.pages = pages
-        self.owner_id = owner_id
-        self.current = "overview"
-        self.message: discord.Message | None = None
+        self.load = load
         for page in PAGES:
             emoji, label = PAGE_LABELS[page]
-            button = discord.ui.Button(label=label, emoji=emoji, custom_id=f"syke:{page}")
+            active = page == current
+            button = discord.ui.Button(
+                label=label, emoji=emoji, custom_id=f"syke:{page}", disabled=active,
+                style=discord.ButtonStyle.primary if active else discord.ButtonStyle.secondary,
+            )
             button.callback = self._make_callback(page)
             self.add_item(button)
-        self._refresh()
-
-    def _refresh(self) -> None:
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                active = item.custom_id == f"syke:{self.current}"
-                item.style = discord.ButtonStyle.primary if active else discord.ButtonStyle.secondary
-                item.disabled = active
 
     def _make_callback(self, page: str):
         async def callback(interaction: discord.Interaction) -> None:
-            self.current = page
-            self._refresh()
-            await interaction.response.edit_message(embed=self.pages[page], view=self)
+            card = self.load(interaction.message.id) if interaction.message else None
+            if card is None:
+                await interaction.response.send_message(
+                    "This card has expired. Run the profile command again for a fresh one.", ephemeral=True
+                )
+                return
+            owner_id, pages = card
+            if interaction.user.id != owner_id:
+                await interaction.response.send_message(embed=pages[page], ephemeral=True)
+                return
+            view = ProfileView(self.load, page, timeout=MESSAGE_VIEW_TIMEOUT)
+            await interaction.response.edit_message(embed=pages[page], view=view)
         return callback
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.owner_id:
-            return True
-        await interaction.response.send_message(
-            embed=self.pages[interaction.data.get("custom_id", "syke:overview").split(":")[1]],
-            ephemeral=True,
-        )
-        return False
-
-    async def on_timeout(self) -> None:
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item) -> None:
+        log.error("Profile card button failed", exc_info=error)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("Couldn't flip the page. Try again.", ephemeral=True)

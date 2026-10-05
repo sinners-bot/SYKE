@@ -19,6 +19,7 @@ class FakeCtx:
     async def reply(self, content=None, **kwargs):
         self.replies.append(kwargs.get("embed"))
         self.views = getattr(self, "views", []) + [kwargs.get("view")]
+        return types.SimpleNamespace(id=len(self.replies))
 
     send = reply
 
@@ -99,6 +100,8 @@ def test_demo_toggle_and_sample(cog):
     assert card.author.name == "SYKE REPORT · 📊 Overview"
     assert "(fake demo member)" not in card.description
     assert [b.label for b in ctx.views[-1].children] == ["Overview", "Highlights", "Ranks"]
+    owner_id, pages = cog.bot.load_card(len(ctx.replies))
+    assert owner_id == 1234 and pages["ranks"].title == "Vex (fake demo member)'s Achievements"
     run(cog.top.callback(cog, ctx, "chaos"))
     assert "Chaotic" in ctx.replies[-1].title
     run(cog.demo.callback(cog, ctx, False))
