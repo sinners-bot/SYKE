@@ -124,6 +124,40 @@ def test_channel_check_reports_missing_permissions(cog):
     assert cog.bot.channel_check in cog.bot._checks
 
 
+def _slash_ctx(guild_id=42, channel_id=7):
+    ctx = FakeCtx(guild_id)
+    ctx.interaction = types.SimpleNamespace(guild_id=guild_id, channel_id=channel_id)
+    return ctx
+
+
+def test_diagnose_when_bot_not_in_server(cog, monkeypatch):
+    monkeypatch.setattr(cog.bot, "get_guild", lambda gid: None)
+    monkeypatch.setattr(type(cog.bot), "application_id", 1556658519770398881, raising=False)
+    ctx = _slash_ctx()
+    run(cog.diagnose.callback(cog, ctx))
+    embed = ctx.replies[-1]
+    assert embed.title == "❌ SYKE isn't in this server"
+    assert "scope=bot+applications.commands" in embed.description
+    assert "client_id=1556658519770398881" in embed.description
+
+
+def test_diagnose_lists_missing_channel_permissions(cog, monkeypatch):
+    perms = discord.Permissions(view_channel=True, send_messages=True)
+    channel = types.SimpleNamespace(permissions_for=lambda me: perms)
+    guild = types.SimpleNamespace(id=42, me=object(), get_channel_or_thread=lambda cid: channel)
+    monkeypatch.setattr(cog.bot, "get_guild", lambda gid: guild)
+    ctx = _slash_ctx()
+    run(cog.diagnose.callback(cog, ctx))
+    text = ctx.replies[-1].description
+    assert "✅ Send Messages in this channel" in text
+    assert "❌ Embed Links in this channel" in text and "❌ Read Message History in this channel" in text
+    assert "Prefix commands won't work in this channel" in text
+
+    perms.update(embed_links=True, read_message_history=True)
+    run(cog.diagnose.callback(cog, ctx))
+    assert "All good. Add a channel" in ctx.replies[-1].description
+
+
 def test_unknown_inputs_are_explained(cog):
     ctx = FakeCtx()
     run(cog.top.callback(cog, ctx, "smelly"))

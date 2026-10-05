@@ -133,6 +133,19 @@ class Syke(commands.Bot):
     async def get_context(self, origin, *, cls=None):
         return await super().get_context(origin, cls=cls or SykeContext)
 
+    async def on_guild_join(self, guild: discord.Guild) -> None:
+        log.info("Joined %r (%s)", guild.name, guild.id)
+
+    async def on_guild_remove(self, guild: discord.Guild) -> None:
+        log.info("Removed from %r (%s)", guild.name, guild.id)
+
+    def invite_url(self) -> str:
+        return discord.utils.oauth_url(
+            self.application_id or (self.user.id if self.user else 0),
+            permissions=discord.Permissions(**{p: True for p in NEEDED_PERMISSIONS}),
+            scopes=("bot", "applications.commands"),
+        )
+
     async def on_command(self, ctx: commands.Context) -> None:
         where = f"{ctx.guild.id}/#{getattr(ctx.channel, 'name', ctx.channel.id)}" if ctx.guild else "DM"
         style = "slash" if ctx.interaction else f"prefix {ctx.prefix!r}"
@@ -142,6 +155,8 @@ class Syke(commands.Bot):
         log.info("SYKE %s online as %s in %d servers (AI: %s)", VERSION, self.user, len(self.guilds), self.settings.ai_provider)
         if not self.intents.message_content:
             log.warning("Message Content intent is off: prefix commands will not work")
+        for guild in self.guilds:
+            log.info("  member of %r (%s), prefix %r", guild.name, guild.id, self.display_prefix(guild.id))
         activity = discord.Activity(type=discord.ActivityType.watching, name=f"you 👁️ | {self.settings.default_prefix}help")
         await self.change_presence(activity=activity)
 
@@ -368,6 +383,63 @@ class SykeCommands(commands.Cog, name="SYKE"):
         self.bot.storage.set_optout(ctx.guild.id, ctx.author.id, False)
         await ctx.reply(embed=notice("Welcome back to the lab 🧪", "Your messages count again. Brace yourself.", BRAND), ephemeral=True)
 
+    @commands.hybrid_command(name="diagnose", aliases=["check"], description="Check why SYKE's prefix commands might not work here")
+    @app_commands.guild_only()
+    async def diagnose(self, ctx: commands.Context) -> None:
+        guild_id = ctx.interaction.guild_id if ctx.interaction else (ctx.guild.id if ctx.guild else None)
+        if guild_id is None:
+            await ctx.reply(embed=notice("Servers only", "Run this inside a server."), ephemeral=True)
+            return
+
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            await ctx.reply(embed=notice(
+                "❌ SYKE isn't in this server",
+                "Only SYKE's slash commands were added here, not the bot itself, so it can't read "
+                "messages, use a prefix or scan channels.\n\n"
+                f"**Fix:** [invite SYKE as a bot]({self.bot.invite_url()}) and pick this server. "
+                "Your settings stay as they are.",
+            ), ephemeral=True)
+            return
+
+        channel_id = ctx.interaction.channel_id if ctx.interaction else ctx.channel.id
+        channel = guild.get_channel_or_thread(channel_id)
+        rows = ["✅ SYKE is a member of this server",
+                f"{'✅' if self.bot.intents.message_content else '❌'} Message Content intent"]
+        missing: list[str] = []
+        if channel is None:
+            rows.append("❌ SYKE can't see this channel at all")
+            missing = list(NEEDED_PERMISSIONS)
+        else:
+            perms = channel.permissions_for(guild.me)
+            for perm in NEEDED_PERMISSIONS:
+                ok = getattr(perms, perm)
+                rows.append(f"{'✅' if ok else '❌'} {perm.replace('_', ' ').title()} in this channel")
+                if not ok:
+                    missing.append(perm)
+
+        p = self.bot.display_prefix(guild.id)
+        tracked = self.bot.storage.tracked(guild.id)
+        unreadable = [
+            cid for cid in tracked
+            if (ch := guild.get_channel_or_thread(cid)) is None
+            or not (ch.permissions_for(guild.me).view_channel and ch.permissions_for(guild.me).read_message_history)
+        ]
+        rows.append(f"ℹ️ Prefix here: `{p}` (mentioning SYKE always works)")
+        rows.append(f"{'✅' if tracked and not unreadable else '⚠️'} Watched channels: {len(tracked)}"
+                    + (f", {len(unreadable)} unreadable" if unreadable else ""))
+
+        if missing:
+            verdict = ("Prefix commands won't work in this channel. In the channel settings → **Permissions**, "
+                       "allow the ❌ items for SYKE's role.")
+        elif not tracked:
+            verdict = f"All good. Add a channel to analyse with `{p}track #channel`."
+        else:
+            verdict = f"All good here. Try `{p}help`."
+        embed = notice("🩺 SYKE diagnostics", "\n".join(rows) + f"\n\n{verdict}", WARN if missing else BRAND)
+        embed.set_footer(text=f"SYKE version {VERSION}")
+        await ctx.reply(embed=embed, ephemeral=True)
+
     @commands.hybrid_command(name="help", aliases=["commands"], description="How to use SYKE")
     @public()
     async def help(self, ctx: commands.Context) -> None:
@@ -380,7 +452,8 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 "**Everyone**\n"
                 f"`{p}profile [@member]` — the full personality report\n"
                 f"`{p}top [trait]` — leaderboard: funny, toxic, cringe, freaky, serious, chaotic, active\n"
-                f"`{p}optout` / `{p}optin` — control whether you're judged\n\n"
+                f"`{p}optout` / `{p}optin` — control whether you're judged\n"
+                "`/diagnose` — check why prefix commands might not work here\n\n"
                 "**Admins (Manage Server)**\n"
                 f"`{p}track #channel` / `{p}untrack #channel` — choose what SYKE reads\n"
                 f"`{p}channels` — show settings and watched channels\n"
