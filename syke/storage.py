@@ -216,6 +216,17 @@ class Storage:
         )
         return [r[0] for r in rows]
 
+    def labelled_messages(self, guild_id: int, trait: str, limit: int) -> list[str]:
+        """Random stored messages the AI tagged with `trait` while roasting someone."""
+        rows = self._read(
+            "SELECT c.content FROM corpus c JOIN message_labels l "
+            "ON l.guild_id = c.guild_id AND l.message_id = c.message_id "
+            "WHERE c.guild_id = ? AND (',' || l.traits || ',') LIKE ? "
+            "AND length(c.content) BETWEEN 3 AND 300 ORDER BY RANDOM() LIMIT ?",
+            (guild_id, f"%,{trait},%", limit),
+        )
+        return [r[0] for r in rows]
+
     def search_messages(self, guild_id: int, words: list[str], limit: int) -> list[str]:
         """Random stored messages containing any of `words`."""
         if not words:

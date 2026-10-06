@@ -401,3 +401,69 @@ def test_profile_saves_ai_labels_and_rescores(lab, monkeypatch):
 
     run(cog.profile.callback(cog, ctx, None))
     assert seen["avoid"] == "roasted"
+
+
+def test_detect_tone_reads_the_vibe():
+    from syke.yap import Turn, detect_tone
+
+    assert detect_tone("you're actually so bad at this game") == "toxic"
+    assert detect_tone("shut up idiot") == "toxic"
+    assert detect_tone("she's so fine ngl 😏") == "freaky"
+    assert detect_tone("LMAOOO 😭😭") == "funny"
+    assert detect_tone("what are we doing tonight") == "funny", "banter by default"
+    assert detect_tone("ok", [Turn("a", "stfu you're so dumb"), Turn("b", "ur trash")]) == "toxic"
+
+
+def test_stitch_allows_a_little_glue():
+    from syke.yap import stitch
+
+    candidates = ["ur aim is trash", "skill issue tbh"]
+    assert stitch(candidates, [{"id": 0}, {"id": 1, "glue": "and also"}]) == "ur aim is trash and also skill issue tbh"
+    assert stitch(candidates, [{"id": 0, "glue": "this is way too many words"}]) is None
+    assert stitch(candidates, [{"id": 0, "glue": "@everyone"}]) is None
+
+
+def test_remixes_are_new_and_fit_topic_or_tone():
+    import random
+
+    from syke.markov import build_chain
+    from syke.yap import query_weights, remixes
+
+    texts = ["stfu you're so dumb", "you're actually trash at valorant", "valorant is so mid",
+             "i love valorant so much", "ur so dumb at valorant lmao", "nobody asked you're trash"] * 3
+    chain = build_chain(texts)
+    lines = remixes(chain, query_weights("valorant tonight?"), "toxic", rng=random.Random(4))
+    assert lines
+    originals = {t.lower() for t in texts}
+    assert all(line.lower() not in originals for line in lines)
+    assert remixes(None, {}, "funny") == []
+
+
+def test_labelled_messages_by_tone(tmp_path):
+    from syke.storage import Storage
+
+    storage = Storage(str(tmp_path / "l.db"))
+    storage.add_corpus(42, [(1, 1, 5, "come here 😏"), (2, 1, 5, "ur trash"), (3, 1, 5, "lol")])
+    storage.save_labels(42, {1: frozenset({"freaky"}), 2: frozenset({"toxic", "funny"})})
+    assert storage.labelled_messages(42, "freaky", 10) == ["come here 😏"]
+    assert storage.labelled_messages(42, "toxic", 10) == ["ur trash"]
+    assert storage.labelled_messages(42, "serious", 10) == []
+
+
+def test_compose_prompt_has_tone_and_remixes(monkeypatch):
+    from syke import ai
+    from syke.yap import Turn
+
+    settings = replace(load_settings(), ai_provider="openai", openai_api_key="k")
+    seen = {}
+
+    async def fake_openai(s, system, user, temperature=1.0):
+        seen["user"], seen["system"] = user, system
+        return '{"parts": [{"id": 0}, {"id": 1, "glue": "plus"}]}'
+
+    monkeypatch.setattr(ai, "_call_openai", fake_openai)
+    ranked = [(2.0, "ur aim is trash"), (1.0, "skill issue tbh")]
+    reply = run(ai.compose_reply(settings, ranked, Turn("Dex", "1v1 me"), [], "lol", "toxic", ["skill issue tbh"]))
+    assert reply == "ur aim is trash plus skill issue tbh"
+    assert "TONE: toxic" in seen["user"] and "[1] (remix) skill issue tbh" in seen["user"]
+    assert "savage trash talk" in seen["system"]
