@@ -27,6 +27,7 @@ TOUR = [
     ("iq", "🧠", "IQ test", "A very unscientific IQ score"),
     ("top", "🏆", "Leaderboards", "Who's the funniest, most toxic, smartest"),
     ("talk", "🗣️", "Mimic & yap", "SYKE talks like your members"),
+    ("ask", "💬", "Ask anything", "ChatGPT-style answers to any question"),
     ("data", "⛏️", "Your data", "Scanning, opting out, privacy"),
     ("admin", "⚙️", "Server setup", "Everything admins can configure"),
 ]
@@ -90,6 +91,19 @@ def tour_page(key: str, p: str) -> list[discord.Embed]:
             f"`{p}yap on` (admins): now and then SYKE answers chat in that channel with something a member "
             "really said in the past. **Reply to it** and SYKE answers back with another message that fits, "
             "picked by AI."
+        )), example]
+    if key == "ask":
+        example = discord.Embed(colour=BRAND, description=(
+            "Because sunlight hits the air and the blue light scatters way more than the red, so the whole "
+            "sky glows blue. Sunsets are red for the same reason: the light travels further and the blue "
+            "gets scattered away before it reaches you. Science, not vibes."))
+        example.set_author(name="❓ why is the sky blue")
+        example.set_footer(text="Example answer • reply to follow up • SYKE AI")
+        return [_page("💬 Ask anything", (
+            f"`{p}ask <question>`, or just **@mention SYKE** with your question. Explanations, homework, code, "
+            "advice, translations, hot takes: SYKE answers like ChatGPT, with a bit more attitude.\n\n"
+            "**Reply to an answer** to ask a follow-up; SYKE remembers the conversation. "
+            "In DMs you don't even need the command."
         )), example]
     if key == "data":
         return [_page("⛏️ Your data", (

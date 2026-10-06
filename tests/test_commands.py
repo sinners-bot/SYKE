@@ -264,3 +264,76 @@ def test_install_settings_are_configured_once(cog):
     cog.bot.application_info = lambda: info(app(done))
     run(cog.bot._configure_install())
     assert len(edits) == 1
+
+
+class _Typing:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _ask_message(bot, content, mid=1, reference=None, guild=True, author_id=777):
+    replies = []
+
+    async def reply(content=None, **kwargs):
+        sent = types.SimpleNamespace(id=10_000 + mid, embeds=[kwargs.get("embed")], content="",
+                                     author=types.SimpleNamespace(id=999))
+        replies.append(sent)
+        return sent
+
+    g = types.SimpleNamespace(id=42, name="Lab") if guild else None
+    channel = types.SimpleNamespace(id=1, name="general", guild=g, typing=lambda: _Typing())
+    return types.SimpleNamespace(
+        id=mid, content=content, guild=g, channel=channel, reply=reply, mentions=[],
+        author=types.SimpleNamespace(id=author_id, bot=False, display_name="Tester", display_avatar=None),
+        reference=reference,
+    ), replies
+
+
+def test_ask_by_mention_dm_and_follow_up(cog, monkeypatch):
+    bot = cog.bot
+    run(bot.add_cog(cog))
+    bot._connection.user = types.SimpleNamespace(id=999, mention="<@999>", name="SYKE")
+    calls = []
+
+    async def fake_ask(settings, question, history, asker, place):
+        calls.append((question, list(history), place))
+        return f"answer {len(calls)}"
+
+    monkeypatch.setattr("syke.bot.ask", fake_ask)
+    monkeypatch.setattr("syke.bot.discord.Message", types.SimpleNamespace)
+
+    assert bot.mention_question(_ask_message(bot, "<@999> profile")[0]) is None, "commands aren't questions"
+    assert bot.mention_question(_ask_message(bot, "<@999>")[0]) is None
+
+    message, replies = _ask_message(bot, "<@999> why is the sky blue?")
+    assert run(bot.maybe_answer(message))
+    assert calls[-1][0] == "why is the sky blue?" and "#general" in calls[-1][2]
+    first = replies[-1]
+    assert first.embeds[0].description == "answer 1"
+    assert first.embeds[0].footer.text.endswith("SYKE AI")
+
+    ref = types.SimpleNamespace(message_id=first.id, resolved=first, cached_message=None)
+    follow, replies = _ask_message(bot, "and at night?", mid=2, reference=ref, author_id=778)
+    assert run(bot.maybe_answer(follow))
+    assert calls[-1][1] == [{"role": "user", "content": "why is the sky blue?"},
+                            {"role": "assistant", "content": "answer 1"}]
+
+    bot._asks.clear()
+    again, _ = _ask_message(bot, "really?", mid=3, reference=ref, author_id=779)
+    run(bot.maybe_answer(again))
+    assert calls[-1][1][0]["content"] == "why is the sky blue?", "rebuilt from the embed after a restart"
+
+    dm, replies = _ask_message(bot, "hello there", mid=4, guild=False, author_id=780)
+    assert run(bot.maybe_answer(dm)) and calls[-1][2] == "a private DM"
+    assert not run(bot.maybe_answer(_ask_message(bot, "just chatting", mid=5, author_id=781)[0]))
+
+
+def test_ask_without_ai_key_explains(cog):
+    bot = cog.bot
+    bot._connection.user = types.SimpleNamespace(id=999, mention="<@999>", name="SYKE")
+    message, replies = _ask_message(bot, "<@999> what's 2+2")
+    run(bot.maybe_answer(message))
+    assert replies[-1].embeds[0].title == "No brain installed 🧠"

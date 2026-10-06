@@ -18,6 +18,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from .ai import compose_reply, write_roast
+from .ask import AskUnavailable, ask
 from .cards import MESSAGE_VIEW_TIMEOUT, ProfileView, build_pages, iq_page
 from .config import Settings, load_settings
 from .demo import PERSONAS, build_demo_server
@@ -53,6 +54,10 @@ YAP_REPLY_COOLDOWN = 4
 YAP_SEARCH = 80
 YAP_RANDOM = 25
 YAP_CONTEXT = 8
+ASK_TAG = "SYKE AI"
+ASK_COOLDOWN = 3
+ASK_MEMORY = 500
+ANSWER_LIMIT = 4000
 TRAIT_ALIASES: dict[str, str] = {
     **{t: t for t in TRAITS},
     "funniest": "funny", "freak": "freaky", "chaos": "chaotic", "smart": "serious",
@@ -71,6 +76,31 @@ F = TypeVar("F", bound=Callable)
 
 def author_name(user) -> str:
     return getattr(user, "display_name", None) or getattr(user, "name", None) or "someone"
+
+
+def readable(message: discord.Message, text: str) -> str:
+    """`text` with user mentions turned into @names, so the AI knows who's meant."""
+    for user in getattr(message, "mentions", ()):
+        name = f"@{author_name(user)}"
+        text = text.replace(f"<@{user.id}>", name).replace(f"<@!{user.id}>", name)
+    return text
+
+
+def where(channel) -> str:
+    guild = getattr(channel, "guild", None)
+    if guild is None:
+        return "a private DM"
+    return f"#{getattr(channel, 'name', 'chat')} in the Discord server {guild.name!r}"
+
+
+def answer_embed(question: str, answer: str, author) -> discord.Embed:
+    if len(answer) > ANSWER_LIMIT:
+        answer = answer[:ANSWER_LIMIT - 1].rstrip() + "…"
+    embed = discord.Embed(description=answer, colour=BRAND)
+    avatar = getattr(getattr(author, "display_avatar", None), "url", None)
+    embed.set_author(name=f"❓ {' '.join(question.split())}"[:250], icon_url=avatar)
+    embed.set_footer(text=f"Asked by {author_name(author)} • reply to follow up • {ASK_TAG}")
+    return embed
 
 
 def install_permissions() -> discord.Permissions:
@@ -183,6 +213,8 @@ class Syke(commands.Bot):
         self._warmed = False
         self._last_yap: dict[int, float] = {}
         self._last_comeback: dict[tuple[int, int], float] = {}
+        self._last_ask: dict[int, float] = {}
+        self._asks: dict[int, list[dict]] = {}
         self._history_version: dict[int, int] = {}
         self._last_summary: dict[tuple[int, int], str] = {}
         self._deep_scans: set[tuple[int, int]] = set()
@@ -304,7 +336,9 @@ class Syke(commands.Bot):
 
     async def on_message(self, message: discord.Message) -> None:
         await self.process_commands(message)
-        if message.author.bot or not message.guild or not message.content:
+        if message.author.bot or not message.content:
+            return
+        if await self.maybe_answer(message) or not message.guild:
             return
         if self.is_command_text(message.guild.id, message.content):
             return
@@ -323,10 +357,17 @@ class Syke(commands.Bot):
         Yaps are the only plain-text messages SYKE sends (everything else is an embed), so this
         also recognises yaps sent before a restart.
         """
+        if message.channel.id not in self.storage.yap_channels(message.guild.id):
+            return None
+        target = await self.replied_to_me(message)
+        if target is None or target.embeds or not target.content:
+            return None
+        return target.content
+
+    async def replied_to_me(self, message: discord.Message) -> discord.Message | None:
+        """The SYKE message that `message` replies to, if any."""
         ref = message.reference
         if ref is None or ref.message_id is None or self.user is None:
-            return None
-        if message.channel.id not in self.storage.yap_channels(message.guild.id):
             return None
         target = ref.resolved if isinstance(ref.resolved, discord.Message) else ref.cached_message
         if target is None:
@@ -334,9 +375,83 @@ class Syke(commands.Bot):
                 target = await message.channel.fetch_message(ref.message_id)
             except discord.HTTPException:
                 return None
-        if target.author.id != self.user.id or target.embeds or not target.content:
+        return target if target.author.id == self.user.id else None
+
+    # Ask
+
+    def mention_question(self, message: discord.Message) -> str | None:
+        """The question in "@SYKE <question>", or any non-command DM; None for commands and bare mentions."""
+        if self.user is None:
             return None
-        return target.content
+        text = message.content.strip()
+        for form in (f"<@{self.user.id}>", f"<@!{self.user.id}>"):
+            if text.startswith(form):
+                rest = text[len(form):].strip()
+                if not rest or self.get_command(rest.split()[0]):
+                    return None
+                return rest
+        if message.guild is None and not text.startswith(self.settings.default_prefix):
+            return text
+        return None
+
+    async def ask_thread(self, message: discord.Message) -> list[dict] | None:
+        """The conversation so far, if `message` replies to one of SYKE's answers."""
+        target = await self.replied_to_me(message)
+        if target is None or not target.embeds:
+            return None
+        embed = target.embeds[0]
+        if not (embed.footer and embed.footer.text and embed.footer.text.endswith(ASK_TAG)):
+            return None
+        if target.id in self._asks:
+            return list(self._asks[target.id])
+        question = (embed.author.name or "").removeprefix("❓ ").strip() if embed.author else ""
+        history = [{"role": "user", "content": question}] if question else []
+        return history + [{"role": "assistant", "content": embed.description or ""}] if history else []
+
+    def remember_ask(self, message_id: int, history: list[dict]) -> None:
+        self._asks[message_id] = history
+        while len(self._asks) > ASK_MEMORY:
+            self._asks.pop(next(iter(self._asks)))
+
+    async def maybe_answer(self, message: discord.Message) -> bool:
+        """Answer "@SYKE <question>", DMs, and replies to SYKE's answers. True if it was one."""
+        question = self.mention_question(message)
+        history: list[dict] = []
+        if question is None:
+            thread = await self.ask_thread(message)
+            if thread is None:
+                return False
+            history, question = thread, message.content
+        now = time.monotonic()
+        if now - self._last_ask.get(message.author.id, -1e9) < ASK_COOLDOWN:
+            return True
+        self._last_ask[message.author.id] = now
+
+        async def send(embed: discord.Embed) -> discord.Message | None:
+            with contextlib.suppress(discord.HTTPException):
+                return await message.reply(embed=embed, mention_author=False)
+            return None
+
+        async with message.channel.typing():
+            await self.answer_question(send, message.author, readable(message, question), history, where(message.channel))
+        return True
+
+    async def answer_question(self, send, author, question: str, history: list[dict], place: str) -> None:
+        question = question.strip()
+        try:
+            answer = await ask(self.settings, question, history, author_name(author), place)
+        except AskUnavailable:
+            await send(notice("No brain installed 🧠", "SYKE's AI isn't set up: the bot owner needs to add "
+                              "`OPENAI_API_KEY` or `ANTHROPIC_API_KEY`."))
+            return
+        except Exception:
+            log.exception("ask failed")
+            await send(notice("Brain lag 🧠", "Couldn't reach the AI just now. Try again in a moment."))
+            return
+        sent = await send(answer_embed(question, answer, author))
+        if sent is not None:
+            self.remember_ask(sent.id, [*history, {"role": "user", "content": question},
+                                        {"role": "assistant", "content": answer}])
 
     def yap_candidates(self, guild_id: int, target: str, weights: dict[str, float],
                        exclude: set[str]) -> list[tuple[float, str]]:
@@ -898,6 +1013,28 @@ class SykeCommands(commands.Cog, name="SYKE"):
         embed.set_footer(text=f"SYKE version {VERSION}")
         await ctx.reply(embed=embed, ephemeral=True)
 
+    @commands.hybrid_command(name="ask", aliases=["ai", "gpt", "chat", "question", "q"],
+                             description="Ask SYKE anything, like ChatGPT")
+    @app_commands.describe(question="What do you want to know?")
+    async def ask_command(self, ctx: commands.Context, *, question: str = "") -> None:
+        if not question.strip():
+            p = self.bot.tour_prefix(ctx.guild.id if ctx.guild else None)
+            await ctx.reply(embed=notice("Ask me something", f"`{p}ask <question>`, e.g. `{p}ask why is the sky blue`. "
+                                         "Reply to my answer to keep the conversation going."), ephemeral=True)
+            return
+        now = time.monotonic()
+        if now - self.bot._last_ask.get(ctx.author.id, -1e9) < ASK_COOLDOWN:
+            await ctx.reply(embed=notice("Slow down", "One question every few seconds."), ephemeral=True)
+            return
+        self.bot._last_ask[ctx.author.id] = now
+
+        async def send(embed: discord.Embed) -> discord.Message | None:
+            return await ctx.reply(embed=embed)
+
+        async with ctx.typing():
+            await self.bot.answer_question(send, ctx.author, readable(ctx.message, question) if ctx.message else question,
+                                           [], where(ctx.channel))
+
     @commands.hybrid_command(name="showcase", aliases=["features", "tour", "showoff"],
                              description="A tour of everything SYKE can do, with examples")
     async def showcase(self, ctx: commands.Context) -> None:
@@ -977,6 +1114,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"Prefix here: `{p}` • slash commands work too.\n\n"
                 "**Everyone**\n"
                 f"`{p}profile [@member]` — the full personality report\n"
+                f"`{p}ask <question>` — ask SYKE anything, like ChatGPT (or just @mention it)\n"
                 f"`{p}iq [@member]` — SYKE's very unscientific IQ estimate\n"
                 f"`{p}top [trait]` — leaderboard: funny, toxic, cringe, freaky, serious, chaotic, active, iq\n"
                 f"`{p}mimic [@member]` — SYKE talks like them (Markov chain)\n"
