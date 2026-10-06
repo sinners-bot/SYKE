@@ -15,7 +15,7 @@ from .profile import Profile
 from .roast import fallback_summary
 from .stats import CUSTOM_EMOJI_RE
 from .traits import HIGHLIGHT_TRAITS, TRAITS
-from .yap import Turn, offline_pick, stitch
+from .yap import DEFAULT_TONE, Turn, offline_pick, stitch
 
 log = logging.getLogger("syke.ai")
 
@@ -245,21 +245,28 @@ async def write_roast(
     return profile
 
 
-COMPOSE_PROMPT = """You are SYKE, a Discord bot that can only speak using real messages members of \
-this server sent in the past. You get the recent chat and numbered CANDIDATES (old server messages).
+COMPOSE_PROMPT = """You are SYKE, a Discord bot that talks using the server's own words. You get the \
+recent chat, the TONE to hit, and numbered CANDIDATES: real old server messages, plus some marked \
+(remix) that a Markov chain generated from the server's messages (they can be weird; use the good bits).
 
-Build the reply that fits best, as if a quick-witted regular said it. You may:
+Build the reply that fits best, as if the server's most quick-witted regular said it. You may:
 - use one candidate as it is, or
-- stitch 2-3 pieces together into one line. A piece is a whole candidate or a chunk copied \
-word-for-word from one (e.g. a punchline, a keyword phrase, an emoji).
+- stitch 2-3 pieces together. A piece is a whole candidate or a chunk copied word-for-word from one \
+(a punchline, a keyword phrase, an insult, an emoji). Each piece may have "glue": up to 3 of your own \
+joining words placed before it ("nah", "and", "bro said") so the result reads naturally.
 
-What makes a great reply: it actually answers or reacts to the TARGET message (questions get \
-answers, insults get comebacks, jokes get played along with), it picks up the topic, names or \
-keywords being discussed, and it is funny. Stitched replies must read naturally, not like word salad; \
-one perfect candidate beats a clumsy combination. Never change, add or reorder words inside a piece. \
-Never use anything that attacks identity (race, religion, gender, sexuality, disability).
+What makes a great reply: it reacts to the TARGET message directly (questions get answers, insults get \
+comebacks, jokes get played along with), it picks up the topic and keywords being discussed, and it \
+nails the TONE:
+- toxic: savage trash talk, roast them back, petty and disrespectful.
+- funny: a joke, an absurd twist, perfectly timed banter.
+- freaky: suggestive innuendo, down-bad flirting, unhinged thirst; PG-13, never explicit.
+Stitched replies must read like one natural message, not word salad; one perfect candidate beats a \
+clumsy combination. Never change words inside a piece. Never attack identity (race, religion, gender, \
+sexuality, disability), never anything sexual about minors, and never @mention anyone.
 
-Reply with JSON only: {"parts": [{"id": int, "text": "exact chunk, or omit text for the whole message"}]}"""
+Reply with JSON only: {"parts": [{"id": int, "text": "exact chunk, or omit for the whole message", \
+"glue": "optional joining words"}]}"""
 
 
 def _chat_block(chat: list[Turn]) -> str:
@@ -267,23 +274,31 @@ def _chat_block(chat: list[Turn]) -> str:
 
 
 async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], target: Turn,
-                        chat: list[Turn] = (), said: str | None = None) -> str | None:
-    """The best reply to `target` made from real server messages; AI stitches, offline picks. Never raises."""
-    candidates = [text for _, text in ranked[:COMPOSE_CANDIDATES]]
+                        chat: list[Turn] = (), said: str | None = None, tone: str = DEFAULT_TONE,
+                        remixed: list[str] = ()) -> str | None:
+    """The best reply to `target` in the server's words and the chat's tone. Never raises.
+
+    With AI, real messages and Markov `remixed` lines are stitched together; offline, the
+    best-ranked line is used.
+    """
+    banned = {target.text} | ({said} if said else set())
+    remix_set = set(remixed)
+    real = [text for _, text in ranked if text not in remix_set]
+    candidates = real[:COMPOSE_CANDIDATES - len(remix_set)] + list(remixed)
     if not candidates:
         return None
-    banned = {target.text} | ({said} if said else set())
     if settings.ai_provider != "none":
         situation = (f"SYKE SAID: {said[:300]}\nTHEY REPLIED (TARGET): " if said
                      else "SYKE is jumping into the chat. TARGET (latest message): ")
-        numbered = "\n".join(f"[{i}] {' '.join(text.split())[:220]}" for i, text in enumerate(candidates))
+        numbered = "\n".join(f"[{i}]{' (remix)' if text in remix_set else ''} {' '.join(text.split())[:220]}"
+                             for i, text in enumerate(candidates))
         prompt = (f"RECENT CHAT:\n{_chat_block(chat)}\n\n{situation}{target.author[:24]}: {target.text[:300]}"
-                  f"\n\nCANDIDATES (best keyword matches first):\n{numbered}")
+                  f"\n\nTONE: {tone}\n\nCANDIDATES (best matches first, remixes last):\n{numbered}")
         try:
             if settings.ai_provider == "openai":
-                answer = await _call_openai(settings, COMPOSE_PROMPT, prompt, temperature=0.8)
+                answer = await _call_openai(settings, COMPOSE_PROMPT, prompt, temperature=0.9)
             else:
-                answer = await _call_anthropic(settings, COMPOSE_PROMPT, prompt, temperature=0.8)
+                answer = await _call_anthropic(settings, COMPOSE_PROMPT, prompt, temperature=0.9)
             parts = _parse_json(answer).get("parts")
             if isinstance(parts, list):
                 reply = stitch(candidates, parts, banned)
