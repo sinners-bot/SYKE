@@ -32,6 +32,7 @@ with `!prefix mention`.
 | `!profile [@member]` | everyone | Full personality report (yourself if no member). Aliases: `!judge`, `!p`, `!me` |
 | `!iq [@member]` | everyone | A very unscientific IQ estimate (55-160) with a bell curve, what raised or lowered it (vocabulary, big words, message length, punctuation, serious takes, brainrot, caps-lock chaos), and their smartest and least smart messages. Also shown on `!profile`. Aliases: `!brain`, `!smarts` |
 | `!top [trait]` | everyone | Leaderboard for `funny`, `toxic`, `cringe`, `freaky`, `serious`, `chaotic`, `active` or `iq`. Aliases: `!leaderboard`, `!lb` |
+| `!ask <question>` | everyone | Ask SYKE anything, ChatGPT-style. Also works as `@SYKE <question>` and in DMs; reply to an answer to follow up. Aliases: `!ai`, `!gpt`, `!chat`, `!q`. Needs an AI key |
 | `!showcase` | everyone | A tour of every feature with live example cards. Aliases: `!features`, `!tour` |
 | `!about` | everyone | How many servers use SYKE, members watched, uptime. Aliases: `!stats`, `!info` |
 | `!invite` | everyone | Button to add SYKE to your own server |

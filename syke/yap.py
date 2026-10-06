@@ -15,7 +15,8 @@ ANSWER_START = re.compile(r"^(yes|yeah|yea|yep|ye|no|nah|nope|because|bc|cuz|cau
 MAX_PARTS = 3
 MAX_REPLY = 400
 FILLER = STOPWORDS | {"who's", "what's", "that's", "there's", "it'll", "anyone", "someone", "everyone",
-                      "lol", "lmao", "bro", "guys", "gonna", "wanna", "kinda", "literally", "actually"}
+                      "lol", "lmao", "bro", "guys", "gonna", "wanna", "kinda", "literally", "actually",
+                      "though", "thing", "stuff", "still", "even", "much", "okay", "now", "today"}
 SUFFIXES = ("ing", "ers", "ies", "ed", "es", "er", "ly", "s")
 
 
@@ -50,11 +51,11 @@ def query_weights(target: str, said: str | None = None, chat: list[Turn] = ()) -
     """How much each keyword matters: the message being answered most, recent chat least."""
     weights: dict[str, float] = {}
     for i, turn in enumerate(chat):
-        recency = 0.2 + 0.3 * (i + 1) / len(chat)
+        recency = 0.1 + 0.2 * (i + 1) / len(chat)
         for word in keywords(turn.text):
             weights[word] = max(weights.get(word, 0.0), recency)
     for word in keywords(said or ""):
-        weights[word] = max(weights.get(word, 0.0), 0.6)
+        weights[word] = max(weights.get(word, 0.0), 0.3)
     for word in keywords(target):
         weights[word] = 1.0
     return weights
@@ -83,7 +84,7 @@ def rank(candidates: list[str], weights: dict[str, float], target: str,
     question = is_question(target)
     scored = []
     for text, bag in zip(candidates, bags):
-        score = sum(weights[w] * math.log(1 + n / df[w]) for w in bag & weights.keys())
+        score = sum(weights[w] * (1 + math.log(n / df[w])) for w in bag & weights.keys())
         if question:
             lowered = text.strip().lower()
             if ANSWER_START.match(lowered):
