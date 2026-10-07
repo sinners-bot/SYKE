@@ -30,7 +30,7 @@ from .scanner import Scanner, to_msg
 from .showcase import ShowcaseView, tour_page
 from .storage import Storage
 from .traits import TRAIT_META, TRAITS
-from .yap import Turn, detect_tone, query_weights, rank, remixes, search_terms
+from .yap import Turn, detect_tone, folded, query_weights, rank, remixes, search_terms
 
 log = logging.getLogger("syke")
 
@@ -57,6 +57,7 @@ YAP_CONTEXT = 8
 YAP_TONED = 25
 YAP_CHAIN_SIZE = 4000
 YAP_CHAIN_TTL = 600
+YAP_RECENT = 16
 ASK_TAG = "SYKE AI"
 ASK_COOLDOWN = 3
 ASK_MEMORY = 500
@@ -216,6 +217,7 @@ class Syke(commands.Bot):
         self._warmed = False
         self._last_yap: dict[int, float] = {}
         self._last_comeback: dict[tuple[int, int], float] = {}
+        self._recent_yaps: dict[int, list[str]] = {}
         self._last_ask: dict[int, float] = {}
         self._asks: dict[int, list[dict]] = {}
         self._chains: dict[int, tuple[float, object]] = {}
@@ -469,15 +471,28 @@ class Syke(commands.Bot):
         return self.usable_lines(guild_id, pool, exclude), labelled
 
     def usable_lines(self, guild_id: int, lines: list[str], exclude: set[str]) -> list[str]:
-        seen = {" ".join(e.lower().split()) for e in exclude}
+        seen = {folded(e) for e in exclude}
         out = []
         for text in lines:
-            key = " ".join(text.lower().split())
+            key = folded(text)
             if key in seen or len(text.split()) < 2 or self.is_command_text(guild_id, text):
                 continue
             seen.add(key)
             out.append(text)
         return out
+
+    def remember_yap(self, channel_id: int, text: str) -> None:
+        """Keep the last few lines SYKE said in this channel so the next one can be different."""
+        if not text or not text.strip():
+            return
+        recent = self._recent_yaps.setdefault(channel_id, [])
+        key = folded(text)
+        recent[:] = [t for t in recent if folded(t) != key]
+        recent.append(text)
+        del recent[:-YAP_RECENT]
+
+    def recent_yaps(self, channel_id: int) -> list[str]:
+        return list(self._recent_yaps.get(channel_id, ()))
 
     async def server_chain(self, guild_id: int):
         """A Markov chain of the whole server's stored messages, rebuilt every few minutes."""
@@ -496,16 +511,25 @@ class Syke(commands.Bot):
         chat = await self.recent_chat(message, YAP_CONTEXT if said else YAP_CONTEXT // 2)
         tone = detect_tone(message.content, chat)
         weights = query_weights(message.content, said, chat)
-        exclude = {message.content} | ({said} if said else set())
-        pool, labelled = self.yap_pool(guild_id, weights, tone, exclude)
-        remixed = self.usable_lines(guild_id, remixes(await self.server_chain(guild_id), weights, tone), exclude | set(pool))
-        ranked = rank(pool + remixed, weights, message.content, tone=tone,
-                      labelled=set(labelled), remixed=set(remixed))
+        hard = {message.content} | ({said} if said else set())
+        used = hard | {t.text for t in chat} | set(self.recent_yaps(message.channel.id))
+        ranked, remixed = await self.rank_yap(guild_id, weights, tone, message.content, used)
+        if not ranked:
+            ranked, remixed = await self.rank_yap(guild_id, weights, tone, message.content, hard)
         if not ranked:
             return None
         log.info("Yap in %s: tone %s, %d candidates (%d remixes)", guild_id, tone, len(ranked), len(remixed))
         return await compose_reply(self.settings, ranked, Turn(author_name(message.author), message.content),
-                                   chat, said, tone, remixed)
+                                   chat, said, tone, remixed, avoid=list(used))
+
+    async def rank_yap(self, guild_id: int, weights: dict[str, float], tone: str, target: str,
+                       exclude: set[str]) -> tuple[list[tuple[float, str]], list[str]]:
+        pool, labelled = self.yap_pool(guild_id, weights, tone, exclude)
+        remixed = self.usable_lines(guild_id, remixes(await self.server_chain(guild_id), weights, tone),
+                                    exclude | set(pool))
+        ranked = rank(pool + remixed, weights, target, tone=tone,
+                      labelled=set(labelled), remixed=set(remixed))
+        return ranked, remixed
 
     async def recent_chat(self, message: discord.Message, limit: int = YAP_CONTEXT) -> list[Turn]:
         """The last few messages before `message`, oldest first, for context."""
@@ -535,6 +559,7 @@ class Syke(commands.Bot):
         if reply:
             with contextlib.suppress(discord.HTTPException):
                 await message.reply(reply, mention_author=False)
+                self.remember_yap(message.channel.id, reply)
 
     def is_command_text(self, guild_id: int, text: str) -> bool:
         text = text.lstrip()
@@ -545,15 +570,23 @@ class Syke(commands.Bot):
             starts |= {f"<@{self.user.id}>", f"<@!{self.user.id}>"}
         return any(text.startswith(s) for s in starts)
 
-    def pick_yap(self, guild_id: int, exclude_id: int = 0) -> str | None:
-        for text in self.storage.random_messages(guild_id, 15, exclude_id):
-            if len(text.split()) >= 3 and not self.is_command_text(guild_id, text):
-                return text
-        return None
+    def pick_yap(self, guild_id: int, exclude_id: int = 0, exclude: set[str] = frozenset()) -> str | None:
+        seen = {folded(e) for e in exclude}
+        fallback = None
+        for text in self.storage.random_messages(guild_id, 40, exclude_id):
+            if len(text.split()) < 3 or self.is_command_text(guild_id, text):
+                continue
+            if folded(text) in seen:
+                fallback = fallback or text
+                continue
+            return text
+        return fallback
 
     async def contextual_yap(self, message: discord.Message) -> str | None:
         """Something in the server's words that fits what's being talked about; random if nothing does."""
-        return await self.build_yap(message) or self.pick_yap(message.guild.id, exclude_id=message.id)
+        used = set(self.recent_yaps(message.channel.id)) | {message.content}
+        return await self.build_yap(message) or self.pick_yap(
+            message.guild.id, exclude_id=message.id, exclude=used)
 
     async def maybe_yap(self, message: discord.Message) -> None:
         """In yap channels, now and then answer chat with something a member said in the past."""
@@ -570,6 +603,7 @@ class Syke(commands.Bot):
             return
         with contextlib.suppress(discord.HTTPException):
             await message.channel.send(line)
+            self.remember_yap(message.channel.id, line)
 
     def prefix_for(self, guild_id: int) -> str:
         if guild_id not in self._prefixes:

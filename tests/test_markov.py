@@ -345,12 +345,37 @@ def test_replies_to_yaps_get_a_matching_comeback(lab, monkeypatch):
     run(bot.answer_yap_reply(message, yap.content))
     assert len(replies) == 1
     assert "pizza" in replies[0] and replies[0] != "memes are so much fun"
+    first = replies[0]
 
     run(bot.answer_yap_reply(message, yap.content))
     assert len(replies) == 1, "per-user cooldown"
 
+    bot._last_comeback.clear()
+    again, more = reply_message(6, yap, text="what about pizza though")
+    run(bot.answer_yap_reply(again, yap.content))
+    assert len(more) == 1
+    assert more[0] != first and more[0] != yap.content, "don't reuse the last comeback"
+
     bot.storage.set_yap(42, 1, False)
     assert run(bot.replied_yap(reply_message(5, yap)[0])) is None
+
+
+def test_yap_replies_keep_changing(lab):
+    cog, guild, _ = lab
+    bot = cog.bot
+    run(bot.analyze(guild))
+    bot.storage.set_yap(42, 1, True)
+    yap = types.SimpleNamespace(id=5000, content="memes are so much fun", embeds=[],
+                                author=types.SimpleNamespace(id=999))
+
+    seen = []
+    for i in range(4):
+        bot._last_comeback.clear()
+        message, replies = reply_message(20 + i, yap, text="what about pizza though")
+        run(bot.answer_yap_reply(message, yap.content))
+        assert replies, f"expected a reply on turn {i}"
+        seen.append(replies[0])
+    assert len(set(seen)) == len(seen), seen
 
 
 def test_scanme_adds_older_messages_to_profile(lab):
@@ -467,3 +492,27 @@ def test_compose_prompt_has_tone_and_remixes(monkeypatch):
     assert reply == "ur aim is trash plus skill issue tbh"
     assert "TONE: toxic" in seen["user"] and "[1] (remix) skill issue tbh" in seen["user"]
     assert "savage trash talk" in seen["system"]
+    assert "Never repeat a line SYKE already said" in seen["system"]
+
+
+def test_compose_reply_skips_recent_lines(monkeypatch):
+    from syke import ai
+    from syke.yap import Turn
+
+    settings = replace(load_settings(), ai_provider="none")
+    ranked = [(2.0, "pizza is elite"), (1.0, "touch grass"), (0.1, "no way")]
+    target = Turn("Mira", "pizza?")
+    assert run(ai.compose_reply(settings, ranked, target, avoid=["pizza is elite"])) == "touch grass"
+
+    settings = replace(load_settings(), ai_provider="openai", openai_api_key="k")
+    seen = {}
+
+    async def fake_openai(s, system, user, temperature=1.0):
+        seen["user"] = user
+        return '{"parts": [{"id": 0}]}'
+
+    monkeypatch.setattr(ai, "_call_openai", fake_openai)
+    reply = run(ai.compose_reply(settings, ranked, target, said="hello", avoid=["pizza is elite"]))
+    assert reply == "touch grass"
+    assert "SYKE ALREADY SAID" in seen["user"] and "pizza is elite" in seen["user"]
+    assert "[0] pizza is elite" not in seen["user"]
