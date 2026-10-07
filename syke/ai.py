@@ -15,7 +15,7 @@ from .profile import Profile
 from .roast import fallback_summary
 from .stats import CUSTOM_EMOJI_RE
 from .traits import HIGHLIGHT_TRAITS, TRAITS
-from .yap import DEFAULT_TONE, Turn, offline_pick, stitch
+from .yap import DEFAULT_TONE, Turn, folded, offline_pick, stitch
 
 log = logging.getLogger("syke.ai")
 
@@ -262,8 +262,9 @@ nails the TONE:
 - funny: a joke, an absurd twist, perfectly timed banter.
 - freaky: suggestive innuendo, down-bad flirting, unhinged thirst; PG-13, never explicit.
 Stitched replies must read like one natural message, not word salad; one perfect candidate beats a \
-clumsy combination. Never change words inside a piece. Never attack identity (race, religion, gender, \
-sexuality, disability), never anything sexual about minors, and never @mention anyone.
+clumsy combination. Never change words inside a piece. Never repeat a line SYKE already said in this \
+conversation — pick a different candidate or a fresh stitch. Never attack identity (race, religion, \
+gender, sexuality, disability), never anything sexual about minors, and never @mention anyone.
 
 Reply with JSON only: {"parts": [{"id": int, "text": "exact chunk, or omit for the whole message", \
 "glue": "optional joining words"}]}"""
@@ -275,16 +276,19 @@ def _chat_block(chat: list[Turn]) -> str:
 
 async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], target: Turn,
                         chat: list[Turn] = (), said: str | None = None, tone: str = DEFAULT_TONE,
-                        remixed: list[str] = ()) -> str | None:
+                        remixed: list[str] = (), avoid: list[str] = ()) -> str | None:
     """The best reply to `target` in the server's words and the chat's tone. Never raises.
 
     With AI, real messages and Markov `remixed` lines are stitched together; offline, the
-    best-ranked line is used.
+    best-ranked line is used. `avoid` is recent SYKE lines that must not be reused.
     """
-    banned = {target.text} | ({said} if said else set())
+    banned = {target.text} | ({said} if said else set()) | set(avoid)
+    banned_keys = {folded(t) for t in banned if t}
     remix_set = set(remixed)
     real = [text for _, text in ranked if text not in remix_set]
-    candidates = real[:COMPOSE_CANDIDATES - len(remix_set)] + list(remixed)
+    raw = real[:COMPOSE_CANDIDATES - len(remix_set)] + list(remixed)
+    fresh = [text for text in raw if folded(text) not in banned_keys]
+    candidates = fresh or raw
     if not candidates:
         return None
     if settings.ai_provider != "none":
@@ -294,6 +298,9 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
                              for i, text in enumerate(candidates))
         prompt = (f"RECENT CHAT:\n{_chat_block(chat)}\n\n{situation}{target.author[:24]}: {target.text[:300]}"
                   f"\n\nTONE: {tone}\n\nCANDIDATES (best matches first, remixes last):\n{numbered}")
+        if avoid:
+            already = "\n".join(f"- {' '.join(t.split())[:200]}" for t in avoid if t)
+            prompt += f"\n\nSYKE ALREADY SAID (do not repeat or lightly rephrase):\n{already}"
         try:
             if settings.ai_provider == "openai":
                 answer = await _call_openai(settings, COMPOSE_PROMPT, prompt, temperature=0.9)
@@ -307,5 +314,5 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
             log.warning("AI yap reply unusable: %r", answer[:200])
         except Exception:
             log.exception("AI yap reply failed; matching keywords instead")
-    usable = [(score, text) for score, text in ranked if text not in banned]
-    return offline_pick(usable)
+    usable = [(score, text) for score, text in ranked if folded(text) not in banned_keys]
+    return offline_pick(usable) or offline_pick(ranked)

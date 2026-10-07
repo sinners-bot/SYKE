@@ -43,6 +43,11 @@ class Turn:
     text: str
 
 
+def folded(text: str) -> str:
+    """Lowercased, whitespace-collapsed form used to tell two lines apart."""
+    return " ".join(text.lower().split())
+
+
 def stem(word: str) -> str:
     word = word.strip("'")
     if word.endswith("'s"):
@@ -117,7 +122,7 @@ def rank(candidates: list[str], weights: dict[str, float], target: str,
             score += min(tone_scores(text, labels)[tone], 2.5) * TONE_BOOST
         if text in remixed:
             score -= REMIX_PENALTY
-        scored.append((score + rng.random() * 0.15, text))
+        scored.append((score + rng.random() * 0.4, text))
     scored.sort(key=lambda pair: pair[0], reverse=True)
     return scored
 
@@ -179,7 +184,7 @@ def stitch(candidates: list[str], parts: list, banned: set[str] = frozenset()) -
     reply = " ".join(pieces).strip()
     if not reply or len(reply) > MAX_REPLY:
         return None
-    if " ".join(reply.lower().split()) in {" ".join(b.lower().split()) for b in banned}:
+    if folded(reply) in {folded(b) for b in banned}:
         return None
     return reply
 
