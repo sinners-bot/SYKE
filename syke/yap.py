@@ -10,8 +10,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from .lexicon import (CHAT_SLANG, FREAKY_PHRASES, FREAKY_WORDS, LAUGH_PHRASES, LAUGH_WORDS, STOPWORDS,
-                      TOXIC_PHRASES, TOXIC_WORDS)
+from .lexicon import CHAT_SLANG, FREAKY_WORDS, LAUGH_WORDS, STOPWORDS, TOXIC_WORDS
 from .markov import MarkovChain, build_chain
 from .models import Msg
 from .traits import score_message
@@ -24,14 +23,16 @@ URL = re.compile(r"https?://", re.IGNORECASE)
 VOCAB_STRIP = " .,!?;:()[]{}\"“”*_~`|…"
 PINGS = re.compile(r"@(everyone|here)\b|<@[!&]?\d+>")
 SPEAKER_TAG = re.compile(r"^\**(syke|me|reply)\**\s*:\s*", re.IGNORECASE)
-BOT_TELLS = re.compile(r"\b(as an ai|language model|i'?m (just )?a bot|i am (just )?a bot|i'?m syke|i am syke)\b",
-                       re.IGNORECASE)
+BOT_TELLS = re.compile(
+    r"\b(as an ai|language model|i'?m (just )?a bot|i am (just )?a bot|i'?m syke|i am syke|"
+    r"great question|that's a good question|i would say|in conclusion)\b",
+    re.IGNORECASE)
 COPY_RUN = 5
-VOCAB_POOL = 400
-VOCAB_WORDS = 60
-VOCAB_SLANG = 30
+VOCAB_POOL = 500
+VOCAB_WORDS = 80
+VOCAB_SLANG = 36
 VOCAB_SLANG_MIN = 18
-VOCAB_PHRASES = 8
+VOCAB_TOPIC = 40
 VOCAB_EMOJIS = 10
 TONES = ("toxic", "funny", "freaky")
 DEFAULT_TONE = "funny"
@@ -49,16 +50,14 @@ FILLER = STOPWORDS | {"who's", "what's", "that's", "there's", "it'll", "anyone",
                       "lol", "lmao", "bro", "guys", "gonna", "wanna", "kinda", "literally", "actually",
                       "though", "thing", "stuff", "still", "even", "much", "okay", "now", "today"}
 SUFFIXES = ("ing", "ers", "ies", "ed", "es", "er", "ly", "s")
-TONE_LEXICON = {
-    "toxic": (TOXIC_WORDS, TOXIC_PHRASES),
-    "funny": (LAUGH_WORDS, LAUGH_PHRASES),
-    "freaky": (FREAKY_WORDS, FREAKY_PHRASES),
+TONE_WORDS = {
+    "toxic": TOXIC_WORDS,
+    "funny": LAUGH_WORDS,
+    "freaky": FREAKY_WORDS,
 }
 # Lexicon entries that help spot toxicity but must never be handed to the AI to say.
 NEVER_OFFER = {"retard", "retarded", "cunt", "kys", "kill", "incel", "yourself", "fatass", "ugly",
                "hentai", "ahegao", "nudes", "onlyfans", "breed", "bred", "choke", "degrade"}
-NEVER_OFFER_PHRASES = {"go back to", "on my face", "spit in", "rail me", "send pics", "send feet", "nobody likes",
-                       "no one likes"}
 
 
 @dataclass
@@ -174,11 +173,11 @@ class Voice:
 
 @dataclass
 class Vocab:
-    """Words offered to the AI for one reply, all taken from the server or the lexicon."""
+    """Words offered to the AI for one reply, taken from stored messages and the lexicon."""
     words: list[str]
     slang: list[str]
-    phrases: list[str]
     emojis: list[str]
+    topic: list[str] = field(default_factory=list)
 
 
 def _vocab_token(raw: str) -> str | None:
@@ -223,30 +222,41 @@ def _is_emoji(token: str) -> bool:
     return bool(CUSTOM_EMOJI_TAG.fullmatch(token)) or not any(c.isalnum() for c in token)
 
 
-def vocabulary(voice: Voice | None, tone: str, rng: random.Random | None = None) -> Vocab:
+def topic_words(counts: Counter, weights: dict[str, float], limit: int = VOCAB_TOPIC) -> list[str]:
+    """Stored-message words that overlap the conversation, strongest first."""
+    if not weights:
+        return []
+    scored: list[tuple[float, str]] = []
+    for word, n in counts.items():
+        if not word or word in FILLER or word in NEVER_OFFER or _is_emoji(word):
+            continue
+        key = word if word.startswith(("<", ":")) else stem(word)
+        weight = weights.get(key, 0.0) or weights.get(word, 0.0)
+        if weight:
+            scored.append((weight * (1 + math.log(1 + n)), word))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [word for _, word in scored[:limit]]
+
+
+def vocabulary(voice: Voice | None, tone: str, rng: random.Random | None = None,
+               weights: dict[str, float] | None = None, extra: Iterable[str] = ()) -> Vocab:
     """The server's own words, plus lexicon slang for `tone` (ones the server uses first)."""
     rng = rng or random.Random()
-    counts = voice.words if voice else Counter()
+    counts = Counter(voice.words) if voice else Counter()
+    if extra:
+        counts += server_words(extra)
     common = [w for w, n in counts.most_common(VOCAB_POOL)
               if n >= 2 and not _is_emoji(w) and len(w) >= 3 and w not in FILLER and w not in NEVER_OFFER]
-    words = rng.sample(common, min(VOCAB_WORDS, len(common)))
+    words = common[:VOCAB_WORDS]
 
-    tone_words, tone_phrases = TONE_LEXICON.get(tone, TONE_LEXICON[DEFAULT_TONE])
-    tone_words = {w for w in tone_words if w not in NEVER_OFFER}
-    tone_phrases = [p for p in tone_phrases if not NEVER_OFFER & set(p.split()) and p not in NEVER_OFFER_PHRASES]
+    tone_words = {w for w in TONE_WORDS.get(tone, TONE_WORDS[DEFAULT_TONE]) if w not in NEVER_OFFER}
     lexicon = tone_words | CHAT_SLANG
     used = sorted((w for w in lexicon if counts[w]), key=lambda w: -counts[w])[:VOCAB_SLANG]
     unused = sorted(w for w in tone_words if not counts[w] and w.isalpha())
     slang = used + rng.sample(unused, min(max(VOCAB_SLANG_MIN - len(used), 4), len(unused)))
 
-    phrases = [p for p in tone_phrases if all(counts[w] for w in p.split())]
-    if len(phrases) < VOCAB_PHRASES:
-        rest = [p for p in tone_phrases if p not in phrases]
-        phrases += rng.sample(rest, min(VOCAB_PHRASES - len(phrases), len(rest)))
-    phrases = rng.sample(phrases, min(VOCAB_PHRASES, len(phrases)))
-
     emojis = [w for w, n in counts.most_common() if _is_emoji(w) and n >= 2][:VOCAB_EMOJIS]
-    return Vocab(words, slang, phrases, emojis)
+    return Vocab(words, slang, emojis, topic_words(counts, weights or {}))
 
 
 def style_hint(voice: Voice | None) -> str:
@@ -298,6 +308,11 @@ def tidy_reply(text, sources: Iterable[str] = (), banned: Iterable[str] = (),
         if text.endswith(".") and not text.endswith(".."):
             text = text[:-1].rstrip()
     if not text or len(text.split()) < 2:
+        return None
+    cap = 24 if voice is None or not voice.length else max(12, min(28, voice.length * 3 + 6))
+    if len(text.split()) > cap:
+        return None
+    if (voice is None or voice.periods < 0.2) and len(re.findall(r"[.!?]+(?:\s+\S)", text)) >= 2:
         return None
     first = text.split()[0]
     if (voice is None or voice.lowercase >= 0.5) and first[0].isupper() and not (len(first) > 1 and first.isupper()):

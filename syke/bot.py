@@ -51,11 +51,11 @@ SERVER_LIST_LIMIT = 20
 COLLECT_DEFAULT = 5000
 COLLECT_MAX = 20000
 YAP_REPLY_COOLDOWN = 4
-YAP_SEARCH = 80
-YAP_RANDOM = 25
+YAP_SEARCH = 150
+YAP_RANDOM = 40
 YAP_CONTEXT = 8
-YAP_TONED = 25
-YAP_CHAIN_SIZE = 4000
+YAP_TONED = 40
+YAP_CHAIN_SIZE = 15000
 YAP_CHAIN_TTL = 600
 YAP_RECENT = 16
 ASK_TAG = "SYKE AI"
@@ -499,7 +499,7 @@ class Syke(commands.Bot):
         cached = self._voices.get(guild_id)
         if cached and time.monotonic() - cached[0] < YAP_CHAIN_TTL:
             return cached[1]
-        texts = [t for t in self.storage.random_messages(guild_id, YAP_CHAIN_SIZE)
+        texts = [t for t in self.storage.corpus_contents(guild_id, YAP_CHAIN_SIZE)
                  if not self.is_command_text(guild_id, t)]
         voice = await asyncio.to_thread(build_voice, texts) if texts else Voice(None)
         self._voices[guild_id] = (time.monotonic(), voice)
@@ -521,7 +521,7 @@ class Syke(commands.Bot):
         log.info("Yap in %s: tone %s, %d candidates (%d remixes)", guild_id, tone, len(ranked), len(remixed))
         return await compose_reply(self.settings, ranked, Turn(author_name(message.author), message.content),
                                    chat, said, tone, remixed, avoid=list(used),
-                                   voice=await self.server_voice(guild_id))
+                                   voice=await self.server_voice(guild_id), weights=weights)
 
     async def rank_yap(self, guild_id: int, weights: dict[str, float], tone: str, target: str,
                        exclude: set[str]) -> tuple[list[tuple[float, str]], list[str]]:

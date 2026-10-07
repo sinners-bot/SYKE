@@ -208,6 +208,15 @@ class Storage:
             "SELECT author_id, content FROM corpus WHERE guild_id = ? AND author_id = ?", (guild_id, author_id)
         )
 
+    def corpus_contents(self, guild_id: int, limit: int) -> list[str]:
+        """Newest stored messages, for building the server's vocabulary and Markov voice."""
+        rows = self._read(
+            "SELECT content FROM corpus WHERE guild_id = ? AND length(content) BETWEEN 3 AND 300 "
+            "ORDER BY rowid DESC LIMIT ?",
+            (guild_id, limit),
+        )
+        return [r[0] for r in rows]
+
     def random_messages(self, guild_id: int, count: int, exclude_id: int = 0) -> list[str]:
         rows = self._read(
             "SELECT content FROM corpus WHERE guild_id = ? AND message_id != ? "

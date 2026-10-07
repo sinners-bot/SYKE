@@ -41,6 +41,8 @@ def test_corpus_storage_and_optout_purge(tmp_path):
     store.set_optout(1, 100, True)
     assert store.corpus(1, 100) == []
     assert store.corpus_size(1) == (1, 1)
+    store.add_corpus(1, [(12, 5, 300, "pizza is elite"), (13, 5, 300, "touch grass now")])
+    assert store.corpus_contents(1, 2) == ["touch grass now", "pizza is elite"]
 
 
 class FakeChannel(discord.TextChannel):
@@ -271,22 +273,25 @@ def test_tidy_reply_sounds_like_chat_and_rejects_copies():
     assert tidy_reply('"bro what"', sources) == "bro what"
     assert tidy_reply("SYKE: mid pizza", sources) == "mid pizza"
     assert tidy_reply("ok", sources) is None, "too short"
+    assert tidy_reply("this is a long assistant paragraph that explains the joke in way too many words for chat and keeps going until it sounds like a bot", sources) is None
+    assert tidy_reply("first thought. second thought. third.", sources) is None
     assert tidy_reply({"reply": "no"}) is None
 
 
 def test_vocabulary_uses_server_words_and_lexicon():
     from syke.lexicon import TOXIC_WORDS
-    from syke.yap import NEVER_OFFER, build_voice, style_hint, vocabulary
+    from syke.yap import NEVER_OFFER, build_voice, query_weights, style_hint, vocabulary
 
     texts = ["ngl pizza is elite", "ngl pizza is mid", "bro the pizza tonight is crazy",
              "we eating pizza ngl", "pizza is actually so good", "<:kek:1> pizza lmao",
              "<:kek:1> bro what"] * 3
     voice = build_voice(texts)
-    vocab = vocabulary(voice, "funny", rng=random.Random(0))
+    vocab = vocabulary(voice, "funny", rng=random.Random(0), weights=query_weights("pizza tonight?"))
     assert "pizza" in vocab.words
+    assert "pizza" in vocab.topic
     assert "ngl" in vocab.slang
     assert "<:kek:1>" in vocab.emojis
-    assert NEVER_OFFER.isdisjoint(vocab.words + vocab.slang)
+    assert NEVER_OFFER.isdisjoint(vocab.words + vocab.slang + vocab.topic)
     toxic = vocabulary(voice, "toxic", rng=random.Random(1))
     assert any(w in TOXIC_WORDS for w in toxic.slang)
     assert "kys" not in toxic.slang and "retard" not in toxic.slang
@@ -306,7 +311,10 @@ def test_compose_reply_writes_original_and_falls_back(monkeypatch):
         assert "THEY REPLIED (TARGET): Mira: pizza?" in user and "[1] touch grass" in user
         assert "Zyro: who's hungry" in user
         assert "VOCABULARY:" in user and "TYPING:" in user
+        assert "lexicon slang:" in user
+        assert "phrases that fit" not in user
         assert "Write ONE new, original message" in system
+        assert "AMMO" in user
         return '{"reply": "Nah pineapple on pizza is a war crime ngl."}'
 
     monkeypatch.setattr(ai, "_call_openai", fake_openai)
@@ -520,6 +528,8 @@ def test_compose_prompt_has_tone_and_remixes(monkeypatch):
     assert reply == "ur washed at this game ngl"
     assert "TONE: toxic" in seen["user"] and "[1] (remix) skill issue tbh" in seen["user"]
     assert "VOCABULARY:" in seen["user"] and "TYPING:" in seen["user"]
+    assert "lexicon slang:" in seen["user"] and "phrases that fit" not in seen["user"]
+    assert "AMMO" in seen["user"]
     assert "savage trash talk" in seen["system"]
     assert "Never repeat" in seen["system"] or "never repeat" in seen["system"].lower()
 

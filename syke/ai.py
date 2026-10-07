@@ -15,13 +15,14 @@ from .profile import Profile
 from .roast import fallback_summary
 from .stats import CUSTOM_EMOJI_RE
 from .traits import HIGHLIGHT_TRAITS, TRAITS
-from .yap import DEFAULT_TONE, Turn, Vocab, Voice, folded, offline_pick, style_hint, tidy_reply, vocabulary
+from .yap import (DEFAULT_TONE, Turn, Vocab, Voice, folded, offline_pick, query_weights, style_hint,
+                  tidy_reply, vocabulary)
 
 log = logging.getLogger("syke.ai")
 
 SAMPLE_SIZE = 250
 AI_TIMEOUT_SECONDS = 30
-COMPOSE_CANDIDATES = 40
+COMPOSE_CANDIDATES = 60
 
 TRAIT_GUIDE = """Trait definitions (judge meaning and intent, not just keywords; sarcasm and \
 in-jokes count, a lone "lol" does not make someone funny):
@@ -246,27 +247,27 @@ async def write_roast(
 
 
 COMPOSE_PROMPT = """You are SYKE, a long-time regular in this Discord server. You are not an assistant \
-and you never talk like one. You get the recent chat, the TONE to hit, the server's VOCABULARY, how \
-people here TYPE, and numbered MESSAGES: real old messages from this server, plus some marked (remix) \
-that a Markov chain made from them.
+and you never talk like one. You get the recent chat, the TONE to hit, the server's VOCABULARY (words \
+mined from everything people here have said, plus lexicon slang), how people here TYPE, and numbered \
+AMMO: real stored messages from this server, plus some marked (remix) that a Markov chain made from them.
 
 Write ONE new, original message, the way the server's most quick-witted regular would type it right now.
-- The MESSAGES are ammunition, not a script. Steal their takes, running jokes, opinions, comebacks, \
-topics and references, then twist them into something nobody here has said yet. Never copy a message; \
-a few words from one is fine as a callback.
-- Talk with the server's words. Build the message from the VOCABULARY and from how the MESSAGES are \
-written: their slang, spelling, abbreviations and emojis. Pick their words over your own, and never \
-reach for words nobody here would use.
+- AMMO is ammunition, not a script and not a quote bank. Steal the take, the running joke, the opinion, \
+the comeback, the topic — then say it in your own words. Never copy a message, never stitch pieces \
+together, never paste a ready-made phrase.
+- Talk with this server's words. Build the line from VOCABULARY: topic words first, then words people \
+here actually use, then lexicon slang that fits the tone. Prefer single words over multi-word phrases. \
+Spell like they spell. Never reach for words nobody here would use.
 - React to the TARGET directly. Questions get an answer (a real one or a bait one), insults get a \
 comeback, jokes get played along with or one-upped, and pick up what's being talked about.
 - Nail the TONE:
   - toxic: savage trash talk, roast them back, petty and disrespectful.
   - funny: a joke, an absurd twist, perfectly timed banter.
   - freaky: suggestive innuendo, down-bad flirting, unhinged thirst; PG-13, never explicit.
-- Type like a person in chat, following TYPING: short, casual, abbreviations and slang welcome, \
-grammar optional. At most one emoji, and only one this server uses. No greetings, no hashtags, no \
-"what do you think?", no explaining the joke, no quotation marks around the message, no exclamation-mark \
-enthusiasm, never mention being a bot or an AI.
+- Type like a person on their phone, following TYPING: short, casual, slang, grammar optional. One \
+thought, not a paragraph. At most one emoji, and only one this server uses. No greetings, no hashtags, \
+no "what do you think?", no explaining the joke, no quotation marks around the message, no \
+exclamation-mark enthusiasm, never mention being a bot or an AI.
 - Never repeat or lightly rephrase something SYKE already said in this conversation.
 - Never attack identity (race, religion, gender, sexuality, disability), no slurs, never tell anyone \
 to hurt themselves, never anything sexual about minors, and never @mention anyone.
@@ -280,26 +281,26 @@ def _chat_block(chat: list[Turn]) -> str:
 
 def _vocab_block(vocab: Vocab) -> str:
     lines = []
+    if vocab.topic:
+        lines.append("about this topic: " + ", ".join(vocab.topic))
     if vocab.words:
         lines.append("words people here use: " + ", ".join(vocab.words))
     if vocab.slang:
-        lines.append("slang that fits the tone: " + ", ".join(vocab.slang))
-    if vocab.phrases:
-        lines.append("phrases that fit the tone: " + " / ".join(vocab.phrases))
+        lines.append("lexicon slang: " + ", ".join(vocab.slang))
     if vocab.emojis:
         lines.append("emojis people here use: " + " ".join(readable(e) for e in vocab.emojis))
-    return "\n".join(lines) or "(nothing yet: borrow from the MESSAGES)"
+    return "\n".join(lines) or "(borrow words from the AMMO messages)"
 
 
 async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], target: Turn,
                         chat: list[Turn] = (), said: str | None = None, tone: str = DEFAULT_TONE,
                         remixed: list[str] = (), avoid: list[str] = (), voice: Voice | None = None,
-                        rng: random.Random | None = None) -> str | None:
+                        rng: random.Random | None = None, weights: dict[str, float] | None = None) -> str | None:
     """The best reply to `target` in the server's words and the chat's tone. Never raises.
 
-    With AI, the matching messages and Markov `remixed` lines are material for a new message
-    written from the server's `voice`; offline, the best-ranked line is used. `avoid` is recent
-    SYKE lines that must not be reused.
+    With AI, stored messages and Markov `remixed` lines are ammunition for a new message written
+    from the server's `voice` (vocabulary + lexicon words); offline, the best-ranked line is used.
+    `avoid` is recent SYKE lines that must not be reused.
     """
     banned = {target.text} | ({said} if said else set()) | set(avoid)
     banned_keys = {folded(t) for t in banned if t}
@@ -313,12 +314,12 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
     if settings.ai_provider != "none":
         situation = (f"SYKE SAID: {said[:300]}\nTHEY REPLIED (TARGET): " if said
                      else "SYKE is jumping into the chat. TARGET (latest message): ")
-        numbered = "\n".join(f"[{i}]{' (remix)' if text in remix_set else ''} {readable(' '.join(text.split()))[:220]}"
+        numbered = "\n".join(f"[{i}]{' (remix)' if text in remix_set else ''} {readable(' '.join(text.split()))[:160]}"
                              for i, text in enumerate(candidates))
-        vocab = vocabulary(voice, tone, rng)
+        vocab = vocabulary(voice, tone, rng, weights or query_weights(target.text, said, chat), candidates)
         prompt = (f"RECENT CHAT:\n{_chat_block(chat)}\n\n{situation}{target.author[:24]}: {target.text[:300]}"
                   f"\n\nTONE: {tone}\n\nTYPING: {style_hint(voice)}\n\nVOCABULARY:\n{_vocab_block(vocab)}"
-                  f"\n\nMESSAGES (best matches first, remixes last):\n{numbered}")
+                  f"\n\nAMMO (steal the take, never copy; best matches first, remixes last):\n{numbered}")
         if avoid:
             already = "\n".join(f"- {' '.join(t.split())[:200]}" for t in avoid if t)
             prompt += f"\n\nSYKE ALREADY SAID (do not repeat or lightly rephrase):\n{already}"
