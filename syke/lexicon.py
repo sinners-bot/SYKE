@@ -140,6 +140,16 @@ EMOJI_NAME_HINTS: dict[str, tuple[str, ...]] = {
                 "bigbrain", "galaxy", "monocle", "science", "smart", "notes", "teacher", "wise"),
 }
 
+# Everyday chat slang, not tied to a trait. Yap offers the ones a server actually uses to the AI.
+CHAT_SLANG = {
+    "ngl", "fr", "tbh", "lowkey", "highkey", "deadass", "istg", "ong", "icl", "fym", "smh",
+    "idk", "idc", "imo", "rn", "bc", "cuz", "ur", "u", "ya", "yall", "y'all", "bro", "bruh",
+    "dude", "nah", "naw", "yea", "ye", "yep", "nope", "aight", "ight", "bet", "fax", "facts",
+    "cap", "valid", "mid", "cooked", "crashout", "glazing", "glaze", "yapping", "yap", "ts",
+    "gng", "twin", "lil", "kinda", "sorta", "tho", "prolly", "def", "fs", "wym", "wdym", "hbu",
+    "gg", "ez", "w", "l", "ratio", "real", "bffr", "unc", "chat", "ain't", "finna", "tryna",
+}
+
 STOPWORDS = {
     "the", "and", "for", "you", "that", "this", "with", "are", "was", "but", "not",
     "have", "has", "had", "its", "it's", "just", "like", "what", "when", "where",

@@ -259,19 +259,42 @@ def test_ranking_prefers_rare_shared_keywords_and_answers():
     assert "pizza" in query_weights("pizzas!!")
 
 
-def test_stitch_only_uses_real_words():
-    from syke.yap import stitch
+def test_tidy_reply_sounds_like_chat_and_rejects_copies():
+    from syke.yap import tidy_reply
 
-    candidates = ["bro thinks he's him 💀 genuinely", "touch grass immediately", "pizza is elite"]
-    assert stitch(candidates, [{"id": 0, "text": "bro thinks he's him"}, {"id": 1}]) == \
-        "bro thinks he's him touch grass immediately"
-    assert stitch(candidates, [{"id": 0, "text": "thinks he"}]) == "thinks he's"
-    assert stitch(candidates, [{"id": 2, "text": "pizza is mid"}]) is None, "invented words"
-    assert stitch(candidates, [{"id": 9}]) is None
-    assert stitch(candidates, [{"id": 2}], banned={"Pizza  is elite"}) is None, "no parroting"
+    sources = ["nah pineapple pizza is a crime", "touch grass immediately"]
+    assert tidy_reply("Nah pineapple on it is wild ngl.", sources) == "nah pineapple on it is wild ngl"
+    assert tidy_reply("nah pineapple pizza is a crime", sources) is None, "verbatim quote"
+    assert tidy_reply("nah pineapple pizza is a crime honestly", sources) is None, "pasted source"
+    assert tidy_reply("hello @everyone", sources) is None
+    assert tidy_reply("As an AI I think pizza is good", sources) is None
+    assert tidy_reply('"bro what"', sources) == "bro what"
+    assert tidy_reply("SYKE: mid pizza", sources) == "mid pizza"
+    assert tidy_reply("ok", sources) is None, "too short"
+    assert tidy_reply({"reply": "no"}) is None
 
 
-def test_compose_reply_stitches_with_ai_and_falls_back(monkeypatch):
+def test_vocabulary_uses_server_words_and_lexicon():
+    from syke.lexicon import TOXIC_WORDS
+    from syke.yap import NEVER_OFFER, build_voice, style_hint, vocabulary
+
+    texts = ["ngl pizza is elite", "ngl pizza is mid", "bro the pizza tonight is crazy",
+             "we eating pizza ngl", "pizza is actually so good", "<:kek:1> pizza lmao",
+             "<:kek:1> bro what"] * 3
+    voice = build_voice(texts)
+    vocab = vocabulary(voice, "funny", rng=random.Random(0))
+    assert "pizza" in vocab.words
+    assert "ngl" in vocab.slang
+    assert "<:kek:1>" in vocab.emojis
+    assert NEVER_OFFER.isdisjoint(vocab.words + vocab.slang)
+    toxic = vocabulary(voice, "toxic", rng=random.Random(1))
+    assert any(w in TOXIC_WORDS for w in toxic.slang)
+    assert "kys" not in toxic.slang and "retard" not in toxic.slang
+    hint = style_hint(voice)
+    assert "lowercase" in hint and "words" in hint
+
+
+def test_compose_reply_writes_original_and_falls_back(monkeypatch):
     from syke import ai
     from syke.yap import Turn
 
@@ -282,16 +305,19 @@ def test_compose_reply_stitches_with_ai_and_falls_back(monkeypatch):
     async def fake_openai(s, system, user, temperature=1.0):
         assert "THEY REPLIED (TARGET): Mira: pizza?" in user and "[1] touch grass" in user
         assert "Zyro: who's hungry" in user
-        return '{"parts": [{"id": 0}, {"id": 1, "text": "touch grass"}]}'
+        assert "VOCABULARY:" in user and "TYPING:" in user
+        assert "Write ONE new, original message" in system
+        return '{"reply": "Nah pineapple on pizza is a war crime ngl."}'
 
     monkeypatch.setattr(ai, "_call_openai", fake_openai)
     chat = [Turn("Zyro", "who's hungry")]
-    assert run(ai.compose_reply(settings, ranked, target, chat, said="hello")) == "pizza is elite touch grass"
+    assert run(ai.compose_reply(settings, ranked, target, chat, said="hello")) == \
+        "nah pineapple on pizza is a war crime ngl"
 
-    async def invents(s, system, user, temperature=1.0):
-        return '{"parts": [{"id": 0, "text": "pizza is mid"}]}'
+    async def quotes(s, system, user, temperature=1.0):
+        return '{"reply": "pizza is elite"}'
 
-    monkeypatch.setattr(ai, "_call_openai", invents)
+    monkeypatch.setattr(ai, "_call_openai", quotes)
     assert run(ai.compose_reply(settings, ranked, target, chat, said="hello")) == "pizza is elite"
 
     async def broken(s, system, user, temperature=1.0):
@@ -439,13 +465,15 @@ def test_detect_tone_reads_the_vibe():
     assert detect_tone("ok", [Turn("a", "stfu you're so dumb"), Turn("b", "ur trash")]) == "toxic"
 
 
-def test_stitch_allows_a_little_glue():
-    from syke.yap import stitch
+def test_style_hint_reads_how_the_server_types():
+    from syke.yap import Voice, build_voice, style_hint
 
-    candidates = ["ur aim is trash", "skill issue tbh"]
-    assert stitch(candidates, [{"id": 0}, {"id": 1, "glue": "and also"}]) == "ur aim is trash and also skill issue tbh"
-    assert stitch(candidates, [{"id": 0, "glue": "this is way too many words"}]) is None
-    assert stitch(candidates, [{"id": 0, "glue": "@everyone"}]) is None
+    casual = build_voice(["pizza is mid ngl", "bro what", "nah we lost"])
+    assert "lowercase" in style_hint(casual) and "rarely ends with a period" in style_hint(casual)
+    assert "usually around" in style_hint(casual)
+    assert "short, casual" in style_hint(None)
+    stiff = Voice(chain=casual.chain, lowercase=0.1, periods=0.9, length=12)
+    assert "normal capitalisation" in style_hint(stiff) and "often ends with a period" in style_hint(stiff)
 
 
 def test_remixes_are_new_and_fit_topic_or_tone():
@@ -484,15 +512,16 @@ def test_compose_prompt_has_tone_and_remixes(monkeypatch):
 
     async def fake_openai(s, system, user, temperature=1.0):
         seen["user"], seen["system"] = user, system
-        return '{"parts": [{"id": 0}, {"id": 1, "glue": "plus"}]}'
+        return '{"reply": "ur washed at this game ngl"}'
 
     monkeypatch.setattr(ai, "_call_openai", fake_openai)
     ranked = [(2.0, "ur aim is trash"), (1.0, "skill issue tbh")]
     reply = run(ai.compose_reply(settings, ranked, Turn("Dex", "1v1 me"), [], "lol", "toxic", ["skill issue tbh"]))
-    assert reply == "ur aim is trash plus skill issue tbh"
+    assert reply == "ur washed at this game ngl"
     assert "TONE: toxic" in seen["user"] and "[1] (remix) skill issue tbh" in seen["user"]
+    assert "VOCABULARY:" in seen["user"] and "TYPING:" in seen["user"]
     assert "savage trash talk" in seen["system"]
-    assert "Never repeat a line SYKE already said" in seen["system"]
+    assert "Never repeat" in seen["system"] or "never repeat" in seen["system"].lower()
 
 
 def test_compose_reply_skips_recent_lines(monkeypatch):
@@ -509,10 +538,11 @@ def test_compose_reply_skips_recent_lines(monkeypatch):
 
     async def fake_openai(s, system, user, temperature=1.0):
         seen["user"] = user
-        return '{"parts": [{"id": 0}]}'
+        return '{"reply": "pineapple was a mistake ngl"}'
 
     monkeypatch.setattr(ai, "_call_openai", fake_openai)
     reply = run(ai.compose_reply(settings, ranked, target, said="hello", avoid=["pizza is elite"]))
-    assert reply == "touch grass"
+    assert reply == "pineapple was a mistake ngl"
     assert "SYKE ALREADY SAID" in seen["user"] and "pizza is elite" in seen["user"]
     assert "[0] pizza is elite" not in seen["user"]
+    assert "[0] touch grass" in seen["user"]

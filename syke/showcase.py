@@ -88,9 +88,8 @@ def tour_page(key: str, p: str) -> list[discord.Embed]:
         example.set_footer(text=f"{EXAMPLE_NOTE} • Markov chain • not a real quote")
         return [_page("🗣️ Mimic & yap", (
             f"`{p}mimic [@member]`: SYKE invents a message in someone's style from everything they've said.\n\n"
-            f"`{p}yap on` (admins): now and then SYKE answers chat in that channel with something a member "
-            "really said in the past. **Reply to it** and SYKE answers back with another message that fits, "
-            "picked by AI."
+            f"`{p}yap on` (admins): now and then SYKE chimes in using this server's slang and running jokes. "
+            "**Reply to it** and SYKE answers back in the same voice, written from what people here actually say."
         )), example]
     if key == "ask":
         example = discord.Embed(colour=BRAND, description=(

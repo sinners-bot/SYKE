@@ -30,7 +30,7 @@ from .scanner import Scanner, to_msg
 from .showcase import ShowcaseView, tour_page
 from .storage import Storage
 from .traits import TRAIT_META, TRAITS
-from .yap import Turn, detect_tone, folded, query_weights, rank, remixes, search_terms
+from .yap import Turn, Voice, build_voice, detect_tone, folded, query_weights, rank, remixes, search_terms
 
 log = logging.getLogger("syke")
 
@@ -220,7 +220,7 @@ class Syke(commands.Bot):
         self._recent_yaps: dict[int, list[str]] = {}
         self._last_ask: dict[int, float] = {}
         self._asks: dict[int, list[dict]] = {}
-        self._chains: dict[int, tuple[float, object]] = {}
+        self._voices: dict[int, tuple[float, Voice]] = {}
         self._history_version: dict[int, int] = {}
         self._last_summary: dict[tuple[int, int], str] = {}
         self._deep_scans: set[tuple[int, int]] = set()
@@ -494,16 +494,16 @@ class Syke(commands.Bot):
     def recent_yaps(self, channel_id: int) -> list[str]:
         return list(self._recent_yaps.get(channel_id, ()))
 
-    async def server_chain(self, guild_id: int):
-        """A Markov chain of the whole server's stored messages, rebuilt every few minutes."""
-        cached = self._chains.get(guild_id)
+    async def server_voice(self, guild_id: int) -> Voice:
+        """How the whole server talks (Markov chain, vocabulary, typing style), rebuilt every few minutes."""
+        cached = self._voices.get(guild_id)
         if cached and time.monotonic() - cached[0] < YAP_CHAIN_TTL:
             return cached[1]
         texts = [t for t in self.storage.random_messages(guild_id, YAP_CHAIN_SIZE)
                  if not self.is_command_text(guild_id, t)]
-        chain = await asyncio.to_thread(build_chain, texts) if texts else None
-        self._chains[guild_id] = (time.monotonic(), chain)
-        return chain
+        voice = await asyncio.to_thread(build_voice, texts) if texts else Voice(None)
+        self._voices[guild_id] = (time.monotonic(), voice)
+        return voice
 
     async def build_yap(self, message: discord.Message, said: str | None = None) -> str | None:
         """A line in the server's own words that fits the chat's topic and tone (toxic, funny or freaky)."""
@@ -520,12 +520,14 @@ class Syke(commands.Bot):
             return None
         log.info("Yap in %s: tone %s, %d candidates (%d remixes)", guild_id, tone, len(ranked), len(remixed))
         return await compose_reply(self.settings, ranked, Turn(author_name(message.author), message.content),
-                                   chat, said, tone, remixed, avoid=list(used))
+                                   chat, said, tone, remixed, avoid=list(used),
+                                   voice=await self.server_voice(guild_id))
 
     async def rank_yap(self, guild_id: int, weights: dict[str, float], tone: str, target: str,
                        exclude: set[str]) -> tuple[list[tuple[float, str]], list[str]]:
         pool, labelled = self.yap_pool(guild_id, weights, tone, exclude)
-        remixed = self.usable_lines(guild_id, remixes(await self.server_chain(guild_id), weights, tone),
+        voice = await self.server_voice(guild_id)
+        remixed = self.usable_lines(guild_id, remixes(voice.chain, weights, tone),
                                     exclude | set(pool))
         ranked = rank(pool + remixed, weights, target, tone=tone,
                       labelled=set(labelled), remixed=set(remixed))
@@ -548,7 +550,7 @@ class Syke(commands.Bot):
         return turns[::-1]
 
     async def answer_yap_reply(self, message: discord.Message, said: str) -> None:
-        """Someone answered a yap: reply with real server messages that fit, picked and stitched by AI."""
+        """Someone answered a yap: reply in the server's voice, written from stored messages."""
         key = (message.channel.id, message.author.id)
         now = time.monotonic()
         if now - self._last_comeback.get(key, -1e9) < YAP_REPLY_COOLDOWN:
@@ -1192,7 +1194,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"`{p}timezone <zone>` — for late-night detection, e.g. `{p}timezone Europe/London`\n"
                 f"`{p}rescan` — re-read channels now\n"
                 f"`{p}collect [#channel] [limit]` — read more history for mimic/yap\n"
-                f"`{p}yap on|off` — SYKE chimes in with old messages here; reply to it and it answers back\n"
+                f"`{p}yap on|off` — SYKE chimes in in the server's voice; reply to it and it answers back\n"
                 f"`{p}demo on|off` — add fake members to test alone\n"
                 f"`{p}sample [name]` — report for a fake member\n\n"
                 "SYKE keeps text from watched channels for mimic/yap; "
@@ -1383,7 +1385,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
             body += f"\n⚠️ Couldn't read {', '.join(ch.mention for ch in unreadable)}."
         await ctx.reply(embed=notice("Collection complete 🧫", body, BRAND))
 
-    @commands.hybrid_command(name="yap", description="Let SYKE chime in with random things members have said before")
+    @commands.hybrid_command(name="yap", description="Let SYKE chime in in the server's own words")
     @app_commands.describe(enabled="On: SYKE yaps in this channel now and then. Off: it stops.",
                            channel="Channel to change. Leave empty for this one.")
     @admin()
@@ -1403,8 +1405,8 @@ class SykeCommands(commands.Cog, name="SYKE"):
         if not enabled:
             await ctx.reply(embed=notice("Yap off 🤐", f"SYKE will keep quiet in {channel.mention}.", BRAND))
             return
-        body = (f"Every so often, when people chat in {channel.mention}, SYKE will drop something a member "
-                f"said in the past. Reply to one and SYKE answers with another message that fits. "
+        body = (f"Every so often, when people chat in {channel.mention}, SYKE will chime in using this "
+                f"server's slang and running jokes. Reply to one and SYKE answers back in the same voice. "
                 f"Turn it off with `{p}yap off`.")
         perms = channel.permissions_for(ctx.guild.me)
         if not perms.send_messages:

@@ -15,7 +15,7 @@ from .profile import Profile
 from .roast import fallback_summary
 from .stats import CUSTOM_EMOJI_RE
 from .traits import HIGHLIGHT_TRAITS, TRAITS
-from .yap import DEFAULT_TONE, Turn, folded, offline_pick, stitch
+from .yap import DEFAULT_TONE, Turn, Vocab, Voice, folded, offline_pick, style_hint, tidy_reply, vocabulary
 
 log = logging.getLogger("syke.ai")
 
@@ -245,42 +245,61 @@ async def write_roast(
     return profile
 
 
-COMPOSE_PROMPT = """You are SYKE, a Discord bot that talks using the server's own words. You get the \
-recent chat, the TONE to hit, and numbered CANDIDATES: real old server messages, plus some marked \
-(remix) that a Markov chain generated from the server's messages (they can be weird; use the good bits).
+COMPOSE_PROMPT = """You are SYKE, a long-time regular in this Discord server. You are not an assistant \
+and you never talk like one. You get the recent chat, the TONE to hit, the server's VOCABULARY, how \
+people here TYPE, and numbered MESSAGES: real old messages from this server, plus some marked (remix) \
+that a Markov chain made from them.
 
-Build the reply that fits best, as if the server's most quick-witted regular said it. You may:
-- use one candidate as it is, or
-- stitch 2-3 pieces together. A piece is a whole candidate or a chunk copied word-for-word from one \
-(a punchline, a keyword phrase, an insult, an emoji). Each piece may have "glue": up to 3 of your own \
-joining words placed before it ("nah", "and", "bro said") so the result reads naturally.
+Write ONE new, original message, the way the server's most quick-witted regular would type it right now.
+- The MESSAGES are ammunition, not a script. Steal their takes, running jokes, opinions, comebacks, \
+topics and references, then twist them into something nobody here has said yet. Never copy a message; \
+a few words from one is fine as a callback.
+- Talk with the server's words. Build the message from the VOCABULARY and from how the MESSAGES are \
+written: their slang, spelling, abbreviations and emojis. Pick their words over your own, and never \
+reach for words nobody here would use.
+- React to the TARGET directly. Questions get an answer (a real one or a bait one), insults get a \
+comeback, jokes get played along with or one-upped, and pick up what's being talked about.
+- Nail the TONE:
+  - toxic: savage trash talk, roast them back, petty and disrespectful.
+  - funny: a joke, an absurd twist, perfectly timed banter.
+  - freaky: suggestive innuendo, down-bad flirting, unhinged thirst; PG-13, never explicit.
+- Type like a person in chat, following TYPING: short, casual, abbreviations and slang welcome, \
+grammar optional. At most one emoji, and only one this server uses. No greetings, no hashtags, no \
+"what do you think?", no explaining the joke, no quotation marks around the message, no exclamation-mark \
+enthusiasm, never mention being a bot or an AI.
+- Never repeat or lightly rephrase something SYKE already said in this conversation.
+- Never attack identity (race, religion, gender, sexuality, disability), no slurs, never tell anyone \
+to hurt themselves, never anything sexual about minors, and never @mention anyone.
 
-What makes a great reply: it reacts to the TARGET message directly (questions get answers, insults get \
-comebacks, jokes get played along with), it picks up the topic and keywords being discussed, and it \
-nails the TONE:
-- toxic: savage trash talk, roast them back, petty and disrespectful.
-- funny: a joke, an absurd twist, perfectly timed banter.
-- freaky: suggestive innuendo, down-bad flirting, unhinged thirst; PG-13, never explicit.
-Stitched replies must read like one natural message, not word salad; one perfect candidate beats a \
-clumsy combination. Never change words inside a piece. Never repeat a line SYKE already said in this \
-conversation — pick a different candidate or a fresh stitch. Never attack identity (race, religion, \
-gender, sexuality, disability), never anything sexual about minors, and never @mention anyone.
-
-Reply with JSON only: {"parts": [{"id": int, "text": "exact chunk, or omit for the whole message", \
-"glue": "optional joining words"}]}"""
+Reply with JSON only: {"reply": "your message"}"""
 
 
 def _chat_block(chat: list[Turn]) -> str:
     return "\n".join(f"{t.author[:24]}: {' '.join(t.text.split())[:200]}" for t in chat[-8:]) or "(quiet)"
 
 
+def _vocab_block(vocab: Vocab) -> str:
+    lines = []
+    if vocab.words:
+        lines.append("words people here use: " + ", ".join(vocab.words))
+    if vocab.slang:
+        lines.append("slang that fits the tone: " + ", ".join(vocab.slang))
+    if vocab.phrases:
+        lines.append("phrases that fit the tone: " + " / ".join(vocab.phrases))
+    if vocab.emojis:
+        lines.append("emojis people here use: " + " ".join(readable(e) for e in vocab.emojis))
+    return "\n".join(lines) or "(nothing yet: borrow from the MESSAGES)"
+
+
 async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], target: Turn,
                         chat: list[Turn] = (), said: str | None = None, tone: str = DEFAULT_TONE,
-                        remixed: list[str] = (), avoid: list[str] = ()) -> str | None:
+                        remixed: list[str] = (), avoid: list[str] = (), voice: Voice | None = None,
+                        rng: random.Random | None = None) -> str | None:
     """The best reply to `target` in the server's words and the chat's tone. Never raises.
 
-    With AI, real messages and Markov `remixed` lines are stitched together; offline, the
-    best-ranked line is used. `avoid` is recent SYKE lines that must not be reused.
+    With AI, the matching messages and Markov `remixed` lines are material for a new message
+    written from the server's `voice`; offline, the best-ranked line is used. `avoid` is recent
+    SYKE lines that must not be reused.
     """
     banned = {target.text} | ({said} if said else set()) | set(avoid)
     banned_keys = {folded(t) for t in banned if t}
@@ -294,23 +313,25 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
     if settings.ai_provider != "none":
         situation = (f"SYKE SAID: {said[:300]}\nTHEY REPLIED (TARGET): " if said
                      else "SYKE is jumping into the chat. TARGET (latest message): ")
-        numbered = "\n".join(f"[{i}]{' (remix)' if text in remix_set else ''} {' '.join(text.split())[:220]}"
+        numbered = "\n".join(f"[{i}]{' (remix)' if text in remix_set else ''} {readable(' '.join(text.split()))[:220]}"
                              for i, text in enumerate(candidates))
+        vocab = vocabulary(voice, tone, rng)
         prompt = (f"RECENT CHAT:\n{_chat_block(chat)}\n\n{situation}{target.author[:24]}: {target.text[:300]}"
-                  f"\n\nTONE: {tone}\n\nCANDIDATES (best matches first, remixes last):\n{numbered}")
+                  f"\n\nTONE: {tone}\n\nTYPING: {style_hint(voice)}\n\nVOCABULARY:\n{_vocab_block(vocab)}"
+                  f"\n\nMESSAGES (best matches first, remixes last):\n{numbered}")
         if avoid:
             already = "\n".join(f"- {' '.join(t.split())[:200]}" for t in avoid if t)
             prompt += f"\n\nSYKE ALREADY SAID (do not repeat or lightly rephrase):\n{already}"
+        emojis = {m.group(1): m.group(0) for text in [*candidates, *vocab.emojis]
+                  for m in CUSTOM_EMOJI_RE.finditer(text)}
         try:
             if settings.ai_provider == "openai":
-                answer = await _call_openai(settings, COMPOSE_PROMPT, prompt, temperature=0.9)
+                answer = await _call_openai(settings, COMPOSE_PROMPT, prompt, temperature=1.0)
             else:
-                answer = await _call_anthropic(settings, COMPOSE_PROMPT, prompt, temperature=0.9)
-            parts = _parse_json(answer).get("parts")
-            if isinstance(parts, list):
-                reply = stitch(candidates, parts, banned)
-                if reply:
-                    return reply
+                answer = await _call_anthropic(settings, COMPOSE_PROMPT, prompt, temperature=1.0)
+            reply = tidy_reply(_parse_json(answer).get("reply"), candidates, banned, voice)
+            if reply:
+                return with_server_emojis(reply, emojis)
             log.warning("AI yap reply unusable: %r", answer[:200])
         except Exception:
             log.exception("AI yap reply failed; matching keywords instead")
