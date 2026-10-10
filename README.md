@@ -30,9 +30,9 @@ with `!prefix mention`.
 | Command | Who | What it does |
 | --- | --- | --- |
 | `!profile [@member]` | everyone | Full personality report (yourself if no member). Aliases: `!judge`, `!p`, `!me` |
-| `!iq [@member]` | everyone | A very unscientific IQ estimate (55-160) with a bell curve, what raised or lowered it (vocabulary, big words, message length, punctuation, serious takes, brainrot, caps-lock chaos), and their smartest and least smart messages. Also shown on `!profile`. Aliases: `!brain`, `!smarts` |
-| `!aura [@member]` | everyone | A very unscientific aura reading (0-200) with a bell curve, what farmed or spent it (mystery, presence, cringe tax, composure, yap tax, W's, late-night posting, brainrot), and their biggest aura farm and aura loss. Also shown on `!profile`. Aliases: `!auracheck`, `!rizz` |
-| `!dexify [@member] [text]` | everyone | Rewrites a message with `......` after a random few words, like Dex. Reply to a message, pass text, or pick a stored line from someone. Aliases: `!dex`, `!dots` |
+| `!iq [@member]` | everyone | A very unscientific IQ estimate (55-160) with a bell curve, a verdict written from that member's actual factors and quotes (not a stock line), what raised or lowered it, and their smartest and least smart messages. Also shown on `!profile`. Aliases: `!brain`, `!smarts` |
+| `!aura [@member]` | everyone | A very unscientific aura reading (0-200) with a personal verdict, what farmed or spent it, and their biggest aura farm and aura loss. Uses stored messages when it can, so it stays snappy. Also shown on `!profile`. Aliases: `!auracheck`, `!rizz` |
+| `!dexify` | everyone | Reply to a message and SYKE posts it back as normal text with `......` after a random few words, like Dex. No embed. Aliases: `!dex`, `!dots` |
 | `!top [trait]` | everyone | Leaderboard for `funny`, `toxic`, `cringe`, `freaky`, `serious`, `chaotic`, `active`, `iq` or `aura`. Aliases: `!leaderboard`, `!lb` |
 | `!ask <question>` | everyone | Ask SYKE anything, ChatGPT-style. Also works as `@SYKE <question>` and in DMs; reply to an answer to follow up. Aliases: `!ai`, `!gpt`, `!chat`, `!q`. Needs an AI key |
 | `!showcase` | everyone | A tour of every feature with live example cards. Aliases: `!features`, `!tour` |

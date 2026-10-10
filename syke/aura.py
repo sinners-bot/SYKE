@@ -114,7 +114,8 @@ def compute_aura(messages: list[Msg], stats: UserStats, scores: dict[str, int],
     ]
     aura = max(AURA_MIN, min(AURA_MAX, 100 + sum(f.points for f in factors)))
 
-    judged = [m for m in messages if words_of(m.content)]
+    sample = messages if len(messages) <= 400 else messages[-400:]
+    judged = [m for m in sample if words_of(m.content)]
     highest = max(judged, key=message_aura, default=None)
     lowest = min((m for m in judged if m is not highest), key=message_aura, default=None)
     label, lines = band(aura)

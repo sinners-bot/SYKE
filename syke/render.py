@@ -107,19 +107,31 @@ def render_report(profile: Profile) -> str:
 
 
 def render_leaderboard(server: ServerAnalysis, key: str, limit: int = 10) -> str:
+    """Terminal/preview board: medals, a bar, and the score."""
     rows = server.ranked(key)[:limit]
+    if not rows:
+        return "Nobody qualifies yet."
     medals = ["🥇", "🥈", "🥉"]
+    ceiling = metric(rows[0], key) if key == "active" else 100
     out = []
     for i, user in enumerate(rows):
         prefix = medals[i] if i < 3 else f"{i + 1:>2}."
+        value = metric(user, key)
         if key == "active":
-            value = f"{user.stats.message_count:,} msgs"
+            label = f"{value:,} msgs"
+            filled = value
         elif key == "iq":
-            value = f"IQ {metric(user, key)}"
+            label = f"IQ {value}"
+            filled = (value - 55) / (160 - 55) * ceiling
         elif key == "aura":
-            value = f"Aura {metric(user, key)}"
+            label = f"{value} aura"
+            filled = value / 200 * ceiling
         else:
-            value = f"{user.scores[key]}%"
-        name = safe(user.name)[:18]
-        out.append(f"{prefix} {name:<18} {value:>10}")
-    return "\n".join(out) or "Nobody qualifies yet."
+            label = f"{value}%"
+            filled = value
+        n = round(max(0.0, min(filled, ceiling)) / ceiling * 10) if ceiling else 0
+        bar = "█" * n + "░" * (10 - n)
+        name = safe(user.name)[:16]
+        out.append(f"{prefix} {name}")
+        out.append(f"    {bar} {label}")
+    return "\n".join(out)

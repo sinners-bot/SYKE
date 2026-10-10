@@ -7,6 +7,7 @@ import random
 from . import lexicon as lx
 from .profile import Profile
 from .traits import TRAIT_META, TRAITS
+from .verdicts import clip, persona
 
 OPENERS: dict[str, list[str]] = {
     "funny": [
@@ -106,6 +107,24 @@ STAT_JABS = [
      ["Writes like every word costs money.", "Communicates exclusively in fortune-cookie-sized fragments."]),
     (lambda p: p.stats.avg_words >= 20,
      ["Averages {words} words a message, so bring snacks.", "Thinks the message length limit is a dare."]),
+    (lambda p: p.iq is not None and p.iq.iq >= 130,
+     ["The IQ card says {iq}. The chat says they still send 'lol'.",
+      "Book-smart enough to score {iq}, street-smart enough to stay here."]),
+    (lambda p: p.iq is not None and p.iq.iq <= 80,
+     ["The IQ reading came back {iq}. The lab checked the thermometer.",
+      "Scored {iq} and still has Wi-Fi access. Remarkable."]),
+    (lambda p: p.aura is not None and p.aura.aura >= 140,
+     ["Aura sitting at {aura}. Do not make eye contact.",
+      "Farms presence the way other people farm XP ({aura})."]),
+    (lambda p: p.aura is not None and p.aura.aura <= 60,
+     ["Aura: {aura}. The account is overdrawn.",
+      "Lost {aura} aura and kept typing anyway."]),
+    (lambda p: p.server_ranks.get("funny", 100) <= 15,
+     ["Top {funny}% funny, which the laugh reacts already knew.",
+      "The server's unofficial court jester, statistically."]),
+    (lambda p: p.server_ranks.get("toxic", 100) <= 15,
+     ["Top {toxic}% toxic. HR has been notified in spirit.",
+      "Ranks as a workplace hazard."]),
 ]
 
 EVIDENCE = [
@@ -174,6 +193,7 @@ def fallback_summary(
     rng = rng or random.Random()
     st = profile.stats
     name = profile.name
+    title, tagline = persona(profile)
     ranked = sorted(TRAITS, key=lambda t: profile.scores[t], reverse=True)
     top, second = ranked[0], ranked[1]
 
@@ -181,9 +201,16 @@ def fallback_summary(
         first = rng.choice(NPC_OPENERS).format(name=name) + "."
     else:
         first = rng.choice(OPENERS[top]).format(name=name) + "."
+    first += f" Filed under **{title}** — {tagline[0].lower() + tagline[1:] if tagline else title}."
     jabs = [rng.choice(lines) for check, lines in STAT_JABS if check(profile)]
     if jabs:
-        first += " " + rng.choice(jabs).format(words=round(st.avg_words))
+        first += " " + rng.choice(jabs).format(
+            words=round(st.avg_words),
+            iq=profile.iq.iq if profile.iq else 100,
+            aura=profile.aura.aura if profile.aura else 100,
+            funny=profile.server_ranks.get("funny", 50),
+            toxic=profile.server_ranks.get("toxic", 50),
+        )
 
     middle: list[str] = []
     if profile.scores[second] >= 15:
@@ -194,13 +221,19 @@ def fallback_summary(
     options = []
     if evidence:
         options.append(rng.choice(EVIDENCE).format(quote=_quote(evidence[0].content)))
+        if len(evidence) > 1:
+            options.append(f'They also hit send on "{clip(evidence[1].content, 70)}".')
     if st.top_phrases:
         options.append(rng.choice(CATCHPHRASE).format(phrase=st.top_phrases[0][0]))
     if st.top_emojis:
         options.append(rng.choice(EMOJI_HABIT).format(emoji=st.top_emojis[0][0]))
     options.append(rng.choice(PEAK).format(hours=st.peak_local()))
+    if profile.iq:
+        options.append(f"IQ card: {profile.iq.iq} ({profile.iq.label}).")
+    if profile.aura:
+        options.append(f"Aura reading: {profile.aura.aura} ({profile.aura.label}).")
     rng.shuffle(options)
-    middle.extend(options[:2])
+    middle.extend(options[:3])
 
     closer = rng.choice(CLOSERS)
     emoji = fitting_emoji(top, server_emojis or {}, rng)

@@ -11,8 +11,9 @@ import discord
 from .aura import AuraResult
 from .aura import bell_curve as aura_bell
 from .iq import IQResult, bell_curve
-from .profile import Profile
+from .profile import Profile, ServerAnalysis, metric
 from .traits import TRAIT_META, TRAITS
+from .verdicts import aura_blurb, iq_blurb, persona
 
 log = logging.getLogger("syke.cards")
 
@@ -29,23 +30,6 @@ TRAIT_COLOURS: dict[str, discord.Colour] = {
     "chaotic": discord.Colour.from_str("#F97316"),
 }
 NEUTRAL = discord.Colour.from_str("#8B5CF6")
-
-ARCHETYPES: dict[str, tuple[str, list[str]]] = {
-    "funny": ("The Class Clown", ["Lives for the laugh react.", "Every chat is an open mic.",
-                                  "Has a bit for everything.", "Comedy first, consequences never."]),
-    "toxic": ("The Menace", ["Patience: not found.", "Types with clenched fists.",
-                             "Has a ratio for every occasion.", "HR's most wanted."]),
-    "cringe": ("The Cringelord", ["Has never once hesitated before pressing send.", "Brainrot, fluent.",
-                                  "Second-hand embarrassment on tap.", "Says 'slay' unironically."]),
-    "freaky": ("The Degenerate", ["Messages cannot be read aloud in public.", "Down bad, professionally.",
-                                  "The mods keep a separate folder.", "Every chat is after midnight."]),
-    "serious": ("The Philosopher", ["Writes essays where a 'lol' would do.", "Brings sources to a meme fight.",
-                                    "Well, actually.", "Reads the whole message. Every time."]),
-    "chaotic": ("The Wildcard", ["Operates on pure impulse and caps lock.", "Types like they're being chased.",
-                                 "Eight messages, one thought.", "A jump scare with a keyboard."]),
-}
-NPC = ("The NPC", ["Aggressively, suspiciously normal.", "Default settings, never changed.",
-                   "Could be a bot. We checked twice.", "Background character energy."])
 
 HIGHLIGHTS = [
     ("funniest", "😂 Funniest message", "None found. Tragic."),
@@ -84,9 +68,8 @@ def dominant_trait(profile: Profile) -> str | None:
 
 
 def archetype(profile: Profile, rng: random.Random | None = None) -> tuple[str, str]:
-    trait = dominant_trait(profile)
-    name, taglines = ARCHETYPES[trait] if trait else NPC
-    return name, (rng or random.Random()).choice(taglines)
+    """Stable per member: title + tagline from their actual stats and trait mix."""
+    return persona(profile)
 
 
 def colour_for(profile: Profile) -> discord.Colour:
@@ -312,7 +295,12 @@ def iq_page(name: str, result: IQResult, smarter_than: int | None, avatar_url: s
     embed.title = f"{discord.utils.escape_markdown(name)}'s IQ"
     if avatar_url:
         embed.set_thumbnail(url=avatar_url)
-    lines = [f"## {result.iq}", f"**{result.label}** — *{result.tagline}*", f"```\n{bell_curve(result.iq)}\n```"]
+    lines = [
+        f"## {result.iq}",
+        f"**{result.label}**",
+        f"*{iq_blurb(name, result)}*",
+        f"```\n{bell_curve(result.iq)}\n```",
+    ]
     if smarter_than is not None:
         lines.append(f"Smarter than **{smarter_than}%** of the server.")
     embed.description = "\n".join(lines)
@@ -346,7 +334,12 @@ def aura_page(name: str, result: AuraResult, more_than: int | None, avatar_url: 
     embed.title = f"{discord.utils.escape_markdown(name)}'s Aura"
     if avatar_url:
         embed.set_thumbnail(url=avatar_url)
-    lines = [f"## {result.aura}", f"**{result.label}** — *{result.tagline}*", f"```\n{aura_bell(result.aura)}\n```"]
+    lines = [
+        f"## {result.aura}",
+        f"**{result.label}**",
+        f"*{aura_blurb(name, result)}*",
+        f"```\n{aura_bell(result.aura)}\n```",
+    ]
     if more_than is not None:
         lines.append(f"More aura than **{more_than}%** of the server.")
     embed.description = "\n".join(lines)
@@ -362,6 +355,81 @@ def aura_page(name: str, result: AuraResult, more_than: int | None, avatar_url: 
     if result.lowest:
         embed.add_field(name="📉 Aura loss", value=f"> {clean_quote(result.lowest.content)}", inline=False)
     footer = "Starts at 100; each factor adds or subtracts • not a real aura reading"
+    if demo:
+        footer += " • demo mode"
+    embed.set_footer(text=footer)
+    return embed
+
+
+BOARD_TITLES: dict[str, str] = {
+    **{t: f"{TRAIT_META[t][0]} {TRAIT_META[t][1]}" for t in TRAITS},
+    "active": "💬 Most active",
+    "iq": "🧠 Highest IQ",
+    "aura": "✨ Highest aura",
+}
+BOARD_COLOURS: dict[str, discord.Colour] = {
+    **TRAIT_COLOURS,
+    "active": NEUTRAL,
+    "iq": discord.Colour.from_str("#22D3EE"),
+    "aura": discord.Colour.from_str("#F5D76E"),
+}
+BOARD_HOOKS: dict[str, str] = {
+    "funny": "The laugh-react economy, ranked.",
+    "toxic": "Who should not have a keyboard.",
+    "cringe": "Second-hand embarrassment, first place.",
+    "freaky": "Do not read this list at work.",
+    "serious": "The ones who brought sources.",
+    "chaotic": "Caps lock as a lifestyle.",
+    "active": "The load-bearing walls of this server.",
+    "iq": "Completely unscientific. Deeply judgmental.",
+    "aura": "Who walks in with a soundtrack.",
+}
+BOARD_BAR = 12
+
+
+def _board_score(user, key: str, ceiling: int) -> tuple[float, str]:
+    value = metric(user, key)
+    if key == "active":
+        return value, f"{value:,} msgs"
+    if key == "iq":
+        return (value - 55) / (160 - 55) * ceiling, f"IQ {value}"
+    if key == "aura":
+        return value / 200 * ceiling, f"{value} aura"
+    return value, f"{value}%"
+
+
+def _board_bar(filled: float, high: float, cells: int = BOARD_BAR) -> str:
+    n = round(max(0.0, min(filled, high)) / high * cells) if high else 0
+    return "█" * n + "░" * (cells - n)
+
+
+def leaderboard_page(server: ServerAnalysis, key: str, demo: bool = False, limit: int = 10) -> discord.Embed:
+    """A coloured podium card, not a monospace dump."""
+    rows = server.ranked(key)[:limit]
+    title = BOARD_TITLES.get(key, key)
+    embed = discord.Embed(colour=BOARD_COLOURS.get(key, NEUTRAL))
+    embed.set_author(name=f"SYKE LEADERBOARD · {title}")
+    embed.title = f"{title} — server leaderboard"
+
+    if not rows:
+        embed.description = "*Nobody qualifies yet.*"
+        embed.set_footer(text="Members need more messages in watched channels")
+        return embed
+
+    ceiling = metric(rows[0], key) if key == "active" else 100
+    medals = ("🥇", "🥈", "🥉")
+    lines = [f"*{BOARD_HOOKS.get(key, 'The ranking.')}*", ""]
+    for i, user in enumerate(rows):
+        filled, label = _board_score(user, key, ceiling)
+        name = discord.utils.escape_markdown(user.name)
+        rank = medals[i] if i < 3 else f"**{i + 1}.**"
+        lines.append(f"{rank}  **{name}**")
+        lines.append(f"`{_board_bar(filled, ceiling)}`  **{label}**")
+        if i == 2 and i + 1 < len(rows):
+            lines.append("")
+    embed.description = "\n".join(lines)
+
+    footer = f"{len(server.users)} members judged • for entertainment only"
     if demo:
         footer += " • demo mode"
     embed.set_footer(text=footer)

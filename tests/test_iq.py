@@ -63,6 +63,7 @@ def test_iq_card_layout():
     card = iq_page("bubbles", result, 25)
     assert card.title == "bubbles's IQ"
     assert card.description.startswith(f"## {result.iq}\n**{result.label}**")
+    assert "bubbles" in card.description
     assert "Smarter than **25%**" in card.description
     names = [f.name for f in card.fields]
     assert names == ["🔬 How SYKE measured", "🎓 Smartest message", "🤡 Least smart message"]
@@ -79,7 +80,8 @@ def test_iq_and_top_iq_commands(cog):
     run(cog.top.callback(cog, ctx, "iq"))
     board = ctx.replies[-1]
     assert board.title == "🧠 Highest IQ — server leaderboard"
-    assert "Mira" in board.description.splitlines()[1] and "IQ " in board.description
+    assert "Mira" in board.description and "IQ " in board.description
+    assert "🥇" in board.description and "`" in board.description
 
     run(cog.iq.callback(cog, ctx, None))
     assert ctx.replies[-1].title == "Insufficient evidence 🔬"
