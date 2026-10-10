@@ -10,7 +10,7 @@ card's colour matches the member's strongest trait:
 
 | Page | What's on it |
 | --- | --- |
-| 📊 **Overview** | The compact card posted in chat: archetype (e.g. *The Class Clown*), the first paragraph of the roast, one line of key numbers, top emojis and catchphrase, and the top 3 traits |
+| 📊 **Overview** | The compact card posted in chat: archetype (e.g. *The Class Clown*), the first paragraph of the roast, one line of key numbers (including IQ and aura), top emojis and catchphrase, and the top 3 traits |
 | 📋 **Full report** | The whole roast, six stat tiles (messages, active since, peak hours, average length, top emojis, catchphrase) and all six personality bars |
 | 🏆 **Highlights** | Funniest, most unhinged, freakiest and most toxic messages, quoted |
 | 🥇 **Ranks** | Achievements and "Top X%" against everyone else judged in the server |
@@ -31,7 +31,9 @@ with `!prefix mention`.
 | --- | --- | --- |
 | `!profile [@member]` | everyone | Full personality report (yourself if no member). Aliases: `!judge`, `!p`, `!me` |
 | `!iq [@member]` | everyone | A very unscientific IQ estimate (55-160) with a bell curve, what raised or lowered it (vocabulary, big words, message length, punctuation, serious takes, brainrot, caps-lock chaos), and their smartest and least smart messages. Also shown on `!profile`. Aliases: `!brain`, `!smarts` |
-| `!top [trait]` | everyone | Leaderboard for `funny`, `toxic`, `cringe`, `freaky`, `serious`, `chaotic`, `active` or `iq`. Aliases: `!leaderboard`, `!lb` |
+| `!aura [@member]` | everyone | A very unscientific aura reading (0-200) with a bell curve, what farmed or spent it (mystery, presence, cringe tax, composure, yap tax, W's, late-night posting, brainrot), and their biggest aura farm and aura loss. Also shown on `!profile`. Aliases: `!auracheck`, `!rizz` |
+| `!dexify [@member] [text]` | everyone | Rewrites a message with `......` after a random few words, like Dex. Reply to a message, pass text, or pick a stored line from someone. Aliases: `!dex`, `!dots` |
+| `!top [trait]` | everyone | Leaderboard for `funny`, `toxic`, `cringe`, `freaky`, `serious`, `chaotic`, `active`, `iq` or `aura`. Aliases: `!leaderboard`, `!lb` |
 | `!ask <question>` | everyone | Ask SYKE anything, ChatGPT-style. Also works as `@SYKE <question>` and in DMs; reply to an answer to follow up. Aliases: `!ai`, `!gpt`, `!chat`, `!q`. Needs an AI key |
 | `!showcase` | everyone | A tour of every feature with live example cards. Aliases: `!features`, `!tour` |
 | `!about` | everyone | How many servers use SYKE, members watched, uptime. Aliases: `!stats`, `!info` |

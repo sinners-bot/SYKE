@@ -8,6 +8,8 @@ from typing import Callable
 
 import discord
 
+from .aura import AuraResult
+from .aura import bell_curve as aura_bell
 from .iq import IQResult, bell_curve
 from .profile import Profile
 from .traits import TRAIT_META, TRAITS
@@ -61,6 +63,7 @@ RANK_ROWS = [
     ("cringe", "💀 Most cringe"),
     ("serious", "🧠 Most serious"),
     ("iq", "🎓 Highest IQ"),
+    ("aura", "✨ Highest aura"),
 ]
 
 PAGES = ("overview", "report", "highlights", "ranks")
@@ -157,6 +160,8 @@ def overview_page(profile: Profile, avatar_url: str | None = None, demo: bool = 
     facts = [f"💬 {st.message_count:,} msgs", f"🕐 {st.peak_local()}", f"✍️ {round(st.avg_words)} words"]
     if profile.iq:
         facts.append(f"🧠 IQ {profile.iq.iq}")
+    if profile.aura:
+        facts.append(f"✨ Aura {profile.aura.aura}")
     extras = []
     if st.top_emojis:
         extras.append(" ".join(e for e, _ in st.top_emojis[:3]))
@@ -194,6 +199,8 @@ def report_page(profile: Profile, avatar_url: str | None = None, demo: bool = Fa
     embed.add_field(name="🗣️ Catchphrase", value=f"“{phrase}”" if phrase else "Silence")
     if profile.iq:
         embed.add_field(name="🧠 IQ", value=f"**{profile.iq.iq}** · {profile.iq.label}")
+    if profile.aura:
+        embed.add_field(name="✨ Aura", value=f"**{profile.aura.aura}** · {profile.aura.label}")
 
     rows = []
     for trait in TRAITS:
@@ -321,6 +328,40 @@ def iq_page(name: str, result: IQResult, smarter_than: int | None, avatar_url: s
     if result.dumbest:
         embed.add_field(name="🤡 Least smart message", value=f"> {clean_quote(result.dumbest.content)}", inline=False)
     footer = "Starts at 100; each factor adds or subtracts • not a real IQ test"
+    if demo:
+        footer += " • demo mode"
+    embed.set_footer(text=footer)
+    return embed
+
+
+AURA_COLOURS = [(160, "#F5D76E"), (130, "#C4B5FD"), (100, "#8B5CF6"), (70, "#6B7280"), (0, "#1F2937")]
+
+
+def aura_page(name: str, result: AuraResult, more_than: int | None, avatar_url: str | None = None,
+              demo: bool = False) -> discord.Embed:
+    """The !aura card: the number, a tiny bell curve, what farmed or spent it, and the evidence."""
+    colour = next(c for floor, c in AURA_COLOURS if result.aura >= floor)
+    embed = discord.Embed(colour=discord.Colour.from_str(colour))
+    embed.set_author(name="SYKE AURA CHECK · ✨ Results")
+    embed.title = f"{discord.utils.escape_markdown(name)}'s Aura"
+    if avatar_url:
+        embed.set_thumbnail(url=avatar_url)
+    lines = [f"## {result.aura}", f"**{result.label}** — *{result.tagline}*", f"```\n{aura_bell(result.aura)}\n```"]
+    if more_than is not None:
+        lines.append(f"More aura than **{more_than}%** of the server.")
+    embed.description = "\n".join(lines)
+
+    factors = "\n".join(
+        f"{f.emoji} {f.name} · {f.detail} · **{'+' if f.points > 0 else ''}{f.points}**" if f.points
+        else f"{f.emoji} {f.name} · {f.detail} · 0"
+        for f in result.factors
+    )
+    embed.add_field(name="🔬 How SYKE measured", value=factors, inline=False)
+    if result.highest:
+        embed.add_field(name="✨ Aura farm", value=f"> {clean_quote(result.highest.content)}", inline=False)
+    if result.lowest:
+        embed.add_field(name="📉 Aura loss", value=f"> {clean_quote(result.lowest.content)}", inline=False)
+    footer = "Starts at 100; each factor adds or subtracts • not a real aura reading"
     if demo:
         footer += " • demo mode"
     embed.set_footer(text=footer)

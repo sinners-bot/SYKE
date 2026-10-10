@@ -116,6 +116,8 @@ def render_leaderboard(server: ServerAnalysis, key: str, limit: int = 10) -> str
             value = f"{user.stats.message_count:,} msgs"
         elif key == "iq":
             value = f"IQ {metric(user, key)}"
+        elif key == "aura":
+            value = f"Aura {metric(user, key)}"
         else:
             value = f"{user.scores[key]}%"
         name = safe(user.name)[:18]
