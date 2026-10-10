@@ -12,7 +12,7 @@ class FakeCtx:
         self.replies: list = []
 
     async def reply(self, content=None, **kwargs):
-        self.replies.append(kwargs.get("embed"))
+        self.replies.append(kwargs["embed"] if kwargs.get("embed") is not None else content)
         self.views = getattr(self, "views", []) + [kwargs.get("view")]
         return types.SimpleNamespace(id=len(self.replies))
 
@@ -239,7 +239,7 @@ def test_showcase_pages_have_examples(cog):
     assert len(tour_page("profile", "?")) == 2
     assert "`?iq [@member]`" in tour_page("iq", "?")[0].description
     assert "`?aura [@member]`" in tour_page("aura", "?")[0].description
-    assert "`?dexify [@member]`" in tour_page("talk", "?")[0].description
+    assert "`?dexify`" in tour_page("talk", "?")[0].description
 
 
 def test_install_settings_are_configured_once(cog):

@@ -80,7 +80,8 @@ def test_iq_and_top_iq_commands(cog):
     run(cog.top.callback(cog, ctx, "iq"))
     board = ctx.replies[-1]
     assert board.title == "🧠 Highest IQ — server leaderboard"
-    assert "Mira" in board.description.splitlines()[1] and "IQ " in board.description
+    assert "Mira" in board.description and "IQ " in board.description
+    assert "🥇" in board.description and "`" in board.description
 
     run(cog.iq.callback(cog, ctx, None))
     assert ctx.replies[-1].title == "Insufficient evidence 🔬"

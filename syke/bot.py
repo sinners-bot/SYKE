@@ -19,14 +19,13 @@ from discord.ext import commands
 
 from .ai import compose_reply, write_roast
 from .ask import AskUnavailable, ask
-from .cards import MESSAGE_VIEW_TIMEOUT, ProfileView, aura_page, build_pages, iq_page
+from .cards import MESSAGE_VIEW_TIMEOUT, ProfileView, aura_page, build_pages, iq_page, leaderboard_page
 from .config import Settings, load_settings
 from .dexify import dexify_text
 from .demo import PERSONAS, build_demo_server
 from .markov import build_chain
 from .models import Msg
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
-from .render import render_leaderboard
 from .scanner import Scanner, to_msg
 from .showcase import ShowcaseView, tour_page
 from .storage import Storage
@@ -947,14 +946,9 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"Members need {self.bot.settings.min_messages}+ messages in watched channels to be ranked.",
             ))
             return
-        embed = discord.Embed(
-            title=f"{TRAIT_TITLES[key]} — server leaderboard",
-            description=f"```\n{render_leaderboard(server, key)}\n```",
-            colour=BRAND,
-        )
-        demo = " • includes fake demo members" if self.bot.storage.demo_mode(ctx.guild.id) else ""
-        embed.set_footer(text=f"{len(server.users)} members judged{demo}")
-        await ctx.reply(embed=embed)
+        await ctx.reply(embed=leaderboard_page(
+            server, key, demo=self.bot.storage.demo_mode(ctx.guild.id),
+        ))
 
     @top.autocomplete("trait")
     async def top_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
@@ -1117,66 +1111,50 @@ class SykeCommands(commands.Cog, name="SYKE"):
         meaty = [t for t in usable if len(t.split()) >= 3]
         return random.choice(meaty or usable), len(texts)
 
-    def _dexify_card(self, name: str, original: str, avatar_url: str | None) -> discord.Embed:
-        rewritten = dexify_text(original)
-        embed = discord.Embed(description=discord.utils.escape_markdown(rewritten), colour=BRAND)
-        embed.set_author(name=f"{name} (dexified)", icon_url=avatar_url)
-        quote = " ".join(original.split())
-        if len(quote) > 180:
-            quote = quote[:179].rstrip() + "…"
-        embed.add_field(name="Original", value=f"> {discord.utils.escape_markdown(quote)}", inline=False)
-        embed.set_footer(text="Inserts ...... after a random few words • not how they actually type")
-        return embed
+    def _dexify_line(self, original: str) -> str:
+        text = dexify_text(original)
+        return text if len(text) <= 2000 else text[:1999].rstrip() + "…"
 
     @commands.hybrid_command(name="dexify", aliases=["dex", "dots"],
-                             description="Rewrite a message with ...... pauses, like Dex")
+                             description="Rewrite the message you reply to with ...... pauses, like Dex")
     @app_commands.describe(
-        member="Whose stored message to dexify. Leave empty to use a reply, your text, or your own messages.",
-        text="Optional text to rewrite. Reply to a message to dexify that instead.",
+        member="If you are not replying to a message, whose stored line to dexify.",
+        text="Optional text to rewrite. A reply is used first.",
     )
     @commands.cooldown(1, 5, commands.BucketType.member)
     @public()
     async def dexify(self, ctx: commands.Context, member: discord.Member | None = None,
                      *, text: str | None = None) -> None:
+        replied = await self._replied_message(ctx)
+        if replied is not None and replied.content:
+            await ctx.reply(self._dexify_line(replied.content), mention_author=False)
+            return
+
         supplied = (text or "").strip()
+        if supplied:
+            await ctx.reply(self._dexify_line(supplied), mention_author=False)
+            return
+
         speaker = member or ctx.author
-        original = supplied or None
-
+        if speaker.bot:
+            await ctx.reply(embed=notice("Nice try", "Bots already pause. It's called latency."), ephemeral=True)
+            return
+        if speaker.id in self.bot.storage.optouts(ctx.guild.id):
+            await ctx.reply(embed=notice("Off limits", f"{speaker.display_name} has opted out of SYKE."), ephemeral=True)
+            return
+        result = await self._pick_quote(ctx, speaker.id)
+        if result is None:
+            await ctx.reply(embed=self.bot.no_channels(ctx.guild.id))
+            return
+        original, count = result
         if original is None:
-            replied = await self._replied_message(ctx)
-            if replied is not None and replied.content:
-                speaker = replied.author
-                original = replied.content
-
-        if original is None:
-            if speaker.bot:
-                await ctx.reply(embed=notice("Nice try", "Bots already pause. It's called latency."), ephemeral=True)
-                return
-            if speaker.id in self.bot.storage.optouts(ctx.guild.id):
-                await ctx.reply(embed=notice("Off limits", f"{speaker.display_name} has opted out of SYKE."), ephemeral=True)
-                return
-            result = await self._pick_quote(ctx, speaker.id)
-            if result is None:
-                await ctx.reply(embed=self.bot.no_channels(ctx.guild.id))
-                return
-            original, count = result
-            if original is None:
-                await ctx.reply(embed=notice(
-                    "Not enough to go on 🔬",
-                    f"SYKE has only **{count}** message{'s' if count != 1 else ''} from {speaker.display_name}. "
-                    f"Reply to a message, pass some text, or ask an admin to run `{self.p(ctx)}collect`.",
-                ))
-                return
-        elif not supplied:
-            if getattr(speaker, "bot", False):
-                await ctx.reply(embed=notice("Nice try", "Bots already pause. It's called latency."), ephemeral=True)
-                return
-            if getattr(speaker, "id", None) in self.bot.storage.optouts(ctx.guild.id):
-                await ctx.reply(embed=notice("Off limits", f"{speaker.display_name} has opted out of SYKE."), ephemeral=True)
-                return
-
-        avatar = getattr(getattr(speaker, "display_avatar", None), "url", None)
-        await ctx.reply(embed=self._dexify_card(speaker.display_name, original, avatar))
+            await ctx.reply(embed=notice(
+                "Reply to a message",
+                f"Reply to the message you want dexified, or pass some text. SYKE has only "
+                f"**{count}** stored line{'s' if count != 1 else ''} from {speaker.display_name}.",
+            ))
+            return
+        await ctx.reply(self._dexify_line(original), mention_author=False)
 
     @commands.hybrid_command(name="diagnose", aliases=["check"], description="Check why SYKE's prefix commands might not work here")
     @app_commands.guild_only()
@@ -1339,7 +1317,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"`{p}ask <question>` — ask SYKE anything, like ChatGPT (or just @mention it)\n"
                 f"`{p}iq [@member]` — SYKE's very unscientific IQ estimate\n"
                 f"`{p}aura [@member]` — SYKE's very unscientific aura reading\n"
-                f"`{p}dexify [@member]` — rewrite a message with ...... pauses\n"
+                f"`{p}dexify` — reply to a message; SYKE posts it back with ...... pauses\n"
                 f"`{p}top [trait]` — leaderboard: funny, toxic, cringe, freaky, serious, chaotic, active, iq, aura\n"
                 f"`{p}mimic [@member]` — SYKE talks like them (Markov chain)\n"
                 f"`{p}scanme` — dig up your older messages so they count towards your profile\n"

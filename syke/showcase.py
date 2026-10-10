@@ -9,12 +9,10 @@ from typing import Callable
 
 import discord
 
-from .cards import aura_page, build_pages, iq_page
-from .dexify import dexify_text
+from .cards import aura_page, build_pages, iq_page, leaderboard_page
 from .demo import build_demo_server
 from .markov import build_chain
 from .profile import ServerAnalysis, analyze_server, build_profile
-from .render import render_leaderboard
 from .roast import fallback_summary
 
 BRAND = discord.Colour.from_str("#8B5CF6")
@@ -89,11 +87,10 @@ def tour_page(key: str, p: str) -> list[discord.Embed]:
             f"It also shows on `{p}profile`, and `{p}top aura` ranks the whole server."
         )), example]
     if key == "top":
-        board = discord.Embed(title="😂 Funny — server leaderboard", colour=BRAND,
-                              description=f"```\n{render_leaderboard(demo_server(), 'funny')}\n```")
+        board = leaderboard_page(demo_server(), "funny", demo=True)
         board.set_footer(text=EXAMPLE_NOTE)
         return [_page("🏆 Leaderboards", (
-            f"`{p}top [trait]` ranks everyone SYKE has judged.\n\n"
+            f"`{p}top [trait]` ranks everyone SYKE has judged, with a podium and bars.\n\n"
             "Traits: `funny` `toxic` `cringe` `freaky` `serious` `chaotic` `active` `iq` `aura`"
         )), board]
     if key == "talk":
@@ -102,18 +99,13 @@ def tour_page(key: str, p: str) -> list[discord.Embed]:
         example = discord.Embed(description=line, colour=BRAND)
         example.set_author(name="Zyro (probably)")
         example.set_footer(text=f"{EXAMPLE_NOTE} • Markov chain • not a real quote")
-        dexed = discord.Embed(description=dexify_text(
-            "I think we should go to the store later", random.Random(4)
-        ), colour=BRAND)
-        dexed.set_author(name="Zyro (dexified)")
-        dexed.set_footer(text=f"{EXAMPLE_NOTE} • inserts ...... after a random few words")
         return [_page("🗣️ Mimic, yap & dexify", (
             f"`{p}mimic [@member]`: SYKE invents a message in someone's style from everything they've said.\n\n"
-            f"`{p}dexify [@member]`: take one of their messages (or a reply, or your own text) and insert "
-            "`......` after a random few words.\n\n"
+            f"`{p}dexify`: **reply to a message** and SYKE posts it back as normal text with `......` "
+            "after a random few words. No embed — just the line, like Dex typed it.\n\n"
             f"`{p}yap on` (admins): now and then SYKE chimes in using this server's slang and running jokes. "
             "**Reply to it** and SYKE answers back in the same voice, written from what people here actually say."
-        )), example, dexed]
+        )), example]
     if key == "ask":
         example = discord.Embed(colour=BRAND, description=(
             "Because sunlight hits the air and the blue light scatters way more than the red, so the whole "
