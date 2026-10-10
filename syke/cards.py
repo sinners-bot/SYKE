@@ -13,6 +13,7 @@ from .aura import bell_curve as aura_bell
 from .iq import IQResult, bell_curve
 from .profile import Profile
 from .traits import TRAIT_META, TRAITS
+from .verdicts import aura_blurb, iq_blurb, persona
 
 log = logging.getLogger("syke.cards")
 
@@ -29,23 +30,6 @@ TRAIT_COLOURS: dict[str, discord.Colour] = {
     "chaotic": discord.Colour.from_str("#F97316"),
 }
 NEUTRAL = discord.Colour.from_str("#8B5CF6")
-
-ARCHETYPES: dict[str, tuple[str, list[str]]] = {
-    "funny": ("The Class Clown", ["Lives for the laugh react.", "Every chat is an open mic.",
-                                  "Has a bit for everything.", "Comedy first, consequences never."]),
-    "toxic": ("The Menace", ["Patience: not found.", "Types with clenched fists.",
-                             "Has a ratio for every occasion.", "HR's most wanted."]),
-    "cringe": ("The Cringelord", ["Has never once hesitated before pressing send.", "Brainrot, fluent.",
-                                  "Second-hand embarrassment on tap.", "Says 'slay' unironically."]),
-    "freaky": ("The Degenerate", ["Messages cannot be read aloud in public.", "Down bad, professionally.",
-                                  "The mods keep a separate folder.", "Every chat is after midnight."]),
-    "serious": ("The Philosopher", ["Writes essays where a 'lol' would do.", "Brings sources to a meme fight.",
-                                    "Well, actually.", "Reads the whole message. Every time."]),
-    "chaotic": ("The Wildcard", ["Operates on pure impulse and caps lock.", "Types like they're being chased.",
-                                 "Eight messages, one thought.", "A jump scare with a keyboard."]),
-}
-NPC = ("The NPC", ["Aggressively, suspiciously normal.", "Default settings, never changed.",
-                   "Could be a bot. We checked twice.", "Background character energy."])
 
 HIGHLIGHTS = [
     ("funniest", "😂 Funniest message", "None found. Tragic."),
@@ -84,9 +68,8 @@ def dominant_trait(profile: Profile) -> str | None:
 
 
 def archetype(profile: Profile, rng: random.Random | None = None) -> tuple[str, str]:
-    trait = dominant_trait(profile)
-    name, taglines = ARCHETYPES[trait] if trait else NPC
-    return name, (rng or random.Random()).choice(taglines)
+    """Stable per member: title + tagline from their actual stats and trait mix."""
+    return persona(profile)
 
 
 def colour_for(profile: Profile) -> discord.Colour:
@@ -312,7 +295,12 @@ def iq_page(name: str, result: IQResult, smarter_than: int | None, avatar_url: s
     embed.title = f"{discord.utils.escape_markdown(name)}'s IQ"
     if avatar_url:
         embed.set_thumbnail(url=avatar_url)
-    lines = [f"## {result.iq}", f"**{result.label}** — *{result.tagline}*", f"```\n{bell_curve(result.iq)}\n```"]
+    lines = [
+        f"## {result.iq}",
+        f"**{result.label}**",
+        f"*{iq_blurb(name, result)}*",
+        f"```\n{bell_curve(result.iq)}\n```",
+    ]
     if smarter_than is not None:
         lines.append(f"Smarter than **{smarter_than}%** of the server.")
     embed.description = "\n".join(lines)
@@ -346,7 +334,12 @@ def aura_page(name: str, result: AuraResult, more_than: int | None, avatar_url: 
     embed.title = f"{discord.utils.escape_markdown(name)}'s Aura"
     if avatar_url:
         embed.set_thumbnail(url=avatar_url)
-    lines = [f"## {result.aura}", f"**{result.label}** — *{result.tagline}*", f"```\n{aura_bell(result.aura)}\n```"]
+    lines = [
+        f"## {result.aura}",
+        f"**{result.label}**",
+        f"*{aura_blurb(name, result)}*",
+        f"```\n{aura_bell(result.aura)}\n```",
+    ]
     if more_than is not None:
         lines.append(f"More aura than **{more_than}%** of the server.")
     embed.description = "\n".join(lines)

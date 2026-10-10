@@ -63,6 +63,7 @@ def test_iq_card_layout():
     card = iq_page("bubbles", result, 25)
     assert card.title == "bubbles's IQ"
     assert card.description.startswith(f"## {result.iq}\n**{result.label}**")
+    assert "bubbles" in card.description
     assert "Smarter than **25%**" in card.description
     names = [f.name for f in card.fields]
     assert names == ["🔬 How SYKE measured", "🎓 Smartest message", "🤡 Least smart message"]

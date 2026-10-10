@@ -634,11 +634,27 @@ class Syke(commands.Bot):
         except ZoneInfoNotFoundError:
             return ZoneInfo("UTC")
 
-    async def analyze(self, guild: discord.Guild) -> tuple[ServerAnalysis, list[int]] | None:
+    def _warm_analysis(self, guild_id: int) -> ServerAnalysis | None:
+        """In-memory analysis from a scan that is still inside the cache window."""
+        cached = self._analyses.get(guild_id)
+        scanned_at = self.scanner.cached_at(guild_id)
+        if cached and scanned_at and time.time() - scanned_at < self.scanner.ttl:
+            return cached[1]
+        return None
+
+    async def analyze(self, guild: discord.Guild, live: bool = True) -> tuple[ServerAnalysis, list[int]] | None:
+        """Score the server. `live=False` skips Discord and uses stored messages (fast path for !aura)."""
         tracked = self.storage.tracked(guild.id)
         demo = self.storage.demo_mode(guild.id)
         if not tracked and not demo:
             return None
+        warm = self._warm_analysis(guild.id)
+        if warm is not None and not live:
+            return warm, []
+        if not live:
+            stored = await self._analyze_stored(guild, tracked, demo)
+            if stored is not None:
+                return stored, []
         messages: list[Msg] = []
         skipped: list[int] = []
         scanned_at = None
@@ -667,6 +683,27 @@ class Syke(commands.Bot):
         server = await asyncio.to_thread(analyze_server, messages, tz, self.settings.min_messages, labels)
         self._analyses[guild.id] = (key, server)
         return server, skipped
+
+    async def _analyze_stored(self, guild: discord.Guild, tracked: list[int], demo: bool) -> ServerAnalysis | None:
+        """Score from SQLite + demo members, no Discord history read."""
+        optouts = self.storage.optouts(guild.id)
+        tz = self.tz_for(guild.id)
+        key = ("stored", demo, str(tz), frozenset(optouts), self.settings.min_messages,
+               self._history_version.get(guild.id, 0), tuple(tracked))
+        cached = self._analyses.get(guild.id)
+        if cached and cached[0] == key:
+            return cached[1]
+        messages: list[Msg] = []
+        if tracked:
+            messages = await asyncio.to_thread(self.older_messages, guild.id, tracked, [], optouts)
+        if demo:
+            messages = messages + DEMO_MESSAGES
+        if not messages:
+            return None
+        labels = await asyncio.to_thread(self.storage.labels, guild.id)
+        server = await asyncio.to_thread(analyze_server, messages, tz, self.settings.min_messages, labels)
+        self._analyses[guild.id] = (key, server)
+        return server
 
     def older_messages(self, guild_id: int, tracked: list[int], scanned: list[Msg], optouts: set[int]) -> list[Msg]:
         """Stored messages the live scan didn't reach (e.g. from `scanme` or `collect`)."""
@@ -850,7 +887,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
 
     @commands.hybrid_command(name="aura", aliases=["auracheck", "rizz"], description="SYKE's (very unscientific) aura reading for someone")
     @app_commands.describe(member="Whose aura to measure. Leave empty for your own.")
-    @commands.cooldown(1, 10, commands.BucketType.member)
+    @commands.cooldown(1, 5, commands.BucketType.member)
     @public()
     async def aura(self, ctx: commands.Context, member: discord.Member | None = None) -> None:
         target = member or ctx.author
@@ -861,7 +898,9 @@ class SykeCommands(commands.Cog, name="SYKE"):
             await ctx.reply(embed=notice("Off limits", f"{target.display_name} has opted out of being judged."), ephemeral=True)
             return
         async with ctx.typing():
-            result = await self.bot.analyze(ctx.guild)
+            result = await self.bot.analyze(ctx.guild, live=False)
+            if result is not None and target.id not in result[0].users and self.bot.storage.tracked(ctx.guild.id):
+                result = await self.bot.analyze(ctx.guild, live=True)
         if result is None:
             await ctx.reply(embed=self.bot.no_channels(ctx.guild.id))
             return

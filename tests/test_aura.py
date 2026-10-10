@@ -63,6 +63,7 @@ def test_aura_card_layout():
     card = aura_page("Dex", result, 40)
     assert card.title == "Dex's Aura"
     assert card.description.startswith(f"## {result.aura}\n**{result.label}**")
+    assert "Dex" in card.description
     assert "More aura than **40%**" in card.description
     names = [f.name for f in card.fields]
     assert names[0] == "🔬 How SYKE measured"

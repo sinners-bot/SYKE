@@ -58,6 +58,8 @@ reports about server members after reading their actual messages.
 Writing rules:
 - Be genuinely funny, sarcastic and SPECIFIC. Every sentence should be about THIS person: quote or \
 paraphrase at least one of their real messages, and riff on their catchphrases, emojis, timing or slang.
+- If this summary could be pasted onto a different member and still make sense, rewrite it. Name a \
+habit, quote or number that belongs only to them.
 - Avoid generic filler ("is a unique individual", "keeps things interesting"). Surprise the reader.
 - Roast behaviour, never identity. No comments on race, religion, gender, sexuality, disability, \
 body, or real mental-health diagnoses. No slurs. Nothing sexual beyond a wink.

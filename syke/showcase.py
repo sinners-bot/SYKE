@@ -71,7 +71,8 @@ def tour_page(key: str, p: str) -> list[discord.Embed]:
         example.set_footer(text=EXAMPLE_NOTE)
         return [_page("🧠 IQ test", (
             f"`{p}iq [@member]` estimates an IQ from how someone writes: vocabulary, big words, message "
-            "length and punctuation push it up; brainrot and caps-lock chaos drag it down.\n\n"
+            "length and punctuation push it up; brainrot and caps-lock chaos drag it down. The verdict "
+            "is written from *their* factors and quotes, so two people with the same score still read differently.\n\n"
             f"It also shows on `{p}profile`, and `{p}top iq` ranks the whole server."
         )), example]
     if key == "aura":
@@ -83,7 +84,8 @@ def tour_page(key: str, p: str) -> list[discord.Embed]:
         example.set_footer(text=EXAMPLE_NOTE)
         return [_page("✨ Aura check", (
             f"`{p}aura [@member]` estimates aura from how someone writes: short mysterious lines and W's "
-            "farm it; cringe, yapping and brainrot spend it.\n\n"
+            "farm it; cringe, yapping and brainrot spend it. The write-up names what *they* did, not a "
+            "generic band line, and it reads stored messages first so it stays fast.\n\n"
             f"It also shows on `{p}profile`, and `{p}top aura` ranks the whole server."
         )), example]
     if key == "top":
