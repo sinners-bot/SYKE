@@ -7,6 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import tzinfo
 
+from .aura import AuraResult, compute_aura
 from .iq import IQResult, compute_iq
 from .models import Msg
 from .stats import UserStats, compute_stats
@@ -22,14 +23,17 @@ class UserAnalysis:
     scores: dict[str, int]
     signals: list[MessageSignals]
     iq: IQResult | None = None
+    aura: AuraResult | None = None
 
 
 def metric(user: UserAnalysis, key: str) -> int:
-    """What leaderboards rank by: a trait score, message count ('active') or IQ ('iq')."""
+    """What leaderboards rank by: a trait score, message count, IQ or aura."""
     if key == "active":
         return user.stats.message_count
     if key == "iq":
         return user.iq.iq if user.iq else 100
+    if key == "aura":
+        return user.aura.aura if user.aura else 100
     return user.scores[key]
 
 
@@ -66,6 +70,7 @@ class Profile:
     ai_labels: dict[int, frozenset[str]] = field(default_factory=dict, repr=False)
     ai_scores: dict[str, int] = field(default_factory=dict)
     iq: IQResult | None = None
+    aura: AuraResult | None = None
 
 
 def analyze_server(
@@ -84,7 +89,10 @@ def analyze_server(
         scores, signals = score_user(msgs, tz, labels)
         latest_name = max(msgs, key=lambda m: m.created_at).author_name
         stats = compute_stats(msgs, tz)
-        users[user_id] = UserAnalysis(user_id, latest_name, msgs, stats, scores, signals, compute_iq(msgs, stats, scores))
+        users[user_id] = UserAnalysis(
+            user_id, latest_name, msgs, stats, scores, signals,
+            compute_iq(msgs, stats, scores), compute_aura(msgs, stats, scores),
+        )
     return ServerAnalysis(users, below)
 
 
@@ -137,6 +145,7 @@ def build_profile(server: ServerAnalysis, user_id: int) -> Profile:
     ranks = {trait: server.top_percent(user_id, trait) for trait in TRAITS}
     ranks["active"] = server.top_percent(user_id, "active")
     ranks["iq"] = server.top_percent(user_id, "iq")
+    ranks["aura"] = server.top_percent(user_id, "aura")
     return Profile(
         user_id=user.user_id,
         name=user.name,
@@ -148,4 +157,5 @@ def build_profile(server: ServerAnalysis, user_id: int) -> Profile:
         server_size=len(server.users),
         messages=user.messages,
         iq=user.iq,
+        aura=user.aura,
     )

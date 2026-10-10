@@ -9,7 +9,8 @@ from typing import Callable
 
 import discord
 
-from .cards import build_pages, iq_page
+from .cards import aura_page, build_pages, iq_page
+from .dexify import dexify_text
 from .demo import build_demo_server
 from .markov import build_chain
 from .profile import ServerAnalysis, analyze_server, build_profile
@@ -25,8 +26,9 @@ TOUR = [
     ("home", "👁️", "What is SYKE?", "The quick overview"),
     ("profile", "🧪", "Personality reports", "The full judgement card"),
     ("iq", "🧠", "IQ test", "A very unscientific IQ score"),
+    ("aura", "✨", "Aura check", "A very unscientific aura reading"),
     ("top", "🏆", "Leaderboards", "Who's the funniest, most toxic, smartest"),
-    ("talk", "🗣️", "Mimic & yap", "SYKE talks like your members"),
+    ("talk", "🗣️", "Mimic, yap & dexify", "SYKE talks like your members"),
     ("ask", "💬", "Ask anything", "ChatGPT-style answers to any question"),
     ("data", "⛏️", "Your data", "Scanning, opting out, privacy"),
     ("admin", "⚙️", "Server setup", "Everything admins can configure"),
@@ -56,7 +58,7 @@ def tour_page(key: str, p: str) -> list[discord.Embed]:
             f"`{p}profile [@member]` reads someone's messages in the watched channels and judges them.\n\n"
             "• **Six traits**: funny, toxic, cringe, freaky, serious and chaotic, scored 0-100\n"
             "• **A roast** that quotes their real messages, written fresh every time\n"
-            "• **Stats**: messages, peak hours (in *your* timezone), catchphrase, top emojis, IQ\n"
+            "• **Stats**: messages, peak hours (in *your* timezone), catchphrase, top emojis, IQ, aura\n"
             "• **Highlights**: their funniest, most unhinged, freakiest and most toxic messages\n"
             "• **Ranks & achievements** against everyone else in the server\n\n"
             "Server emojis count too: `:KEKW:` reads as laughing."
@@ -72,13 +74,25 @@ def tour_page(key: str, p: str) -> list[discord.Embed]:
             "length and punctuation push it up; brainrot and caps-lock chaos drag it down.\n\n"
             f"It also shows on `{p}profile`, and `{p}top iq` ranks the whole server."
         )), example]
+    if key == "aura":
+        server = demo_server()
+        user = server.users[4]
+        others = [u.aura.aura for uid, u in server.users.items() if uid != 4 and u.aura]
+        example = aura_page(user.name, user.aura, round(sum(v < user.aura.aura for v in others) / len(others) * 100),
+                            demo=True)
+        example.set_footer(text=EXAMPLE_NOTE)
+        return [_page("✨ Aura check", (
+            f"`{p}aura [@member]` estimates aura from how someone writes: short mysterious lines and W's "
+            "farm it; cringe, yapping and brainrot spend it.\n\n"
+            f"It also shows on `{p}profile`, and `{p}top aura` ranks the whole server."
+        )), example]
     if key == "top":
         board = discord.Embed(title="😂 Funny — server leaderboard", colour=BRAND,
                               description=f"```\n{render_leaderboard(demo_server(), 'funny')}\n```")
         board.set_footer(text=EXAMPLE_NOTE)
         return [_page("🏆 Leaderboards", (
             f"`{p}top [trait]` ranks everyone SYKE has judged.\n\n"
-            "Traits: `funny` `toxic` `cringe` `freaky` `serious` `chaotic` `active` `iq`"
+            "Traits: `funny` `toxic` `cringe` `freaky` `serious` `chaotic` `active` `iq` `aura`"
         )), board]
     if key == "talk":
         chain = build_chain([m.content for m in demo_server().users[1].messages])
@@ -86,11 +100,18 @@ def tour_page(key: str, p: str) -> list[discord.Embed]:
         example = discord.Embed(description=line, colour=BRAND)
         example.set_author(name="Zyro (probably)")
         example.set_footer(text=f"{EXAMPLE_NOTE} • Markov chain • not a real quote")
-        return [_page("🗣️ Mimic & yap", (
+        dexed = discord.Embed(description=dexify_text(
+            "I think we should go to the store later", random.Random(4)
+        ), colour=BRAND)
+        dexed.set_author(name="Zyro (dexified)")
+        dexed.set_footer(text=f"{EXAMPLE_NOTE} • inserts ...... after a random few words")
+        return [_page("🗣️ Mimic, yap & dexify", (
             f"`{p}mimic [@member]`: SYKE invents a message in someone's style from everything they've said.\n\n"
+            f"`{p}dexify [@member]`: take one of their messages (or a reply, or your own text) and insert "
+            "`......` after a random few words.\n\n"
             f"`{p}yap on` (admins): now and then SYKE chimes in using this server's slang and running jokes. "
             "**Reply to it** and SYKE answers back in the same voice, written from what people here actually say."
-        )), example]
+        )), example, dexed]
     if key == "ask":
         example = discord.Embed(colour=BRAND, description=(
             "Because sunlight hits the air and the blue light scatters way more than the red, so the whole "

@@ -19,8 +19,9 @@ from discord.ext import commands
 
 from .ai import compose_reply, write_roast
 from .ask import AskUnavailable, ask
-from .cards import MESSAGE_VIEW_TIMEOUT, ProfileView, build_pages, iq_page
+from .cards import MESSAGE_VIEW_TIMEOUT, ProfileView, aura_page, build_pages, iq_page
 from .config import Settings, load_settings
+from .dexify import dexify_text
 from .demo import PERSONAS, build_demo_server
 from .markov import build_chain
 from .models import Msg
@@ -67,11 +68,13 @@ TRAIT_ALIASES: dict[str, str] = {
     "funniest": "funny", "freak": "freaky", "chaos": "chaotic", "smart": "serious",
     "active": "active", "messages": "active", "yap": "active", "yapper": "active",
     "iq": "iq", "smartest": "iq", "brain": "iq", "brains": "iq",
+    "aura": "aura", "auras": "aura", "rizz": "aura", "presence": "aura",
 }
 TRAIT_TITLES: dict[str, str] = {
     **{t: f"{TRAIT_META[t][0]} {TRAIT_META[t][1]}" for t in TRAITS},
     "active": "💬 Most active",
     "iq": "🧠 Highest IQ",
+    "aura": "✨ Highest aura",
 }
 PERSONA_BY_NAME: dict[str, int] = {name.lower(): uid for uid, (name, _, _) in PERSONAS.items()}
 
@@ -845,6 +848,33 @@ class SykeCommands(commands.Cog, name="SYKE"):
         await ctx.reply(embed=iq_page(target.display_name, user.iq, smarter_than, target.display_avatar.url,
                                       demo=self.bot.storage.demo_mode(ctx.guild.id)))
 
+    @commands.hybrid_command(name="aura", aliases=["auracheck", "rizz"], description="SYKE's (very unscientific) aura reading for someone")
+    @app_commands.describe(member="Whose aura to measure. Leave empty for your own.")
+    @commands.cooldown(1, 10, commands.BucketType.member)
+    @public()
+    async def aura(self, ctx: commands.Context, member: discord.Member | None = None) -> None:
+        target = member or ctx.author
+        if target.bot:
+            await ctx.reply(embed=notice("Nice try", "Bots have no aura. Only a status indicator."), ephemeral=True)
+            return
+        if target.id in self.bot.storage.optouts(ctx.guild.id):
+            await ctx.reply(embed=notice("Off limits", f"{target.display_name} has opted out of being judged."), ephemeral=True)
+            return
+        async with ctx.typing():
+            result = await self.bot.analyze(ctx.guild)
+        if result is None:
+            await ctx.reply(embed=self.bot.no_channels(ctx.guild.id))
+            return
+        server, _ = result
+        user = server.users.get(target.id)
+        if user is None or user.aura is None:
+            await ctx.reply(embed=self.not_enough(ctx, target, server))
+            return
+        others = [u.aura.aura for uid, u in server.users.items() if uid != target.id and u.aura]
+        more_than = round(sum(v < user.aura.aura for v in others) / len(others) * 100) if len(others) >= 2 else None
+        await ctx.reply(embed=aura_page(target.display_name, user.aura, more_than, target.display_avatar.url,
+                                        demo=self.bot.storage.demo_mode(ctx.guild.id)))
+
     def not_enough(self, ctx: commands.Context, target: discord.abc.User, server: ServerAnalysis) -> discord.Embed:
         have = server.below_threshold.get(target.id, 0)
         need = self.bot.settings.min_messages
@@ -856,14 +886,14 @@ class SykeCommands(commands.Cog, name="SYKE"):
         )
 
     @commands.hybrid_command(name="top", aliases=["leaderboard", "lb"], description="Server leaderboard for a trait")
-    @app_commands.describe(trait="funny, toxic, cringe, freaky, serious, chaotic, active or iq")
+    @app_commands.describe(trait="funny, toxic, cringe, freaky, serious, chaotic, active, iq or aura")
     @commands.cooldown(1, 15, commands.BucketType.member)
     @public()
     async def top(self, ctx: commands.Context, trait: str = "funny") -> None:
         assert ctx.guild is not None
         key = TRAIT_ALIASES.get(trait.lower().strip())
         if key is None:
-            options = ", ".join(f"`{t}`" for t in [*TRAITS, "active", "iq"])
+            options = ", ".join(f"`{t}`" for t in [*TRAITS, "active", "iq", "aura"])
             await ctx.reply(embed=notice("Unknown trait", f"Pick one of: {options}"), ephemeral=True)
             return
         async with ctx.typing():
@@ -1019,6 +1049,95 @@ class SykeCommands(commands.Cog, name="SYKE"):
         embed.set_author(name=f"{target.display_name} (probably)", icon_url=target.display_avatar.url)
         embed.set_footer(text=f"Markov chain of {count} messages • not a real quote")
         await ctx.reply(embed=embed)
+
+    async def _replied_message(self, ctx: commands.Context) -> discord.Message | None:
+        """The message this command is a reply to, if any."""
+        message = getattr(ctx, "message", None)
+        ref = getattr(message, "reference", None) if message is not None else None
+        if ref is None or getattr(ref, "message_id", None) is None:
+            return None
+        target = getattr(ref, "resolved", None) or getattr(ref, "cached_message", None)
+        if target is not None and getattr(target, "content", None):
+            return target
+        channel = getattr(ctx, "channel", None) or getattr(message, "channel", None)
+        if channel is None:
+            return None
+        try:
+            return await channel.fetch_message(ref.message_id)
+        except discord.HTTPException:
+            return None
+
+    async def _pick_quote(self, ctx: commands.Context, author_id: int) -> tuple[str | None, int] | None:
+        """A stored message from `author_id`, preferring ones long enough to dexify."""
+        texts = await self.corpus(ctx.guild, author_id)
+        if texts is None:
+            return None
+        usable = [t for t in texts if t.strip() and not t.lower().startswith("http")]
+        if not usable:
+            return None, len(texts)
+        meaty = [t for t in usable if len(t.split()) >= 3]
+        return random.choice(meaty or usable), len(texts)
+
+    def _dexify_card(self, name: str, original: str, avatar_url: str | None) -> discord.Embed:
+        rewritten = dexify_text(original)
+        embed = discord.Embed(description=discord.utils.escape_markdown(rewritten), colour=BRAND)
+        embed.set_author(name=f"{name} (dexified)", icon_url=avatar_url)
+        quote = " ".join(original.split())
+        if len(quote) > 180:
+            quote = quote[:179].rstrip() + "…"
+        embed.add_field(name="Original", value=f"> {discord.utils.escape_markdown(quote)}", inline=False)
+        embed.set_footer(text="Inserts ...... after a random few words • not how they actually type")
+        return embed
+
+    @commands.hybrid_command(name="dexify", aliases=["dex", "dots"],
+                             description="Rewrite a message with ...... pauses, like Dex")
+    @app_commands.describe(
+        member="Whose stored message to dexify. Leave empty to use a reply, your text, or your own messages.",
+        text="Optional text to rewrite. Reply to a message to dexify that instead.",
+    )
+    @commands.cooldown(1, 5, commands.BucketType.member)
+    @public()
+    async def dexify(self, ctx: commands.Context, member: discord.Member | None = None,
+                     *, text: str | None = None) -> None:
+        supplied = (text or "").strip()
+        speaker = member or ctx.author
+        original = supplied or None
+
+        if original is None:
+            replied = await self._replied_message(ctx)
+            if replied is not None and replied.content:
+                speaker = replied.author
+                original = replied.content
+
+        if original is None:
+            if speaker.bot:
+                await ctx.reply(embed=notice("Nice try", "Bots already pause. It's called latency."), ephemeral=True)
+                return
+            if speaker.id in self.bot.storage.optouts(ctx.guild.id):
+                await ctx.reply(embed=notice("Off limits", f"{speaker.display_name} has opted out of SYKE."), ephemeral=True)
+                return
+            result = await self._pick_quote(ctx, speaker.id)
+            if result is None:
+                await ctx.reply(embed=self.bot.no_channels(ctx.guild.id))
+                return
+            original, count = result
+            if original is None:
+                await ctx.reply(embed=notice(
+                    "Not enough to go on 🔬",
+                    f"SYKE has only **{count}** message{'s' if count != 1 else ''} from {speaker.display_name}. "
+                    f"Reply to a message, pass some text, or ask an admin to run `{self.p(ctx)}collect`.",
+                ))
+                return
+        elif not supplied:
+            if getattr(speaker, "bot", False):
+                await ctx.reply(embed=notice("Nice try", "Bots already pause. It's called latency."), ephemeral=True)
+                return
+            if getattr(speaker, "id", None) in self.bot.storage.optouts(ctx.guild.id):
+                await ctx.reply(embed=notice("Off limits", f"{speaker.display_name} has opted out of SYKE."), ephemeral=True)
+                return
+
+        avatar = getattr(getattr(speaker, "display_avatar", None), "url", None)
+        await ctx.reply(embed=self._dexify_card(speaker.display_name, original, avatar))
 
     @commands.hybrid_command(name="diagnose", aliases=["check"], description="Check why SYKE's prefix commands might not work here")
     @app_commands.guild_only()
@@ -1180,7 +1299,9 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"`{p}profile [@member]` — the full personality report\n"
                 f"`{p}ask <question>` — ask SYKE anything, like ChatGPT (or just @mention it)\n"
                 f"`{p}iq [@member]` — SYKE's very unscientific IQ estimate\n"
-                f"`{p}top [trait]` — leaderboard: funny, toxic, cringe, freaky, serious, chaotic, active, iq\n"
+                f"`{p}aura [@member]` — SYKE's very unscientific aura reading\n"
+                f"`{p}dexify [@member]` — rewrite a message with ...... pauses\n"
+                f"`{p}top [trait]` — leaderboard: funny, toxic, cringe, freaky, serious, chaotic, active, iq, aura\n"
                 f"`{p}mimic [@member]` — SYKE talks like them (Markov chain)\n"
                 f"`{p}scanme` — dig up your older messages so they count towards your profile\n"
                 f"`{p}optout` / `{p}optin` — control whether you're judged\n"

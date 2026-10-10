@@ -113,6 +113,7 @@ def _user_prompt(profile: Profile, sample: list[Msg], style: str, server_emojis:
         "server_rank_top_percent": profile.server_ranks,
         "achievements": [n for _, n in profile.achievements],
         "iq": profile.iq.iq if profile.iq else None,
+        "aura": profile.aura.aura if profile.aura else None,
     }
     parts = [
         f"WRITE THE SUMMARY IN THE STYLE OF: {style}",
