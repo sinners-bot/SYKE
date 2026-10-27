@@ -359,6 +359,47 @@ class _NullTyping:
         return False
 
 
+def mention_message(mid, text="<@999> is pineapple on pizza good?", channel_id=1):
+    replies: list[str] = []
+
+    async def reply(content, **kwargs):
+        replies.append(content)
+
+    channel = types.SimpleNamespace(id=channel_id, typing=lambda: _NullTyping())
+    message = types.SimpleNamespace(
+        id=mid, content=text, guild=types.SimpleNamespace(id=42),
+        author=types.SimpleNamespace(id=777, bot=False, display_name="Tester"),
+        channel=channel, reply=reply, mentions=[types.SimpleNamespace(id=999)],
+    )
+    return message, replies
+
+
+def test_mentioning_syke_yaps_instead_of_asking(lab):
+    cog, guild, _ = lab
+    bot = cog.bot
+    run(bot.add_cog(cog))
+    run(bot.analyze(guild))
+    assert bot.storage.yap_channels(42) == set()
+
+    assert bot.mention_yap_prompt(mention_message(1, "<@999> profile")[0]) is None
+    assert bot.mention_yap_prompt(mention_message(2, "<@999>")[0]) is None
+    message, replies = mention_message(3)
+    prompt = bot.mention_yap_prompt(message)
+    assert prompt == "is pineapple on pizza good?"
+    run(bot.answer_mention_yap(message, prompt))
+    assert len(replies) == 1
+    assert "pizza" in replies[0].lower()
+    assert replies[0] != prompt
+
+    run(bot.answer_mention_yap(message, prompt))
+    assert len(replies) == 1, "per-user cooldown"
+
+    aside, aside_replies = mention_message(4, "yo <@999> pizza though", channel_id=2)
+    assert bot.mention_yap_prompt(aside) == "yo pizza though"
+    run(bot.answer_mention_yap(aside, "yo pizza though"))
+    assert aside_replies and "pizza" in aside_replies[0].lower()
+
+
 def test_replies_to_yaps_get_a_matching_comeback(lab, monkeypatch):
     cog, guild, _ = lab
     bot = cog.bot

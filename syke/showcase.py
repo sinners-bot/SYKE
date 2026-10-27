@@ -104,7 +104,8 @@ def tour_page(key: str, p: str) -> list[discord.Embed]:
             f"`{p}dexify`: **reply to a message** and SYKE posts it back as normal text with `......` "
             "after a random few words. No embed — just the line, like Dex typed it.\n\n"
             f"`{p}yap on` (admins): now and then SYKE chimes in using this server's slang and running jokes. "
-            "**Reply to it** and SYKE answers back in the same voice, written from what people here actually say."
+            "**@mention SYKE** with anything that isn't a command and it yaps back in that voice, even if "
+            "yap isn't on here. **Reply to a yap** and it keeps going, written from what people here actually say."
         )), example]
     if key == "ask":
         example = discord.Embed(colour=BRAND, description=(
@@ -114,10 +115,10 @@ def tour_page(key: str, p: str) -> list[discord.Embed]:
         example.set_author(name="❓ why is the sky blue")
         example.set_footer(text="Example answer • reply to follow up • SYKE AI")
         return [_page("💬 Ask anything", (
-            f"`{p}ask <question>`, or just **@mention SYKE** with your question. Explanations, homework, code, "
-            "advice, translations, hot takes: SYKE answers like ChatGPT, with a bit more attitude.\n\n"
+            f"`{p}ask <question>`. Explanations, homework, code, advice, translations, hot takes: "
+            "SYKE answers like ChatGPT, with a bit more attitude.\n\n"
             "**Reply to an answer** to ask a follow-up; SYKE remembers the conversation. "
-            "In DMs you don't even need the command."
+            "In DMs you don't even need the command. @mentioning SYKE in a server yaps instead of asking."
         )), example]
     if key == "data":
         return [_page("⛏️ Your data", (

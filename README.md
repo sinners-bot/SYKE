@@ -23,9 +23,10 @@ Run `python -m syke.preview` to see a report from a fake server in your terminal
 ## Commands
 
 Every command works with the server prefix (default `!`) **and** as a slash command
-(`!profile` or `/profile`). Mentioning the bot (`@SYKE profile`) always works, so a
-forgotten prefix is never a problem. Admins can also switch a server to mentions only
-with `!prefix mention`.
+(`!profile` or `/profile`). Mentioning the bot as a prefix (`@SYKE profile`) always
+works, so a forgotten prefix is never a problem. `@SYKE` plus anything that isn't a
+command gets a yap in the server's voice, not a ChatGPT-style answer. Admins can also
+switch a server to mentions only with `!prefix mention`.
 
 | Command | Who | What it does |
 | --- | --- | --- |
@@ -34,7 +35,7 @@ with `!prefix mention`.
 | `!aura [@member]` | everyone | A very unscientific aura reading (0-200) with a personal verdict, what farmed or spent it, and their biggest aura farm and aura loss. Uses stored messages when it can, so it stays snappy. Also shown on `!profile`. Aliases: `!auracheck`, `!rizz` |
 | `!dexify` | everyone | Reply to a message and SYKE posts it back as normal text with `......` after a random few words, like Dex. No embed. Aliases: `!dex`, `!dots` |
 | `!top [trait]` | everyone | Leaderboard for `funny`, `toxic`, `cringe`, `freaky`, `serious`, `chaotic`, `active`, `iq` or `aura`. Aliases: `!leaderboard`, `!lb` |
-| `!ask <question>` | everyone | Ask SYKE anything, ChatGPT-style. Also works as `@SYKE <question>` and in DMs; reply to an answer to follow up. Aliases: `!ai`, `!gpt`, `!chat`, `!q`. Needs an AI key |
+| `!ask <question>` | everyone | Ask SYKE anything, ChatGPT-style. Also works in DMs; reply to an answer to follow up. Aliases: `!ai`, `!gpt`, `!chat`, `!q`. Needs an AI key. `@SYKE <anything>` in a server yaps instead |
 | `!showcase` | everyone | A tour of every feature with live example cards. Aliases: `!features`, `!tour` |
 | `!about` | everyone | How many servers use SYKE, members watched, uptime. Aliases: `!stats`, `!info` |
 | `!invite` | everyone | Button to add SYKE to your own server |
@@ -49,7 +50,7 @@ with `!prefix mention`.
 | `!timezone <zone>` | Manage Server | Timezone used to spot late-night posting, e.g. `Europe/London`. Peak hours on cards don't need it: they are Discord timestamps, so every reader sees them in their own timezone. Alias: `!tz` |
 | `!rescan` | Manage Server | Drop the cache and re-read channels now |
 | `!collect [#channel] [limit]` | Manage Server | Read up to 20,000 messages per channel (default 5,000) into the Markov corpus. Without a channel it reads every watched channel |
-| `!yap on\|off [#channel]` | Manage Server | When on, SYKE now and then answers chat in that channel (`SYKE_YAP_CHANCE` per message, at most once per `SYKE_YAP_COOLDOWN` seconds). Reply to a yap and SYKE answers back in the chat's tone (toxic, funny or freaky, read from your reply and the recent chat). Every stored message feeds the server's vocabulary; the ones that match the topic (and Markov remixes) are ammunition. The AI writes a new original line from those words plus matching slang from SYKE's lexicon, instead of pasting or stitching old quotes. It skips lines it (or anyone) just said in that channel. Without an AI key it uses the best matching stored message for the topic and tone. `!yap` alone lists where it's on |
+| `!yap on\|off [#channel]` | Manage Server | When on, SYKE now and then answers chat in that channel (`SYKE_YAP_CHANCE` per message, at most once per `SYKE_YAP_COOLDOWN` seconds). **@mention SYKE** (with anything that isn't a command) and it always yaps back in the server's voice, even if yap isn't on in that channel. Reply to a yap and SYKE answers back in the chat's tone (toxic, funny or freaky, read from your reply and the recent chat). Every stored message feeds the server's vocabulary; the ones that match the topic (and Markov remixes) are ammunition. The AI writes a new original line from those words plus matching slang from SYKE's lexicon, instead of pasting or stitching old quotes. It skips lines it (or anyone) just said in that channel. Without an AI key it uses the best matching stored message for the topic and tone. `!yap` alone lists where it's on |
 | `!demo on\|off` | Manage Server | Add 5 fake members to rankings so you can test alone |
 | `!sample [name]` | Manage Server | Full report for a fake member (Zyro, Mira, bubbles, Dex, Vex) |
 
