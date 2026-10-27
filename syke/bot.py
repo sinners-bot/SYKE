@@ -348,11 +348,15 @@ class Syke(commands.Bot):
             return
         if await self.maybe_answer(message) or not message.guild:
             return
-        if self.is_command_text(message.guild.id, message.content):
+        prompt = self.mention_yap_prompt(message)
+        if prompt is None and self.is_command_text(message.guild.id, message.content):
             return
-        if message.channel.id in self.storage.tracked(message.guild.id) \
+        if prompt is None and message.channel.id in self.storage.tracked(message.guild.id) \
                 and message.author.id not in self.storage.optouts(message.guild.id):
             self.storage.add_corpus(message.guild.id, [corpus_row(message)])
+        if prompt is not None:
+            await self.answer_mention_yap(message, prompt)
+            return
         said = await self.replied_yap(message)
         if said is not None:
             await self.answer_yap_reply(message, said)
@@ -387,9 +391,24 @@ class Syke(commands.Bot):
 
     # Ask
 
-    def mention_question(self, message: discord.Message) -> str | None:
-        """The question in "@SYKE <question>", or any non-command DM; None for commands and bare mentions."""
+    def mentioned_me(self, message: discord.Message) -> bool:
         if self.user is None:
+            return False
+        if any(getattr(user, "id", None) == self.user.id for user in getattr(message, "mentions", ())):
+            return True
+        text = message.content or ""
+        return f"<@{self.user.id}>" in text or f"<@!{self.user.id}>" in text
+
+    def strip_my_mention(self, text: str) -> str:
+        if self.user is None:
+            return text
+        for form in (f"<@{self.user.id}>", f"<@!{self.user.id}>"):
+            text = text.replace(form, " ")
+        return " ".join(text.split())
+
+    def mention_yap_prompt(self, message: discord.Message) -> str | None:
+        """What to yap at when someone pings SYKE without running a command. None otherwise."""
+        if self.user is None or message.guild is None or not self.mentioned_me(message):
             return None
         text = message.content.strip()
         for form in (f"<@{self.user.id}>", f"<@!{self.user.id}>"):
@@ -398,9 +417,18 @@ class Syke(commands.Bot):
                 if not rest or self.get_command(rest.split()[0]):
                     return None
                 return rest
-        if message.guild is None and not text.startswith(self.settings.default_prefix):
-            return text
-        return None
+        if self.is_command_text(message.guild.id, message.content):
+            return None
+        return self.strip_my_mention(text) or text
+
+    def mention_question(self, message: discord.Message) -> str | None:
+        """The question in a non-command DM. Guild mentions yap instead of asking."""
+        if self.user is None or message.guild is not None:
+            return None
+        text = message.content.strip()
+        if text.startswith(self.settings.default_prefix):
+            return None
+        return text
 
     async def ask_thread(self, message: discord.Message) -> list[dict] | None:
         """The conversation so far, if `message` replies to one of SYKE's answers."""
@@ -422,7 +450,7 @@ class Syke(commands.Bot):
             self._asks.pop(next(iter(self._asks)))
 
     async def maybe_answer(self, message: discord.Message) -> bool:
-        """Answer "@SYKE <question>", DMs, and replies to SYKE's answers. True if it was one."""
+        """Answer DMs and replies to SYKE's AI answers. Guild mentions yap instead. True if it was one."""
         question = self.mention_question(message)
         history: list[dict] = []
         if question is None:
@@ -507,21 +535,23 @@ class Syke(commands.Bot):
         self._voices[guild_id] = (time.monotonic(), voice)
         return voice
 
-    async def build_yap(self, message: discord.Message, said: str | None = None) -> str | None:
+    async def build_yap(self, message: discord.Message, said: str | None = None,
+                        target: str | None = None) -> str | None:
         """A line in the server's own words that fits the chat's topic and tone (toxic, funny or freaky)."""
+        text = message.content if target is None else target
         guild_id = message.guild.id
         chat = await self.recent_chat(message, YAP_CONTEXT if said else YAP_CONTEXT // 2)
-        tone = detect_tone(message.content, chat)
-        weights = query_weights(message.content, said, chat)
-        hard = {message.content} | ({said} if said else set())
+        tone = detect_tone(text, chat)
+        weights = query_weights(text, said, chat)
+        hard = {text, message.content} | ({said} if said else set())
         used = hard | {t.text for t in chat} | set(self.recent_yaps(message.channel.id))
-        ranked, remixed = await self.rank_yap(guild_id, weights, tone, message.content, used)
+        ranked, remixed = await self.rank_yap(guild_id, weights, tone, text, used)
         if not ranked:
-            ranked, remixed = await self.rank_yap(guild_id, weights, tone, message.content, hard)
+            ranked, remixed = await self.rank_yap(guild_id, weights, tone, text, hard)
         if not ranked:
             return None
         log.info("Yap in %s: tone %s, %d candidates (%d remixes)", guild_id, tone, len(ranked), len(remixed))
-        return await compose_reply(self.settings, ranked, Turn(author_name(message.author), message.content),
+        return await compose_reply(self.settings, ranked, Turn(author_name(message.author), text),
                                    chat, said, tone, remixed, avoid=list(used),
                                    voice=await self.server_voice(guild_id), weights=weights)
 
@@ -553,13 +583,25 @@ class Syke(commands.Bot):
 
     async def answer_yap_reply(self, message: discord.Message, said: str) -> None:
         """Someone answered a yap: reply in the server's voice, written from stored messages."""
+        await self.send_yap(message, said=said)
+
+    async def answer_mention_yap(self, message: discord.Message, prompt: str) -> None:
+        """Someone pinged SYKE: yap back in the server's voice, even if yap isn't on here."""
+        await self.send_yap(message, target=prompt)
+
+    async def send_yap(self, message: discord.Message, said: str | None = None,
+                       target: str | None = None) -> None:
         key = (message.channel.id, message.author.id)
         now = time.monotonic()
         if now - self._last_comeback.get(key, -1e9) < YAP_REPLY_COOLDOWN:
             return
         self._last_comeback[key] = now
+        self._last_yap[message.channel.id] = now
+        prompt = target if target is not None else message.content
         async with message.channel.typing():
-            reply = await self.build_yap(message, said)
+            used = set(self.recent_yaps(message.channel.id)) | {prompt, message.content}
+            reply = await self.build_yap(message, said, target) or self.pick_yap(
+                message.guild.id, exclude_id=message.id, exclude=used)
         if reply:
             with contextlib.suppress(discord.HTTPException):
                 await message.reply(reply, mention_author=False)
@@ -1314,7 +1356,8 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"Prefix here: `{p}` • slash commands work too.\n\n"
                 "**Everyone**\n"
                 f"`{p}profile [@member]` — the full personality report\n"
-                f"`{p}ask <question>` — ask SYKE anything, like ChatGPT (or just @mention it)\n"
+                f"`{p}ask <question>` — ask SYKE anything, like ChatGPT (DMs too)\n"
+                "**@mention SYKE** — it yaps back in this server's voice\n"
                 f"`{p}iq [@member]` — SYKE's very unscientific IQ estimate\n"
                 f"`{p}aura [@member]` — SYKE's very unscientific aura reading\n"
                 f"`{p}dexify` — reply to a message; SYKE posts it back with ...... pauses\n"
@@ -1332,7 +1375,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"`{p}timezone <zone>` — for late-night detection, e.g. `{p}timezone Europe/London`\n"
                 f"`{p}rescan` — re-read channels now\n"
                 f"`{p}collect [#channel] [limit]` — read more history for mimic/yap\n"
-                f"`{p}yap on|off` — SYKE chimes in in the server's voice; reply to it and it answers back\n"
+                f"`{p}yap on|off` — SYKE chimes in in the server's voice; @mention it or reply and it answers back\n"
                 f"`{p}demo on|off` — add fake members to test alone\n"
                 f"`{p}sample [name]` — report for a fake member\n\n"
                 "SYKE keeps text from watched channels for mimic/yap; "
@@ -1544,8 +1587,8 @@ class SykeCommands(commands.Cog, name="SYKE"):
             await ctx.reply(embed=notice("Yap off 🤐", f"SYKE will keep quiet in {channel.mention}.", BRAND))
             return
         body = (f"Every so often, when people chat in {channel.mention}, SYKE will chime in using this "
-                f"server's slang and running jokes. Reply to one and SYKE answers back in the same voice. "
-                f"Turn it off with `{p}yap off`.")
+                f"server's slang and running jokes. **@mention SYKE** (anywhere) or reply to a yap and it "
+                f"answers back in the same voice. Turn it off with `{p}yap off`.")
         perms = channel.permissions_for(ctx.guild.me)
         if not perms.send_messages:
             body += f"\n⚠️ SYKE can't send messages in {channel.mention} yet."

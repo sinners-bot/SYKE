@@ -55,7 +55,10 @@ def test_mention_only_prefix(cog):
     assert "only answers when mentioned" in ctx.replies[-1].description
 
     run(cog.help.callback(cog, ctx))
-    assert "`@SYKE profile [@member]`" in ctx.replies[-1].description
+    help_text = ctx.replies[-1].description
+    assert "`@SYKE profile [@member]`" in help_text
+    assert "@mention SYKE" in help_text and "yaps back" in help_text
+    assert "or just @mention it" not in help_text
 
     run(cog.prefix.callback(cog, ctx, None))
     assert "mentions only" in ctx.replies[-1].description
@@ -240,6 +243,8 @@ def test_showcase_pages_have_examples(cog):
     assert "`?iq [@member]`" in tour_page("iq", "?")[0].description
     assert "`?aura [@member]`" in tour_page("aura", "?")[0].description
     assert "`?dexify`" in tour_page("talk", "?")[0].description
+    assert "@mention SYKE" in tour_page("talk", "?")[0].description
+    assert "yaps instead of asking" in tour_page("ask", "?")[0].description
 
 
 def test_install_settings_are_configured_once(cog):
@@ -309,10 +314,21 @@ def test_ask_by_mention_dm_and_follow_up(cog, monkeypatch):
 
     assert bot.mention_question(_ask_message(bot, "<@999> profile")[0]) is None, "commands aren't questions"
     assert bot.mention_question(_ask_message(bot, "<@999>")[0]) is None
+    assert bot.mention_question(_ask_message(bot, "<@999> why is the sky blue?")[0]) is None, \
+        "guild mentions yap instead of asking"
+    assert bot.mention_yap_prompt(_ask_message(bot, "<@999> why is the sky blue?")[0]) == "why is the sky blue?"
+    assert bot.mention_yap_prompt(_ask_message(bot, "<@999> profile")[0]) is None
+    assert bot.mention_yap_prompt(_ask_message(bot, "<@999>")[0]) is None
+    assert bot.mention_yap_prompt(_ask_message(bot, "hey <@999> you're trash")[0]) == "hey you're trash"
+    assert bot.mention_yap_prompt(_ask_message(bot, "just chatting")[0]) is None
+    assert bot.mention_yap_prompt(_ask_message(bot, "hello there", guild=False)[0]) is None
 
-    message, replies = _ask_message(bot, "<@999> why is the sky blue?")
-    assert run(bot.maybe_answer(message))
-    assert calls[-1][0] == "why is the sky blue?" and "#general" in calls[-1][2]
+    ping, _ = _ask_message(bot, "<@999> why is the sky blue?")
+    assert not run(bot.maybe_answer(ping))
+    assert calls == []
+
+    dm, replies = _ask_message(bot, "hello there", mid=4, guild=False, author_id=780)
+    assert run(bot.maybe_answer(dm)) and calls[-1] == ("hello there", [], "a private DM")
     first = replies[-1]
     assert first.embeds[0].description == "answer 1"
     assert first.embeds[0].footer.text.endswith("SYKE AI")
@@ -320,22 +336,20 @@ def test_ask_by_mention_dm_and_follow_up(cog, monkeypatch):
     ref = types.SimpleNamespace(message_id=first.id, resolved=first, cached_message=None)
     follow, replies = _ask_message(bot, "and at night?", mid=2, reference=ref, author_id=778)
     assert run(bot.maybe_answer(follow))
-    assert calls[-1][1] == [{"role": "user", "content": "why is the sky blue?"},
+    assert calls[-1][1] == [{"role": "user", "content": "hello there"},
                             {"role": "assistant", "content": "answer 1"}]
 
     bot._asks.clear()
     again, _ = _ask_message(bot, "really?", mid=3, reference=ref, author_id=779)
     run(bot.maybe_answer(again))
-    assert calls[-1][1][0]["content"] == "why is the sky blue?", "rebuilt from the embed after a restart"
+    assert calls[-1][1][0]["content"] == "hello there", "rebuilt from the embed after a restart"
 
-    dm, replies = _ask_message(bot, "hello there", mid=4, guild=False, author_id=780)
-    assert run(bot.maybe_answer(dm)) and calls[-1][2] == "a private DM"
     assert not run(bot.maybe_answer(_ask_message(bot, "just chatting", mid=5, author_id=781)[0]))
 
 
 def test_ask_without_ai_key_explains(cog):
     bot = cog.bot
     bot._connection.user = types.SimpleNamespace(id=999, mention="<@999>", name="SYKE")
-    message, replies = _ask_message(bot, "<@999> what's 2+2")
+    message, replies = _ask_message(bot, "what's 2+2", guild=False)
     run(bot.maybe_answer(message))
     assert replies[-1].embeds[0].title == "No brain installed 🧠"
