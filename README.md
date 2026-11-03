@@ -34,6 +34,9 @@ switch a server to mentions only with `!prefix mention`.
 | `!iq [@member]` | everyone | A very unscientific IQ estimate (55-160) with a bell curve, a verdict written from that member's actual factors and quotes (not a stock line), what raised or lowered it, and their smartest and least smart messages. Also shown on `!profile`. Aliases: `!brain`, `!smarts` |
 | `!aura [@member]` | everyone | A very unscientific aura reading (0-200) with a personal verdict, what farmed or spent it, and their biggest aura farm and aura loss. Uses stored messages when it can, so it stays snappy. Also shown on `!profile`. Aliases: `!auracheck`, `!rizz` |
 | `!dexify` | everyone | Reply to a message and SYKE posts it back as normal text with `......` after a random few words, like Dex. No embed. Aliases: `!dex`, `!dots` |
+| `!steal` | everyone | Reply to a message (or right-click it → Apps → Steal emoji/sticker) and SYKE adds that message's custom emojis and stickers to this server. A name only applies when there is exactly one. Aliases: `!yoink`, `!grab` |
+| `!emoji [name]` | everyone | Add a custom emoji from a PNG, JPG or GIF you attach, paste as a link, or reply to. Replying to custom emojis steals those instead. `!emoji list`, `!emoji remove <name>`, `!emoji rename <old> <new>`. The person who added one can remove or rename it; Manage Expressions or Manage Server can change any. Aliases: `!emote`, `!addemoji` |
+| `!sticker [name]` | everyone | Same as `!emoji`, for stickers. JPG is converted to PNG and pictures are fitted to 320×320. `!sticker list`, `!sticker remove`, `!sticker rename`. Aliases: `!stickers`, `!addsticker` |
 | `!top [trait]` | everyone | Leaderboard for `funny`, `toxic`, `cringe`, `freaky`, `serious`, `chaotic`, `active`, `iq` or `aura`. Aliases: `!leaderboard`, `!lb` |
 | `!ask <question>` | everyone | Ask SYKE anything, ChatGPT-style. Also works in DMs; reply to an answer to follow up. Aliases: `!ai`, `!gpt`, `!chat`, `!q`. Needs an AI key. `@SYKE <anything>` in a server yaps instead |
 | `!showcase` | everyone | A tour of every feature with live example cards. Aliases: `!features`, `!tour` |
@@ -107,11 +110,11 @@ Members need `SYKE_MIN_MESSAGES` (default 15) messages in watched channels befor
 2. **Bot** tab: copy the token. Under *Privileged Gateway Intents*, enable
    **Message Content Intent** (SYKE can't read messages without it).
 3. **OAuth2 → URL Generator**: scopes `bot` and `applications.commands`; permissions
-   **View Channels**, **Read Message History**, **Send Messages**, **Embed Links**.
+   **View Channels**, **Read Message History**, **Send Messages**, **Embed Links**,
+   **Use External Emojis**, **Add Reactions**, and **Manage Expressions** (so `!steal`, `!emoji` and `!sticker` can add them).
    Open the generated URL to invite SYKE to your server.
 4. **Add App button**: keep **Public Bot** on (Bot tab) so other people can add SYKE. On startup SYKE sets
-   its own guild-install settings (scopes `bot` + `applications.commands`, the permissions above plus
-   Use External Emojis and Add Reactions), so **Add App** on SYKE's profile adds it to a server.
+   its own guild-install settings (scopes `bot` + `applications.commands`, the permissions above), so **Add App** on SYKE's profile adds it to a server.
    If you set a custom install link in *Installation*, SYKE leaves it alone; `SYKE_MANAGE_INSTALL=0` turns this off.
 
 ### 2. Run it

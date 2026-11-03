@@ -1,5 +1,6 @@
 discord.py==2.7.1
 httpx==0.28.1
+Pillow==13.0.0
 emoji==2.16.0
 python-dotenv==1.2.4
 tzdata==2025.2

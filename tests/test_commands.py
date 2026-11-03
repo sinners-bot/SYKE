@@ -78,6 +78,9 @@ def test_help_uses_server_prefix(cog):
     ctx = FakeCtx()
     run(cog.help.callback(cog, ctx))
     assert "`s.profile [@member]`" in ctx.replies[-1].description
+    assert "`s.steal`" in ctx.replies[-1].description
+    assert "`s.emoji <name>`" in ctx.replies[-1].description
+    assert len(ctx.replies[-1].description) <= 4096
 
 
 def test_demo_toggle_and_sample(cog):
@@ -245,6 +248,8 @@ def test_showcase_pages_have_examples(cog):
     assert "`?dexify`" in tour_page("talk", "?")[0].description
     assert "@mention SYKE" in tour_page("talk", "?")[0].description
     assert "yaps instead of asking" in tour_page("ask", "?")[0].description
+    assert "`?steal`" in tour_page("emoji", "?")[0].description
+    assert "PNG, JPG or GIF" in tour_page("emoji", "?")[0].description
 
 
 def test_install_settings_are_configured_once(cog):

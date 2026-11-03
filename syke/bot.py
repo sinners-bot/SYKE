@@ -10,7 +10,7 @@ import random
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Callable, TypeVar
+from typing import Callable, Optional, TypeVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 import discord
@@ -22,6 +22,7 @@ from .ask import AskUnavailable, ask
 from .cards import MESSAGE_VIEW_TIMEOUT, ProfileView, aura_page, build_pages, iq_page, leaderboard_page
 from .config import Settings, load_settings
 from .dexify import dexify_text
+from . import expressions
 from .demo import PERSONAS, build_demo_server
 from .markov import build_chain
 from .models import Msg
@@ -43,8 +44,9 @@ MENTION_ONLY = "<mention>"
 MENTION_WORDS = {"mention", "@", "ping", "@mention"}
 VERSION = (os.getenv("RAILWAY_GIT_COMMIT_SHA") or "dev")[:7]
 NEEDED_PERMISSIONS = ("view_channel", "send_messages", "embed_links", "read_message_history")
-# Requested on invite: what SYKE needs to work, plus posting server emojis from elsewhere and reactions.
-INVITE_PERMISSIONS = NEEDED_PERMISSIONS + ("use_external_emojis", "add_reactions")
+# Requested on invite: what SYKE needs to work, plus posting server emojis, reactions,
+# and adding emojis and stickers (Manage Expressions).
+INVITE_PERMISSIONS = NEEDED_PERMISSIONS + ("use_external_emojis", "add_reactions", "manage_emojis")
 INSTALL_SCOPES = ["bot", "applications.commands"]
 MIN_MIMIC_MESSAGES = 10
 SERVER_LIST_LIMIT = 20
@@ -78,6 +80,14 @@ TRAIT_TITLES: dict[str, str] = {
 PERSONA_BY_NAME: dict[str, int] = {name.lower(): uid for uid, (name, _, _) in PERSONAS.items()}
 
 F = TypeVar("F", bound=Callable)
+
+
+def _same_attachment(existing, image) -> bool:
+    if existing is image:
+        return True
+    existing_id = getattr(existing, "id", None)
+    image_id = getattr(image, "id", None)
+    return existing_id is not None and existing_id == image_id
 
 
 def author_name(user) -> str:
@@ -853,6 +863,46 @@ class Syke(commands.Bot):
 class SykeCommands(commands.Cog, name="SYKE"):
     def __init__(self, bot: Syke) -> None:
         self.bot = bot
+        self.steal_menu = app_commands.ContextMenu(name="Steal emoji/sticker", callback=self.steal_from_message)
+        self.steal_menu.guild_only = True
+
+    async def cog_load(self) -> None:
+        self.bot.tree.add_command(self.steal_menu)
+
+    async def cog_unload(self) -> None:
+        self.bot.tree.remove_command(self.steal_menu.name, type=self.steal_menu.type)
+
+    async def _expressions(self, ctx: commands.Context, kind: str, action: str, text: str = "",
+                           image: discord.Attachment | None = None) -> None:
+        message = getattr(ctx, "message", None)
+        attachments = list(getattr(message, "attachments", None) or []) if message is not None else []
+        if image is not None and not any(_same_attachment(existing, image) for existing in attachments):
+            attachments.append(image)
+        reply = await expressions.referenced_message(ctx) if action == "add" else None
+        async with ctx.typing():
+            embed = await expressions.handle(
+                self.bot, ctx.guild, ctx.author,
+                kind=kind, action=action, text=text, attachments=attachments,
+                command_stickers=expressions.stickers_of(message) if message is not None else [],
+                reply=reply, prefix=self.p(ctx) if ctx.guild else self.bot.settings.default_prefix,
+            )
+        await ctx.reply(embed=embed)
+
+    @app_commands.guild_only()
+    async def steal_from_message(self, interaction: discord.Interaction, message: discord.Message) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                embed=expressions.notice("Servers only", "Emojis and stickers live on a server, not in DMs."),
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer()
+        prefix = self.bot.display_prefix(interaction.guild.id)
+        embed = await expressions.handle(
+            self.bot, interaction.guild, interaction.user,
+            kind="both", action="add", reply=message, prefix=prefix,
+        )
+        await interaction.followup.send(embed=embed)
 
     def p(self, ctx: commands.Context) -> str:
         return self.bot.display_prefix(ctx.guild.id)
@@ -1233,6 +1283,12 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 if not ok:
                     missing.append(perm)
 
+        expr_perms = getattr(getattr(guild, "me", None), "guild_permissions", None)
+        can_expr = True
+        if expr_perms is not None:
+            can_expr = bool(expr_perms.administrator or expr_perms.manage_emojis or expr_perms.manage_expressions)
+            rows.append(f"{'✅' if can_expr else '⚠️'} Manage Expressions for emojis and stickers")
+
         p = self.bot.display_prefix(guild.id)
         tracked = self.bot.storage.tracked(guild.id)
         unreadable = [
@@ -1251,6 +1307,8 @@ class SykeCommands(commands.Cog, name="SYKE"):
             verdict = f"All good. Add a channel to analyse with `{p}track #channel`."
         else:
             verdict = f"All good here. Try `{p}help`."
+        if not can_expr:
+            verdict += " Emoji and sticker commands need **Manage Expressions** on SYKE's role."
         embed = notice("🩺 SYKE diagnostics", "\n".join(rows) + f"\n\n{verdict}", WARN if missing else BRAND)
         embed.set_footer(text=f"SYKE version {VERSION}")
         await ctx.reply(embed=embed, ephemeral=True)
@@ -1345,6 +1403,76 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 "(Bot tab) so others can use Add App and the invite link."), inline=False)
         await ctx.reply(embed=embed, ephemeral=True)
 
+    @commands.hybrid_command(name="steal", aliases=["yoink", "grab"],
+                             description="Steal custom emojis and stickers from a message you reply to",
+                             usage="[name or message link]")
+    @app_commands.describe(text="New name when there is exactly one, or a link to the message")
+    @commands.cooldown(1, 5, commands.BucketType.member)
+    @public()
+    async def steal(self, ctx: commands.Context, *, text: str = "") -> None:
+        """Add every custom emoji and sticker from the message you reply to."""
+        await self._expressions(ctx, "both", "add", text)
+
+    @commands.hybrid_group(name="emoji", aliases=["emote", "addemoji"], fallback="add",
+                           description="Add, steal or manage custom emojis", usage="[name or link]")
+    @app_commands.describe(image="A PNG, JPG or GIF file",
+                           text="Name, image link, or message link. Leave empty when replying.")
+    @commands.cooldown(1, 5, commands.BucketType.member)
+    @public()
+    async def emoji(self, ctx: commands.Context, image: Optional[discord.Attachment] = None, *, text: str = "") -> None:
+        """Add an emoji from a file, a link, or custom emojis on a message you reply to."""
+        await self._expressions(ctx, "emoji", "add", text, image)
+
+    @emoji.command(name="list", description="List this server's custom emojis")
+    @commands.cooldown(1, 3, commands.BucketType.member)
+    @public()
+    async def emoji_list(self, ctx: commands.Context) -> None:
+        await self._expressions(ctx, "emoji", "list")
+
+    @emoji.command(name="remove", aliases=["delete", "del"], description="Remove a custom emoji")
+    @app_commands.describe(name="The emoji name, or the emoji itself")
+    @commands.cooldown(1, 3, commands.BucketType.member)
+    @public()
+    async def emoji_remove(self, ctx: commands.Context, *, name: str) -> None:
+        await self._expressions(ctx, "emoji", "remove", name)
+
+    @emoji.command(name="rename", description="Rename a custom emoji")
+    @app_commands.describe(old="Current name", new="New name")
+    @commands.cooldown(1, 3, commands.BucketType.member)
+    @public()
+    async def emoji_rename(self, ctx: commands.Context, old: str, new: str) -> None:
+        await self._expressions(ctx, "emoji", "rename", f"{old} {new}")
+
+    @commands.hybrid_group(name="sticker", aliases=["stickers", "addsticker"], fallback="add",
+                           description="Add, steal or manage custom stickers", usage="[name or link]")
+    @app_commands.describe(image="A PNG, JPG or GIF file",
+                           text="Name, image link, or message link. Leave empty when replying.")
+    @commands.cooldown(1, 5, commands.BucketType.member)
+    @public()
+    async def sticker(self, ctx: commands.Context, image: Optional[discord.Attachment] = None, *, text: str = "") -> None:
+        """Add a sticker from a file, a link, or stickers on a message you reply to."""
+        await self._expressions(ctx, "sticker", "add", text, image)
+
+    @sticker.command(name="list", description="List this server's custom stickers")
+    @commands.cooldown(1, 3, commands.BucketType.member)
+    @public()
+    async def sticker_list(self, ctx: commands.Context) -> None:
+        await self._expressions(ctx, "sticker", "list")
+
+    @sticker.command(name="remove", aliases=["delete", "del"], description="Remove a custom sticker")
+    @app_commands.describe(name="The sticker name")
+    @commands.cooldown(1, 3, commands.BucketType.member)
+    @public()
+    async def sticker_remove(self, ctx: commands.Context, *, name: str) -> None:
+        await self._expressions(ctx, "sticker", "remove", name)
+
+    @sticker.command(name="rename", description="Rename a custom sticker")
+    @app_commands.describe(old="Current name", new="New name")
+    @commands.cooldown(1, 3, commands.BucketType.member)
+    @public()
+    async def sticker_rename(self, ctx: commands.Context, old: str, new: str) -> None:
+        await self._expressions(ctx, "sticker", "rename", f"{old} {new}")
+
     @commands.hybrid_command(name="help", aliases=["commands"], description="How to use SYKE")
     @public()
     async def help(self, ctx: commands.Context) -> None:
@@ -1361,6 +1489,9 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"`{p}iq [@member]` — SYKE's very unscientific IQ estimate\n"
                 f"`{p}aura [@member]` — SYKE's very unscientific aura reading\n"
                 f"`{p}dexify` — reply to a message; SYKE posts it back with ...... pauses\n"
+                f"`{p}steal` — reply to a message to add its custom emojis and stickers here\n"
+                f"`{p}emoji <name>` / `{p}sticker <name>` — add a PNG, JPG or GIF (attach it, paste a link, or reply)\n"
+                f"`{p}emoji list` · `{p}emoji remove <name>` · `{p}emoji rename <old> <new>` (stickers too)\n"
                 f"`{p}top [trait]` — leaderboard: funny, toxic, cringe, freaky, serious, chaotic, active, iq, aura\n"
                 f"`{p}mimic [@member]` — SYKE talks like them (Markov chain)\n"
                 f"`{p}scanme` — dig up your older messages so they count towards your profile\n"

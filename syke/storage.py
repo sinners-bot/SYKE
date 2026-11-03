@@ -63,6 +63,15 @@ CREATE TABLE IF NOT EXISTS yap_channels (
     channel_id INTEGER NOT NULL,
     PRIMARY KEY (guild_id, channel_id)
 );
+CREATE TABLE IF NOT EXISTS expressions (
+    guild_id      INTEGER NOT NULL,
+    kind          TEXT NOT NULL,
+    expression_id INTEGER NOT NULL,
+    name          TEXT NOT NULL,
+    added_by      INTEGER NOT NULL,
+    created_at    REAL NOT NULL,
+    PRIMARY KEY (guild_id, kind, expression_id)
+);
 """
 
 
@@ -145,6 +154,34 @@ class Storage:
     def prefix(self, guild_id: int) -> str | None:
         rows = self._read("SELECT prefix FROM guild_settings WHERE guild_id = ?", (guild_id,))
         return rows[0][0] if rows else None
+
+    def remember_expression(self, guild_id: int, kind: str, expression_id: int, name: str, added_by: int) -> None:
+        """Remember who added an emoji or sticker through SYKE. Renames keep the original adder."""
+        self._write(
+            "INSERT INTO expressions (guild_id, kind, expression_id, name, added_by, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(guild_id, kind, expression_id) DO UPDATE SET name = excluded.name",
+            (guild_id, kind, expression_id, name, added_by, time.time()),
+        )
+
+    def expression_added_by(self, guild_id: int, kind: str, expression_id: int) -> int | None:
+        rows = self._read(
+            "SELECT added_by FROM expressions WHERE guild_id = ? AND kind = ? AND expression_id = ?",
+            (guild_id, kind, expression_id),
+        )
+        return rows[0][0] if rows else None
+
+    def rename_expression(self, guild_id: int, kind: str, expression_id: int, name: str) -> None:
+        self._write(
+            "UPDATE expressions SET name = ? WHERE guild_id = ? AND kind = ? AND expression_id = ?",
+            (name, guild_id, kind, expression_id),
+        )
+
+    def forget_expression(self, guild_id: int, kind: str, expression_id: int) -> None:
+        self._write(
+            "DELETE FROM expressions WHERE guild_id = ? AND kind = ? AND expression_id = ?",
+            (guild_id, kind, expression_id),
+        )
 
     def set_prefix(self, guild_id: int, prefix: str | None) -> None:
         self._write(

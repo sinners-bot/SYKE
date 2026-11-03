@@ -27,6 +27,7 @@ TOUR = [
     ("aura", "✨", "Aura check", "A very unscientific aura reading"),
     ("top", "🏆", "Leaderboards", "Who's the funniest, most toxic, smartest"),
     ("talk", "🗣️", "Mimic, yap & dexify", "SYKE talks like your members"),
+    ("emoji", "😛", "Emojis & stickers", "Steal them, or add a PNG, JPG or GIF"),
     ("ask", "💬", "Ask anything", "ChatGPT-style answers to any question"),
     ("data", "⛏️", "Your data", "Scanning, opting out, privacy"),
     ("admin", "⚙️", "Server setup", "Everything admins can configure"),
@@ -106,6 +107,21 @@ def tour_page(key: str, p: str) -> list[discord.Embed]:
             f"`{p}yap on` (admins): now and then SYKE chimes in using this server's slang and running jokes. "
             "**@mention SYKE** with anything that isn't a command and it yaps back in that voice, even if "
             "yap isn't on here. **Reply to a yap** and it keeps going, written from what people here actually say."
+        )), example]
+    if key == "emoji":
+        example = discord.Embed(description="✅ <:KEKW:1> `KEKW`\n✅ sticker **sad_cat**", colour=BRAND)
+        example.set_author(name="Yoinked")
+        example.set_footer(text=f"{EXAMPLE_NOTE} • custom emojis and stickers copied onto this server")
+        return [_page("😛 Emojis & stickers", (
+            f"`{p}steal` — **reply to a message** and SYKE adds every custom emoji and sticker on it to this server. "
+            "Right-click the message → **Apps** → **Steal emoji/sticker** does the same.\n\n"
+            f"`{p}emoji <name>` and `{p}sticker <name>` add a **PNG, JPG or GIF**. Attach the file, paste a direct "
+            "link, or reply to a message that has one. JPG stickers are converted, and pictures are fitted to "
+            "the size Discord wants.\n\n"
+            f"`{p}emoji list`, `{p}emoji remove <name>` and `{p}emoji rename <old> <new>` manage them "
+            f"(same for `{p}sticker`). You can remove ones you added. "
+            "**Manage Expressions** or **Manage Server** can change any of them. SYKE's role needs "
+            "**Manage Expressions** too."
         )), example]
     if key == "ask":
         example = discord.Embed(colour=BRAND, description=(
