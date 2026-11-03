@@ -359,10 +359,12 @@ def test_permissions_slots_and_management(cog):
         cog.bot, guild, author(), kind="emoji", action="add",
         attachments=[Attachment(_png(), "more.png", "image/png")], text="more", prefix="!",
     ))
-    assert "out of emoji slots" in full.description
+    assert "out of static emoji slots" in full.description
+    assert "1/1 static · 0/1 animated" in full.footer.text
 
     listed = run(expressions.handle(cog.bot, guild, author(), kind="emoji", action="list", prefix="!"))
-    assert "full" in listed.description and listed.title.startswith("Custom emojis")
+    assert "full" in listed.description
+    assert listed.title == "Custom emojis · 1/1 static · 0/1 animated"
 
 
 def test_partial_failure_stops_when_slots_run_out(cog, monkeypatch):
@@ -385,8 +387,53 @@ def test_partial_failure_stops_when_slots_run_out(cog, monkeypatch):
     reply = message(content=f"<:one:{PNG_ID}> <:two:{GIF_ID}> <:three:123456789012345670>")
     embed = run(expressions.handle(cog.bot, guild, author(), kind="emoji", action="add", reply=reply, prefix="!"))
     assert embed.title == "Added some"
-    assert "out of emoji slots" in embed.description
+    assert "out of static emoji slots" in embed.description
     assert calls["n"] == 2
+
+
+def test_static_and_animated_slots_are_counted_separately(cog):
+    guild = Guild()
+    guild.emojis = [ServerEmoji(1, "still"), ServerEmoji(2, "spin", animated=True)]
+    listed = run(expressions.handle(cog.bot, guild, author(), kind="emoji", action="list", prefix="!"))
+    assert listed.title == "Custom emojis · 1/50 static · 1/50 animated"
+
+    empty = run(expressions.handle(cog.bot, Guild(), author(), kind="emoji", action="list", prefix="!"))
+    assert empty.title == "No custom emojis (0/50 static · 0/50 animated)"
+
+    guild.emoji_limit = 1
+    guild.emojis[:] = [ServerEmoji(1, "full")]
+    gif = run(expressions.handle(
+        cog.bot, guild, author(), kind="emoji", action="add",
+        attachments=[Attachment(_gif(), "dance.gif", "image/gif")], text="dance", prefix="!",
+    ))
+    assert gif.title == "Added ✅"
+    assert "1/1 static · 1/1 animated" in gif.footer.text
+    assert guild.emojis[-1].animated
+
+    guild.emojis[:] = [ServerEmoji(2, "spin", animated=True)]
+    before = len(guild.created)
+    mixed = run(expressions.handle(
+        cog.bot, guild, author(), kind="emoji", action="add",
+        attachments=[
+            Attachment(_gif(), "another.gif", "image/gif"),
+            Attachment(_png(), "plain.png", "image/png"),
+        ],
+        prefix="!",
+    ))
+    assert mixed.title == "Added some"
+    assert "out of animated emoji slots" in mixed.description
+    assert "plain" in mixed.description
+    assert [row[1] for row in guild.created[before:]] == ["plain"]
+
+    guild.emojis[:] = [ServerEmoji(1, "full"), ServerEmoji(3, "spin", animated=True)]
+    before = len(guild.created)
+    both = run(expressions.handle(
+        cog.bot, guild, author(), kind="emoji", action="add",
+        attachments=[Attachment(_png(), "more.png", "image/png")], text="more", prefix="!",
+    ))
+    assert "out of emoji slots" in both.description
+    assert "static" not in both.description
+    assert len(guild.created) == before
 
 
 def test_message_link_and_command_wiring(cog, monkeypatch):

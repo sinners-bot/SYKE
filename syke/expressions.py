@@ -128,6 +128,7 @@ class Item:
     sticker_format: str | None = None
     source_id: int | None = None
     origin: str | None = None
+    animated: bool | None = None
 
 
 def clean_name(raw: str, *, limit: int) -> str | None:
@@ -691,6 +692,7 @@ def build_items(choice: Choice, requested: str | None, image_kind: str) -> tuple
         items.append(Item(
             "emoji", emoji.name, f"{emoji.name}.{'gif' if emoji.animated else 'png'}",
             url=emoji.url, trusted=True, source_id=emoji.emoji_id, origin=emoji.name,
+            animated=emoji.animated,
         ))
     for sticker in choice.stickers:
         items.append(Item(
@@ -751,7 +753,7 @@ def explain_discord(exc: BaseException) -> str:
         return "Discord is rate limiting new emojis. Wait a few seconds and try the rest again."
     code = getattr(exc, "code", None)
     known = {
-        30008: "This server is out of emoji slots.",
+        30008: "This server is out of static emoji slots.",
         30018: "This server is out of animated emoji slots.",
         30039: "This server is out of sticker slots.",
         50013: "SYKE needs the **Manage Expressions** permission to do that.",
@@ -801,12 +803,56 @@ def _markup(obj, name: str, animated: bool) -> str:
     return f"<{'a' if animated else ''}:{name}:{getattr(obj, 'id', 0)}>"
 
 
-def _slots_footer(guild, emojis: list, stickers: list, author_name: str, added_emoji: int, added_sticker: int) -> str:
+def _pool_counts(emojis: list) -> tuple[int, int]:
+    """Static and animated emoji counts. Discord gives each pool its own `emoji_limit`."""
+    static = animated = 0
+    for emoji in emojis:
+        if getattr(emoji, "animated", False):
+            animated += 1
+        else:
+            static += 1
+    return static, animated
+
+
+def _emoji_slot_text(static: int, animated: int, limit) -> str:
+    if isinstance(limit, int) and limit > 0:
+        return f"{static}/{limit} static · {animated}/{limit} animated"
+    return f"{static} static · {animated} animated"
+
+
+def _limit_reached(limit, count: int) -> bool:
+    return isinstance(limit, int) and limit > 0 and count >= limit
+
+
+def _mark_pool_full(counts: dict, added: dict, pool: str, limit) -> None:
+    """Remember a pool Discord just rejected, without forgetting emojis this batch already added."""
+    if isinstance(limit, int) and limit > 0:
+        counts[pool] = max(counts[pool], limit - added[pool])
+
+
+def _emoji_slot_block(limit, used: dict, animated: bool | None) -> tuple[str, bool] | None:
+    """Refuse an emoji that cannot fit. Fatal only when the other pool is full too."""
+    static_full = _limit_reached(limit, used["static"])
+    animated_full = _limit_reached(limit, used["animated"])
+    if animated is True and animated_full:
+        return "this server is out of animated emoji slots", static_full
+    if animated is False and static_full:
+        return "this server is out of static emoji slots", animated_full
+    if animated is None and static_full and animated_full:
+        return "this server is out of emoji slots", True
+    return None
+
+
+def _slots_footer(
+    guild, emojis: list, stickers: list, author_name: str,
+    added_static: int, added_animated: int, added_sticker: int,
+) -> str:
     parts = [f"Requested by {author_name}"]
     emoji_limit = getattr(guild, "emoji_limit", None)
     sticker_limit = getattr(guild, "sticker_limit", None)
     if isinstance(emoji_limit, int) and emoji_limit > 0:
-        parts.append(f"Emojis {len(emojis) + added_emoji}/{emoji_limit}")
+        static, animated = _pool_counts(emojis)
+        parts.append("Emojis " + _emoji_slot_text(static + added_static, animated + added_animated, emoji_limit))
     if isinstance(sticker_limit, int) and sticker_limit > 0:
         parts.append(f"Stickers {len(stickers) + added_sticker}/{sticker_limit}")
     return " · ".join(parts)
@@ -828,13 +874,20 @@ async def _load_item(item: Item) -> bytes:
     raise ImageProblem("Nothing to download.")
 
 
-async def _create_item(guild, item: Item, name: str, data: bytes, author) -> tuple[object, bool]:
+def _payload_is_animated(payload: bytes) -> bool:
+    return payload.startswith((b"GIF87a", b"GIF89a"))
+
+
+async def _create_item(
+    guild, item: Item, name: str, data: bytes, author, *, emoji_image: bytes | None = None,
+) -> tuple[object, bool]:
     reason = f"SYKE: added by {getattr(author, 'display_name', None) or getattr(author, 'name', 'someone')} ({author.id})"[:500]
     if item.kind == "emoji":
-        payload, _filename = await asyncio.to_thread(prepare_emoji_image, data)
+        payload = emoji_image
+        if payload is None:
+            payload, _filename = await asyncio.to_thread(prepare_emoji_image, data)
         created = await guild.create_custom_emoji(name=name, image=payload, reason=reason)
-        animated = payload.startswith((b"GIF87a", b"GIF89a"))
-        return created, animated
+        return created, _payload_is_animated(payload)
     payload, filename = await asyncio.to_thread(prepare_sticker_file, data, trusted=item.trusted)
     created = await guild.create_sticker(
         name=name,
@@ -881,13 +934,18 @@ async def _add(bot, guild, author, *, kind: str, text: str, attachments, command
 
     async with guild_lock(getattr(guild, "id", 0)):
         emojis, stickers = await current_expressions(guild)
-        lines, added_emoji, added_sticker, any_fail = await _upload_all(
+        lines, added_static, added_animated, added_sticker, any_fail = await _upload_all(
             bot, guild, author, items, emojis, stickers,
         )
-    title, colour = _result_title(lines, added_emoji + added_sticker, any_fail, trusted=all(item.trusted for item in items))
+    title, colour = _result_title(
+        lines, added_static + added_animated + added_sticker, any_fail,
+        trusted=all(item.trusted for item in items),
+    )
     description = "\n".join(lines + [""] + notes).strip()
     embed = notice(title, description, colour)
-    embed.set_footer(text=_slots_footer(guild, emojis, stickers, _author_name(author), added_emoji, added_sticker)[:2048])
+    embed.set_footer(text=_slots_footer(
+        guild, emojis, stickers, _author_name(author), added_static, added_animated, added_sticker,
+    )[:2048])
     return embed
 
 
@@ -909,70 +967,107 @@ async def _upload_all(bot, guild, author, items: list[Item], emojis: list, stick
     }
     preexisting = {kind: set(names) for kind, names in taken.items()}
     local = {"emoji": _local_ids(emojis), "sticker": _local_ids(stickers)}
+    # emoji_limit is the size of the static pool and, separately, the animated pool.
     limits = {
         "emoji": getattr(guild, "emoji_limit", None),
         "sticker": getattr(guild, "sticker_limit", None),
     }
-    counts = {"emoji": len(emojis), "sticker": len(stickers)}
+    static, animated = _pool_counts(emojis)
+    counts = {"static": static, "animated": animated, "sticker": len(stickers)}
     lines: list[str] = []
-    added = {"emoji": 0, "sticker": 0}
+    added = {"static": 0, "animated": 0, "sticker": 0}
     any_fail = False
     stop = False
     for index, item in enumerate(items):
         if stop:
             break
-        if index and added["emoji"] + added["sticker"]:
+        if index and sum(added.values()):
             await asyncio.sleep(0.8)
-        line, ok, fatal = await _upload_one(
+        line, ok, fatal, pool = await _upload_one(
             bot, guild, author, item, taken, preexisting, local, limits, counts, added,
         )
         lines.append(line)
-        if ok:
-            added[item.kind] += 1
+        if ok and pool:
+            added[pool] += 1
         elif not line.startswith("⏭️"):
             any_fail = True
         if fatal:
             stop = True
             any_fail = True
-    return lines, added["emoji"], added["sticker"], any_fail
+    return lines, added["static"], added["animated"], added["sticker"], any_fail
 
 
-async def _upload_one(bot, guild, author, item: Item, taken, preexisting, local, limits, counts, added) -> tuple[str, bool, bool]:
+def _used(counts: dict, added: dict, pool: str) -> int:
+    return counts[pool] + added[pool]
+
+
+async def _upload_one(bot, guild, author, item: Item, taken, preexisting, local, limits, counts, added) -> tuple[str, bool, bool, str | None]:
     label = item.origin or item.suggested or _fallback(item.kind)
     if item.source_id is not None and item.source_id in local[item.kind]:
-        return f"⏭️ `{item.origin or label}` is already on this server", False, False
-    limit = limits.get(item.kind)
-    if isinstance(limit, int) and limit > 0 and counts[item.kind] + added[item.kind] >= limit:
-        slot = "emoji" if item.kind == "emoji" else "sticker"
-        return f"❌ `{label}` — this server is out of {slot} slots", False, True
+        return f"⏭️ `{item.origin or label}` is already on this server", False, False, None
+    if item.kind == "sticker" and _limit_reached(limits.get("sticker"), _used(counts, added, "sticker")):
+        return f"❌ `{label}` — this server is out of sticker slots", False, True, None
+    if item.kind == "emoji":
+        blocked = _emoji_slot_block(limits.get("emoji"), _usage(counts, added), item.animated)
+        if blocked is not None:
+            message, fatal = blocked
+            return f"❌ `{label}` — {message}", False, fatal, None
     name = allocate_name(item, taken[item.kind], preexisting[item.kind])
     if name is None:
         if item.explicit:
             cleaned = clean_name(item.suggested or "", limit=_limit_for(item.kind))
             if cleaned is None:
                 return (f"❌ `{label}` — names need at least 2 letters or numbers "
-                        "(letters, numbers and underscores)"), False, False
-            return f"❌ `{cleaned}` — that name is already taken", False, False
+                        "(letters, numbers and underscores)"), False, False, None
+            return f"❌ `{cleaned}` — that name is already taken", False, False, None
         if item.trusted:
-            return f"⏭️ `{label}` is already on this server", False, False
-        return f"❌ `{label}` — that name is already taken", False, False
+            return f"⏭️ `{label}` is already on this server", False, False, None
+        return f"❌ `{label}` — that name is already taken", False, False, None
     try:
         data = await _load_item(item)
-        created, animated = await _create_item(guild, item, name, data, author)
+        emoji_image = None
+        if item.kind == "emoji":
+            emoji_image, _filename = await asyncio.to_thread(prepare_emoji_image, data)
+            blocked = _emoji_slot_block(
+                limits.get("emoji"), _usage(counts, added), _payload_is_animated(emoji_image),
+            )
+            if blocked is not None:
+                taken[item.kind].discard(name.lower())
+                message, fatal = blocked
+                return f"❌ `{name}` — {message}", False, fatal, None
+        created, animated = await _create_item(guild, item, name, data, author, emoji_image=emoji_image)
     except ImageProblem as exc:
         taken[item.kind].discard(name.lower())
-        return f"❌ `{name}` — {exc}", False, False
+        return f"❌ `{name}` — {exc}", False, False, None
     except (discord.HTTPException, discord.RateLimited) as exc:
         taken[item.kind].discard(name.lower())
-        fatal = isinstance(exc, (discord.Forbidden, discord.RateLimited)) or getattr(exc, "code", None) in {30008, 30018, 30039, 50013}
-        return f"❌ `{name}` — {explain_discord(exc)}", False, fatal
+        code = getattr(exc, "code", None)
+        emoji_limit = limits.get("emoji")
+        if code == 30008:
+            _mark_pool_full(counts, added, "static", emoji_limit)
+            fatal = _limit_reached(emoji_limit, _used(counts, added, "animated"))
+        elif code == 30018:
+            _mark_pool_full(counts, added, "animated", emoji_limit)
+            fatal = _limit_reached(emoji_limit, _used(counts, added, "static"))
+        else:
+            fatal = isinstance(exc, (discord.Forbidden, discord.RateLimited)) or code in {30039, 50013}
+        return f"❌ `{name}` — {explain_discord(exc)}", False, fatal, None
     expression_id = getattr(created, "id", None)
     if expression_id:
         bot.storage.remember_expression(guild.id, item.kind, int(expression_id), name, author.id)
         local[item.kind].add(int(expression_id))
     if item.kind == "emoji":
-        return f"✅ {_markup(created, name, animated)} `{name}`", True, False
-    return f"✅ sticker **{name}**", True, False
+        pool = "animated" if animated else "static"
+        return f"✅ {_markup(created, name, animated)} `{name}`", True, False, pool
+    return f"✅ sticker **{name}**", True, False, "sticker"
+
+
+def _usage(counts: dict, added: dict) -> dict:
+    return {
+        "static": _used(counts, added, "static"),
+        "animated": _used(counts, added, "animated"),
+        "sticker": _used(counts, added, "sticker"),
+    }
 
 
 async def current_expressions(guild) -> tuple[list, list]:
@@ -1055,8 +1150,15 @@ async def _list(bot, guild, author, *, kind: str, prefix: str) -> discord.Embed:
     items = emojis if kind == "emoji" else stickers
     noun = "emoji" if kind == "emoji" else "sticker"
     limit = getattr(guild, "emoji_limit" if kind == "emoji" else "sticker_limit", None)
+    emoji_slots = ""
+    if kind == "emoji":
+        static, animated = _pool_counts(items)
+        emoji_slots = _emoji_slot_text(static, animated, limit)
     if not items:
-        slot = f" (0/{limit})" if isinstance(limit, int) and limit > 0 else ""
+        if kind == "emoji" and isinstance(limit, int) and limit > 0:
+            slot = f" ({emoji_slots})"
+        else:
+            slot = f" (0/{limit})" if isinstance(limit, int) and limit > 0 else ""
         return notice(
             f"No custom {noun}s{slot}",
             f"Reply to one with `{prefix}steal`, or add a PNG, JPG or GIF with `{prefix}{noun} <name>`.",
@@ -1083,7 +1185,10 @@ async def _list(bot, guild, author, *, kind: str, prefix: str) -> discord.Embed:
     hidden = len(lines) - shown_count
     if hidden > 0:
         body += f"\n… and {hidden} more"
-    slot = f"{len(items)}/{limit}" if isinstance(limit, int) and limit > 0 else str(len(items))
+    if kind == "emoji":
+        slot = emoji_slots
+    else:
+        slot = f"{len(items)}/{limit}" if isinstance(limit, int) and limit > 0 else str(len(items))
     title = f"Custom {noun}s · {slot}"
     embed = notice(title, body, BRAND)
     other = "sticker" if kind == "emoji" else "emoji"
