@@ -391,6 +391,46 @@ def test_partial_failure_stops_when_slots_run_out(cog, monkeypatch):
     assert calls["n"] == 2
 
 
+def test_slot_count_ignores_emojis_that_do_not_use_slots(cog):
+    guild = Guild()
+    guild.roles = {
+        7: types.SimpleNamespace(id=7, tags=types.SimpleNamespace(subscription_listing_id=99)),
+        8: types.SimpleNamespace(id=8, tags=types.SimpleNamespace(subscription_listing_id=None)),
+    }
+    guild.get_role = guild.roles.get
+
+    managed = ServerEmoji(1, "twitch")
+    managed.managed = True
+    premium = ServerEmoji(2, "vip")
+    premium._roles = [7]
+    locked = ServerEmoji(3, "booster")
+    locked._roles = [8]
+    plain = ServerEmoji(4, "plain")
+    spin = ServerEmoji(5, "spin", animated=True)
+    duplicate = ServerEmoji(4, "plain_again")
+    guild.emojis = [managed, premium, locked, plain, spin, duplicate]
+
+    listed = run(expressions.handle(cog.bot, guild, author(), kind="emoji", action="list", prefix="!"))
+    assert listed.title == "Custom emojis · 2/50 static · 1/50 animated"
+    assert "plain" in listed.description and "booster" in listed.description and "spin" in listed.description
+    assert "twitch" not in listed.description and "vip" not in listed.description
+    assert "2 integration or premium emojis not counted" in listed.footer.text
+
+    removed = run(expressions.handle(
+        cog.bot, guild, author(manage_guild=True), kind="emoji", action="remove", text="vip", prefix="!",
+    ))
+    assert removed.title == "Removed" and premium.deleted
+
+    guild.emoji_limit = 1
+    guild.emojis[:] = [managed]
+    added = run(expressions.handle(
+        cog.bot, guild, author(), kind="emoji", action="add",
+        attachments=[Attachment(_png(), "more.png", "image/png")], text="more", prefix="!",
+    ))
+    assert added.title == "Added ✅"
+    assert "1/1 static · 0/1 animated" in added.footer.text
+
+
 def test_static_and_animated_slots_are_counted_separately(cog):
     guild = Guild()
     guild.emojis = [ServerEmoji(1, "still"), ServerEmoji(2, "spin", animated=True)]

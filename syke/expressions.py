@@ -803,10 +803,59 @@ def _markup(obj, name: str, animated: bool) -> str:
     return f"<{'a' if animated else ''}:{name}:{getattr(obj, 'id', 0)}>"
 
 
-def _pool_counts(emojis: list) -> tuple[int, int]:
-    """Static and animated emoji counts. Discord gives each pool its own `emoji_limit`."""
-    static = animated = 0
+def _unique_emojis(emojis: list) -> list:
+    seen: set[int] = set()
+    unique = []
     for emoji in emojis:
+        emoji_id = getattr(emoji, "id", None)
+        if isinstance(emoji_id, int):
+            if emoji_id in seen:
+                continue
+            seen.add(emoji_id)
+        unique.append(emoji)
+    return unique
+
+
+def _is_subscription_role(role) -> bool:
+    tags = getattr(role, "tags", None)
+    return getattr(tags, "subscription_listing_id", None) is not None
+
+
+def _is_premium_emoji(guild, emoji) -> bool:
+    """Server Subscription emojis have their own limit of 25 and do not use normal slots."""
+    raw = getattr(emoji, "_roles", None)
+    if not raw:
+        return False
+    get_role = getattr(guild, "get_role", None)
+    if get_role is None:
+        return False
+    found = False
+    for role_id in raw:
+        try:
+            role = get_role(int(role_id))
+        except (TypeError, ValueError):
+            return False
+        if role is None or not _is_subscription_role(role):
+            return False
+        found = True
+    return found
+
+
+def _uses_emoji_slot(guild, emoji) -> bool:
+    """Integration emotes and Server Subscription emojis are in the guild list but use other limits."""
+    if getattr(emoji, "managed", False):
+        return False
+    return not _is_premium_emoji(guild, emoji)
+
+
+def _slot_emojis(guild, emojis: list) -> list:
+    return [emoji for emoji in _unique_emojis(emojis) if _uses_emoji_slot(guild, emoji)]
+
+
+def _pool_counts(guild, emojis: list) -> tuple[int, int]:
+    """Static and animated counts. Discord gives each pool its own `emoji_limit`."""
+    static = animated = 0
+    for emoji in _slot_emojis(guild, emojis):
         if getattr(emoji, "animated", False):
             animated += 1
         else:
@@ -851,7 +900,7 @@ def _slots_footer(
     emoji_limit = getattr(guild, "emoji_limit", None)
     sticker_limit = getattr(guild, "sticker_limit", None)
     if isinstance(emoji_limit, int) and emoji_limit > 0:
-        static, animated = _pool_counts(emojis)
+        static, animated = _pool_counts(guild, emojis)
         parts.append("Emojis " + _emoji_slot_text(static + added_static, animated + added_animated, emoji_limit))
     if isinstance(sticker_limit, int) and sticker_limit > 0:
         parts.append(f"Stickers {len(stickers) + added_sticker}/{sticker_limit}")
@@ -972,7 +1021,7 @@ async def _upload_all(bot, guild, author, items: list[Item], emojis: list, stick
         "emoji": getattr(guild, "emoji_limit", None),
         "sticker": getattr(guild, "sticker_limit", None),
     }
-    static, animated = _pool_counts(emojis)
+    static, animated = _pool_counts(guild, emojis)
     counts = {"static": static, "animated": animated, "sticker": len(stickers)}
     lines: list[str] = []
     added = {"static": 0, "animated": 0, "sticker": 0}
@@ -1147,23 +1196,30 @@ def _owner_line(guild, user_id: int | None, author_id: int) -> str:
 
 async def _list(bot, guild, author, *, kind: str, prefix: str) -> discord.Embed:
     emojis, stickers = await current_expressions(guild)
-    items = emojis if kind == "emoji" else stickers
     noun = "emoji" if kind == "emoji" else "sticker"
     limit = getattr(guild, "emoji_limit" if kind == "emoji" else "sticker_limit", None)
-    emoji_slots = ""
+    skipped_emojis = 0
     if kind == "emoji":
-        static, animated = _pool_counts(items)
+        items = _slot_emojis(guild, emojis)
+        skipped_emojis = len(_unique_emojis(emojis)) - len(items)
+        static, animated = _pool_counts(guild, emojis)
         emoji_slots = _emoji_slot_text(static, animated, limit)
+    else:
+        items = stickers
+        emoji_slots = ""
     if not items:
         if kind == "emoji" and isinstance(limit, int) and limit > 0:
             slot = f" ({emoji_slots})"
         else:
             slot = f" (0/{limit})" if isinstance(limit, int) and limit > 0 else ""
-        return notice(
+        embed = notice(
             f"No custom {noun}s{slot}",
             f"Reply to one with `{prefix}steal`, or add a PNG, JPG or GIF with `{prefix}{noun} <name>`.",
             BRAND,
         )
+        if skipped_emojis:
+            embed.set_footer(text=f"{skipped_emojis} integration or premium emoji{'s' if skipped_emojis != 1 else ''} not counted")
+        return embed
     lines = []
     for item in sorted(items, key=lambda obj: str(getattr(obj, "name", "")).lower()):
         owner = bot.storage.expression_added_by(guild.id, kind, int(item.id))
@@ -1192,8 +1248,14 @@ async def _list(bot, guild, author, *, kind: str, prefix: str) -> discord.Embed:
     title = f"Custom {noun}s · {slot}"
     embed = notice(title, body, BRAND)
     other = "sticker" if kind == "emoji" else "emoji"
-    other_count = len(stickers) if kind == "emoji" else len(emojis)
-    embed.set_footer(text=f"{other_count} custom {other}{'s' if other_count != 1 else ''} · remove with {prefix}{noun} remove <name>")
+    if kind == "emoji":
+        other_count = len(stickers)
+    else:
+        other_count = sum(_pool_counts(guild, emojis))
+    footer = f"{other_count} custom {other}{'s' if other_count != 1 else ''} · remove with {prefix}{noun} remove <name>"
+    if skipped_emojis:
+        footer += f" · {skipped_emojis} integration or premium emoji{'s' if skipped_emojis != 1 else ''} not counted"
+    embed.set_footer(text=footer)
     return embed
 
 
