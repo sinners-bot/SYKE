@@ -73,6 +73,75 @@ def test_mention_only_prefix(cog):
     assert cog.bot.storage.prefix(42) is None
 
 
+def test_new_commands_follow_a_custom_prefix(cog):
+    """syke inviter, Syke Verify Setup, and a real @mention all reach the new commands."""
+
+    async def checks():
+        bot = cog.bot
+        bot._connection.user = types.SimpleNamespace(id=999, mention="<@999>", name="SYKE")
+        await bot.add_cog(cog)
+        guild = types.SimpleNamespace(id=42)
+        author = types.SimpleNamespace(id=7, bot=False)
+
+        async def lookup(content):
+            message = types.SimpleNamespace(
+                content=content, guild=guild, author=author, _state=bot._connection,
+            )
+            ctx = await bot.get_context(message)
+            if ctx.command is None:
+                return None, None
+            sub = None
+            if hasattr(ctx.command, "all_commands"):
+                ctx.view.skip_ws()
+                word = ctx.view.get_word()
+                child = ctx.command.all_commands.get(word) if word else None
+                sub = child.qualified_name if child else None
+            return ctx.command.qualified_name, sub
+
+        assert await lookup("!help") == ("help", None)
+        assert await lookup("! profile") == ("profile", None)
+        bot.set_prefix(42, "syke")
+        assert await lookup("sykeinviter") == ("inviter", None)
+        assert await lookup("syke inviter") == ("inviter", None)
+        assert await lookup("Syke Inviter") == ("inviter", None)
+        assert await lookup("syke verify") == ("verify", None)
+        assert await lookup("syke verify setup") == ("verify", "verify setup")
+        assert await lookup("Syke Verify Setup") == ("verify", "verify setup")
+        assert await lookup("<@999> verify setup") == ("verify", "verify setup")
+        assert await lookup("syke emoji list") == ("emoji", "emoji list")
+        assert bot.is_command_text(42, "Syke verify setup")
+        assert not bot.is_command_text(42, "hello there")
+
+    run(checks())
+
+
+def test_channel_check_still_runs_commands_when_syke_cannot_see_itself(cog):
+    ctx = FakeCtx()
+    ctx.interaction = None
+    ctx.me = None
+    ctx.channel = types.SimpleNamespace(permissions_for=lambda me: None)
+    assert run(cog.bot.channel_check(ctx)) is True
+
+
+def test_rejected_members_intent_reconnects_without_it(monkeypatch, tmp_path):
+    from dataclasses import replace
+
+    from syke.bot import launch
+    from syke.config import load_settings
+
+    settings = replace(load_settings(), db_path=str(tmp_path / "t.db"), discord_token="token", ai_provider="none")
+    seen: list[bool] = []
+
+    def fake_run(self, token, **kwargs):
+        seen.append(self.intents.members)
+        if self.intents.members:
+            raise discord.PrivilegedIntentsRequired(None)
+
+    monkeypatch.setattr("syke.bot.Syke.run", fake_run)
+    launch(settings)
+    assert seen == [True, False]
+
+
 def test_help_uses_server_prefix(cog):
     cog.bot.set_prefix(42, "s.")
     ctx = FakeCtx()

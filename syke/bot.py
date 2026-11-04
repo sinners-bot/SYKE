@@ -211,10 +211,22 @@ def admin() -> Callable[[F], F]:
 
 
 async def resolve_prefix(bot: Syke, message: discord.Message) -> list[str]:
-    prefix = bot.prefix_for(message.guild.id) if message.guild else bot.settings.default_prefix
+    try:
+        prefix = bot.prefix_for(message.guild.id) if message.guild else bot.settings.default_prefix
+    except Exception:
+        log.exception("Couldn't read the prefix")
+        prefix = bot.settings.default_prefix
+    if not isinstance(prefix, str) or not prefix:
+        prefix = bot.settings.default_prefix
     if prefix == MENTION_ONLY:
         return commands.when_mentioned(bot, message)
-    return commands.when_mentioned_or(prefix)(bot, message)
+    found = commands.when_mentioned_or(prefix)(bot, message)
+    # "Syke inviter" should hit a prefix stored as "syke". The mention forms stay first.
+    text = message.content or ""
+    folded = text[:len(prefix)].casefold()
+    if folded == prefix.casefold() and not text.startswith(prefix):
+        found.append(text[:len(prefix)])
+    return [item for item in found if isinstance(item, str) and item]
 
 
 class MissingChannelPermissions(commands.CheckFailure):
@@ -237,17 +249,21 @@ class SykeContext(commands.Context):
 
 
 class Syke(commands.Bot):
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, track_members: bool = True) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
         # Join events, so !inviter can see who used an invite. Chunking every member
         # isn't needed for that and would delay startup on large servers.
-        intents.members = True
+        # Discord closes the whole connection if this is requested but not enabled
+        # in the Developer Portal, so startup can turn it off and keep commands working.
+        intents.members = track_members
         super().__init__(
             command_prefix=resolve_prefix,
             intents=intents,
             help_command=None,
             case_insensitive=True,
+            # "syke inviter" and "sykeinviter" are the same command when the prefix is syke.
+            strip_after_prefix=True,
             chunk_guilds_at_startup=False,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -534,7 +550,12 @@ class Syke(commands.Bot):
             log.exception("Pre-scan of %r failed", guild.name)
 
     async def on_message(self, message: discord.Message) -> None:
-        await self.process_commands(message)
+        # A prefix bug must not swallow every command. Slash commands don't come through here.
+        if message.content is not None:
+            try:
+                await self.process_commands(message)
+            except Exception:
+                log.exception("Failed to handle a message as a command")
         if message.author.bot or not message.content:
             return
         if await self.maybe_answer(message) or not message.guild:
@@ -800,12 +821,16 @@ class Syke(commands.Bot):
 
     def is_command_text(self, guild_id: int, text: str) -> bool:
         text = text.lstrip()
+        folded = text.casefold()
         starts = {self.settings.default_prefix}
         if self.prefix_for(guild_id) != MENTION_ONLY:
             starts.add(self.prefix_for(guild_id))
-        if self.user:
-            starts |= {f"<@{self.user.id}>", f"<@!{self.user.id}>"}
-        return any(text.startswith(s) for s in starts)
+        if any(folded.startswith(start.casefold()) for start in starts if start):
+            return True
+        if self.user is None:
+            return False
+        mentions = (f"<@{self.user.id}>", f"<@!{self.user.id}>")
+        return any(text.startswith(mention) for mention in mentions)
 
     def pick_yap(self, guild_id: int, exclude_id: int = 0, exclude: set[str] = frozenset()) -> str | None:
         seen = {folded(e) for e in exclude}
@@ -989,7 +1014,13 @@ class Syke(commands.Bot):
     async def channel_check(self, ctx: commands.Context) -> bool:
         if ctx.interaction is not None or ctx.guild is None:
             return True
-        perms = ctx.channel.permissions_for(ctx.me)
+        me = ctx.me
+        if me is None:
+            return True
+        try:
+            perms = ctx.channel.permissions_for(me)
+        except (AttributeError, discord.ClientException):
+            return True
         missing = [p for p in NEEDED_PERMISSIONS if not getattr(perms, p)]
         if missing:
             raise MissingChannelPermissions(missing)
@@ -1625,7 +1656,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
         """Add every custom emoji and sticker from the message you reply to."""
         await self._expressions(ctx, "both", "add", text)
 
-    @commands.hybrid_group(name="emoji", aliases=["emote", "addemoji"], fallback="add",
+    @commands.hybrid_group(name="emoji", aliases=["emote", "addemoji"], fallback="add", case_insensitive=True,
                            description="Add, steal or manage custom emojis", usage="[name or link]")
     @app_commands.describe(image="A PNG, JPG or GIF file",
                            text="Name, image link, or message link. Leave empty when replying.")
@@ -1655,7 +1686,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
     async def emoji_rename(self, ctx: commands.Context, old: str, new: str) -> None:
         await self._expressions(ctx, "emoji", "rename", f"{old} {new}")
 
-    @commands.hybrid_group(name="sticker", aliases=["stickers", "addsticker"], fallback="add",
+    @commands.hybrid_group(name="sticker", aliases=["stickers", "addsticker"], fallback="add", case_insensitive=True,
                            description="Add, steal or manage custom stickers", usage="[name or link]")
     @app_commands.describe(image="A PNG, JPG or GIF file",
                            text="Name, image link, or message link. Leave empty when replying.")
@@ -1686,7 +1717,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
         await self._expressions(ctx, "sticker", "rename", f"{old} {new}")
 
     @commands.hybrid_group(
-        name="verify", fallback="me", usage="[@member] [@role]",
+        name="verify", fallback="me", case_insensitive=True, usage="[@member] [@role]",
         description="Get the verified role, or give one to somebody",
     )
     @app_commands.describe(
@@ -2097,12 +2128,30 @@ class SykeCommands(commands.Cog, name="SYKE"):
         ]
 
 
+def launch(settings: Settings) -> None:
+    """Connect to Discord. If Server Members intent is rejected, reconnect without it.
+
+    Discord closes the gateway (close code 4014) when a privileged intent is requested
+    but not enabled. That takes every command down with it. Message Content stays on,
+    because prefix commands can't be read without it.
+    """
+    try:
+        Syke(settings).run(settings.discord_token, log_handler=None)
+    except discord.PrivilegedIntentsRequired:
+        log.error(
+            "Discord rejected the Server Members intent. Starting without it so commands "
+            "still work. Enable Server Members Intent in the Developer Portal for !inviter "
+            "to record new joins."
+        )
+        Syke(settings, track_members=False).run(settings.discord_token, log_handler=None)
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings = load_settings()
     if not settings.discord_token:
         sys.exit("DISCORD_TOKEN is missing. Copy .env.example to .env and paste your bot token.")
-    Syke(settings).run(settings.discord_token, log_handler=None)
+    launch(settings)
 
 
 if __name__ == "__main__":
