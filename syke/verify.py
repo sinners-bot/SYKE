@@ -1,4 +1,4 @@
-"""Server verification: a role members get by running !verify or pressing the button."""
+"""Server verification: members run !verify, or an admin runs !verify @member."""
 
 from __future__ import annotations
 
@@ -82,6 +82,8 @@ def explain(prefix: str, settings: VerifySettings, *, role: str, remove: str, ch
         f"4. `{prefix}verify channel #gate` if they should verify in one channel only.\n"
         f"5. `{prefix}verify panel` to post the button.\n\n"
         f"Members run `{prefix}verify` or press **Verify**. "
+        f"An admin can run `{prefix}verify @member` for them, "
+        f"or `{prefix}verify @member @Role` to grant a role of their choosing. "
         f"`{prefix}verify take @Unverified` also removes a role when they pass. "
         f"`{prefix}verify message <text>` changes the panel (`reset` restores it). "
         f"`{prefix}verify off` turns the gate off.\n\n"
@@ -144,22 +146,62 @@ async def _apply_roles(member, grant_role, remove_role) -> str:
     return "ok"
 
 
-async def grant(bot, guild, member, channel_id: int | None, *, prefix: str, admin: bool) -> discord.Embed:
-    """Give the member the verified role, or explain why not."""
-    settings = VerifySettings.load(bot, guild.id)
-    role_label, remove_label, channel_label, panel_label = _names(guild, settings)
-    if settings.role_id is None:
-        if admin:
-            return explain(prefix, settings, role=role_label, remove=remove_label, channel=channel_label, panel=panel_label)
-        return _embed("Verification isn't on", "An admin hasn't set up a verification role here.", ok=False)
-
-    role = _channel_role(guild, settings.role_id)
-    if role is None:
+def staff_only(prefix: str, *, other: bool) -> discord.Embed:
+    if other:
         return _embed(
-            "Verification is broken",
-            f"The verified role is gone. An admin needs to run `{prefix}verify role` again.",
+            "Admins only",
+            "Only someone with **Manage Server** can verify another person.",
             ok=False,
         )
+    return _embed(
+        "Admins only",
+        f"Only someone with **Manage Server** can choose the role. `{prefix}verify` uses the one already set.",
+        ok=False,
+    )
+
+
+def bots_stay_out() -> discord.Embed:
+    return _embed("Bots stay out", "SYKE doesn't verify bots.", ok=False)
+
+
+def _person(member, *, for_self: bool) -> str:
+    if for_self:
+        return getattr(member, "display_name", None) or "You"
+    return getattr(member, "mention", None) or getattr(member, "display_name", None) or "They"
+
+
+async def grant(
+    bot,
+    guild,
+    member,
+    channel_id: int | None,
+    *,
+    prefix: str,
+    admin: bool,
+    chosen_role=None,
+    ignore_channel: bool = False,
+    for_self: bool = True,
+) -> discord.Embed:
+    """Give the member the verified role, or explain why not.
+
+    `chosen_role` grants that role instead of the one saved with `!verify role`.
+    `ignore_channel` skips the gate, used when an admin verifies someone else.
+    """
+    settings = VerifySettings.load(bot, guild.id)
+    role_label, remove_label, channel_label, panel_label = _names(guild, settings)
+    role = chosen_role
+    if role is None:
+        if settings.role_id is None:
+            if admin:
+                return explain(prefix, settings, role=role_label, remove=remove_label, channel=channel_label, panel=panel_label)
+            return _embed("Verification isn't on", "An admin hasn't set up a verification role here.", ok=False)
+        role = _channel_role(guild, settings.role_id)
+        if role is None:
+            return _embed(
+                "Verification is broken",
+                f"The verified role is gone. An admin needs to run `{prefix}verify role` again.",
+                ok=False,
+            )
     if _can_manage_roles(guild) is False:
         return _embed(
             "I can't hand out roles",
@@ -169,7 +211,8 @@ async def grant(bot, guild, member, channel_id: int | None, *, prefix: str, admi
     position = _bot_position(guild)
     if position is None:
         return _embed("Not ready", "SYKE can't see its own role yet. Try again in a moment.", ok=False)
-    problem = unacceptable_role(role, bot_position=position, other_id=None)
+    other_id = settings.remove_role_id if chosen_role is not None else None
+    problem = unacceptable_role(role, bot_position=position, other_id=other_id)
     if problem:
         return _embed("Role won't work", problem, ok=False)
 
@@ -180,15 +223,24 @@ async def grant(bot, guild, member, channel_id: int | None, *, prefix: str, admi
     needs_remove = held_back is not None and _has(member, held_back)
     if not needs_grant and not needs_remove:
         if remove_blocked and remove is not None and _has(member, remove):
+            if for_self:
+                return _embed(
+                    "You're in, almost",
+                    f"You have {role.mention}, but SYKE can't remove {remove.mention}. Drag SYKE's role above it.",
+                )
             return _embed(
-                "You're in, almost",
-                f"You have {role.mention}, but SYKE can't remove {remove.mention}. Drag SYKE's role above it.",
+                "Verified, almost",
+                f"{_person(member, for_self=False)} has {role.mention}, but SYKE can't remove {remove.mention}. "
+                "Drag SYKE's role above it.",
             )
-        return _embed("Already verified", "You're already in. SYKE noticed.")
+        if for_self:
+            return _embed("Already verified", "You're already in. SYKE noticed.")
+        return _embed("Already verified", f"{_person(member, for_self=False)} already has {role.mention}.")
     gate = _channel(guild, settings.channel_id)
-    if settings.channel_id and gate is not None and channel_id != settings.channel_id:
+    if not ignore_channel and settings.channel_id and gate is not None and channel_id != settings.channel_id:
         return _embed("Not here", f"Verify in {gate.mention}.", ok=False)
 
+    had_remove = needs_remove
     result = await _apply_roles(member, role, held_back)
     if result == "forbidden":
         return _embed(
@@ -198,15 +250,28 @@ async def grant(bot, guild, member, channel_id: int | None, *, prefix: str, admi
         )
     if result == "error":
         return _embed("Discord refused", "The role change didn't go through. Try again in a moment.", ok=False)
-    who = getattr(member, "display_name", None) or "You"
     if result == "partial" or (remove_blocked and remove is not None and _has(member, remove)):
         stuck = remove.mention if remove is not None else "the other role"
+        title = "You're in, almost" if for_self else "Verified, almost"
         return _embed(
-            "You're in, almost",
-            f"{who} has {role.mention}, but SYKE couldn't remove {stuck}. Drag SYKE's role above it.",
+            title,
+            f"{_person(member, for_self=for_self)} has {role.mention}, but SYKE couldn't remove {stuck}. "
+            "Drag SYKE's role above it.",
         )
     log.info("%s verified in %s", getattr(member, "id", "?"), guild.id)
-    return _embed("You're in ✅", f"{who} now has {role.mention}. The lab is open.")
+    if for_self:
+        who = _person(member, for_self=True)
+        return _embed("You're in ✅", f"{who} now has {role.mention}. The lab is open.")
+    who = _person(member, for_self=False)
+    if had_remove and remove is not None:
+        body = f"{who} now has {role.mention}, and {remove.mention} is gone."
+    else:
+        body = f"{who} now has {role.mention}."
+    if settings.remove_role_id is None:
+        body += f" Nothing is set to take away. `{prefix}verify take @Unverified` removes a role too."
+    elif remove is None:
+        body += f" The role to take away is gone. Set it again with `{prefix}verify take`."
+    return _embed("Verified ✅", body)
 
 
 def _save_role(bot, guild, role, *, kind: str, prefix: str) -> discord.Embed:
