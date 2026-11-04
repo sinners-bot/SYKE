@@ -80,7 +80,6 @@ def test_new_commands_follow_a_custom_prefix(cog):
         bot = cog.bot
         bot._connection.user = types.SimpleNamespace(id=999, mention="<@999>", name="SYKE")
         await bot.add_cog(cog)
-        bot.set_prefix(42, "syke")
         guild = types.SimpleNamespace(id=42)
         author = types.SimpleNamespace(id=7, bot=False)
 
@@ -99,6 +98,9 @@ def test_new_commands_follow_a_custom_prefix(cog):
                 sub = child.qualified_name if child else None
             return ctx.command.qualified_name, sub
 
+        assert await lookup("!help") == ("help", None)
+        assert await lookup("! profile") == ("profile", None)
+        bot.set_prefix(42, "syke")
         assert await lookup("sykeinviter") == ("inviter", None)
         assert await lookup("syke inviter") == ("inviter", None)
         assert await lookup("Syke Inviter") == ("inviter", None)
@@ -111,6 +113,33 @@ def test_new_commands_follow_a_custom_prefix(cog):
         assert not bot.is_command_text(42, "hello there")
 
     run(checks())
+
+
+def test_channel_check_still_runs_commands_when_syke_cannot_see_itself(cog):
+    ctx = FakeCtx()
+    ctx.interaction = None
+    ctx.me = None
+    ctx.channel = types.SimpleNamespace(permissions_for=lambda me: None)
+    assert run(cog.bot.channel_check(ctx)) is True
+
+
+def test_rejected_members_intent_reconnects_without_it(monkeypatch, tmp_path):
+    from dataclasses import replace
+
+    from syke.bot import launch
+    from syke.config import load_settings
+
+    settings = replace(load_settings(), db_path=str(tmp_path / "t.db"), discord_token="token", ai_provider="none")
+    seen: list[bool] = []
+
+    def fake_run(self, token, **kwargs):
+        seen.append(self.intents.members)
+        if self.intents.members:
+            raise discord.PrivilegedIntentsRequired(None)
+
+    monkeypatch.setattr("syke.bot.Syke.run", fake_run)
+    launch(settings)
+    assert seen == [True, False]
 
 
 def test_help_uses_server_prefix(cog):

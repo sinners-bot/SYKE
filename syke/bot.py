@@ -209,15 +209,22 @@ def admin() -> Callable[[F], F]:
 
 
 async def resolve_prefix(bot: Syke, message: discord.Message) -> list[str]:
-    prefix = bot.prefix_for(message.guild.id) if message.guild else bot.settings.default_prefix
+    try:
+        prefix = bot.prefix_for(message.guild.id) if message.guild else bot.settings.default_prefix
+    except Exception:
+        log.exception("Couldn't read the prefix")
+        prefix = bot.settings.default_prefix
+    if not isinstance(prefix, str) or not prefix:
+        prefix = bot.settings.default_prefix
     if prefix == MENTION_ONLY:
         return commands.when_mentioned(bot, message)
     found = commands.when_mentioned_or(prefix)(bot, message)
     # "Syke inviter" should hit a prefix stored as "syke". The mention forms stay first.
     text = message.content or ""
-    if prefix and text[:len(prefix)].casefold() == prefix.casefold() and not text.startswith(prefix):
+    folded = text[:len(prefix)].casefold()
+    if folded == prefix.casefold() and not text.startswith(prefix):
         found.append(text[:len(prefix)])
-    return found
+    return [item for item in found if isinstance(item, str) and item]
 
 
 class MissingChannelPermissions(commands.CheckFailure):
@@ -240,12 +247,14 @@ class SykeContext(commands.Context):
 
 
 class Syke(commands.Bot):
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, track_members: bool = True) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
         # Join events, so !inviter can see who used an invite. Chunking every member
         # isn't needed for that and would delay startup on large servers.
-        intents.members = True
+        # Discord closes the whole connection if this is requested but not enabled
+        # in the Developer Portal, so startup can turn it off and keep commands working.
+        intents.members = track_members
         super().__init__(
             command_prefix=resolve_prefix,
             intents=intents,
@@ -539,7 +548,12 @@ class Syke(commands.Bot):
             log.exception("Pre-scan of %r failed", guild.name)
 
     async def on_message(self, message: discord.Message) -> None:
-        await self.process_commands(message)
+        # A prefix bug must not swallow every command. Slash commands don't come through here.
+        if message.content is not None:
+            try:
+                await self.process_commands(message)
+            except Exception:
+                log.exception("Failed to handle a message as a command")
         if message.author.bot or not message.content:
             return
         if await self.maybe_answer(message) or not message.guild:
@@ -998,7 +1012,13 @@ class Syke(commands.Bot):
     async def channel_check(self, ctx: commands.Context) -> bool:
         if ctx.interaction is not None or ctx.guild is None:
             return True
-        perms = ctx.channel.permissions_for(ctx.me)
+        me = ctx.me
+        if me is None:
+            return True
+        try:
+            perms = ctx.channel.permissions_for(me)
+        except (AttributeError, discord.ClientException):
+            return True
         missing = [p for p in NEEDED_PERMISSIONS if not getattr(perms, p)]
         if missing:
             raise MissingChannelPermissions(missing)
@@ -2083,12 +2103,30 @@ class SykeCommands(commands.Cog, name="SYKE"):
         ]
 
 
+def launch(settings: Settings) -> None:
+    """Connect to Discord. If Server Members intent is rejected, reconnect without it.
+
+    Discord closes the gateway (close code 4014) when a privileged intent is requested
+    but not enabled. That takes every command down with it. Message Content stays on,
+    because prefix commands can't be read without it.
+    """
+    try:
+        Syke(settings).run(settings.discord_token, log_handler=None)
+    except discord.PrivilegedIntentsRequired:
+        log.error(
+            "Discord rejected the Server Members intent. Starting without it so commands "
+            "still work. Enable Server Members Intent in the Developer Portal for !inviter "
+            "to record new joins."
+        )
+        Syke(settings, track_members=False).run(settings.discord_token, log_handler=None)
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings = load_settings()
     if not settings.discord_token:
         sys.exit("DISCORD_TOKEN is missing. Copy .env.example to .env and paste your bot token.")
-    Syke(settings).run(settings.discord_token, log_handler=None)
+    launch(settings)
 
 
 if __name__ == "__main__":
