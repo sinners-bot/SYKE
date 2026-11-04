@@ -72,6 +72,15 @@ CREATE TABLE IF NOT EXISTS expressions (
     created_at    REAL NOT NULL,
     PRIMARY KEY (guild_id, kind, expression_id)
 );
+CREATE TABLE IF NOT EXISTS verification (
+    guild_id         INTEGER PRIMARY KEY,
+    role_id          INTEGER,
+    remove_role_id   INTEGER,
+    channel_id       INTEGER,
+    text             TEXT,
+    panel_channel_id INTEGER,
+    panel_message_id INTEGER
+);
 """
 
 
@@ -323,6 +332,43 @@ class Storage:
             (message_id, time.time() - CARD_TTL_SECONDS),
         )
         return (rows[0][0], json.loads(rows[0][1])) if rows else None
+
+    def verification(self, guild_id: int) -> tuple:
+        """`(role_id, remove_role_id, channel_id, text, panel_channel_id, panel_message_id)`."""
+        rows = self._read(
+            "SELECT role_id, remove_role_id, channel_id, text, panel_channel_id, panel_message_id "
+            "FROM verification WHERE guild_id = ?",
+            (guild_id,),
+        )
+        return rows[0] if rows else (None, None, None, None, None, None)
+
+    def update_verification(self, guild_id: int, **changes) -> None:
+        """Change some verification fields. Pass None to clear a field."""
+        columns = ("role_id", "remove_role_id", "channel_id", "text", "panel_channel_id", "panel_message_id")
+        unknown = set(changes) - set(columns)
+        if unknown:
+            raise KeyError(", ".join(sorted(unknown)))
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT role_id, remove_role_id, channel_id, text, panel_channel_id, panel_message_id "
+                "FROM verification WHERE guild_id = ?",
+                (guild_id,),
+            ).fetchone()
+            data = dict(zip(columns, row if row else (None,) * len(columns)))
+            data.update(changes)
+            self._conn.execute(
+                "INSERT INTO verification (guild_id, role_id, remove_role_id, channel_id, text, "
+                "panel_channel_id, panel_message_id) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(guild_id) DO UPDATE SET "
+                "role_id = excluded.role_id, remove_role_id = excluded.remove_role_id, "
+                "channel_id = excluded.channel_id, text = excluded.text, "
+                "panel_channel_id = excluded.panel_channel_id, panel_message_id = excluded.panel_message_id",
+                (guild_id, *(data[name] for name in columns)),
+            )
+            self._conn.commit()
+
+    def clear_verification(self, guild_id: int) -> bool:
+        return self._write("DELETE FROM verification WHERE guild_id = ?", (guild_id,)) > 0
 
     def demo_mode(self, guild_id: int) -> bool:
         rows = self._read("SELECT demo_mode FROM guild_settings WHERE guild_id = ?", (guild_id,))

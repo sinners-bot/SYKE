@@ -153,6 +153,7 @@ def tour_page(key: str, p: str) -> list[discord.Embed]:
             f"`{p}yap on|off`: let SYKE chime in\n"
             f"`{p}collect [#channel]`: read more history for mimic and yap\n"
             f"`{p}rescan`: re-read channels now\n"
+            f"`{p}verify setup`: a gate that gives a role when someone runs `{p}verify` or presses the button\n"
             f"`{p}demo on|off` and `{p}sample [name]`: fake members for testing alone\n"
             "`/diagnose`: why prefix commands might not work in a channel"
         ))]
