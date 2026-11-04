@@ -42,6 +42,7 @@ switch a server to mentions only with `!prefix mention`.
 | `!showcase` | everyone | A tour of every feature with live example cards. Aliases: `!features`, `!tour` |
 | `!about` | everyone | How many servers use SYKE, members watched, uptime. Aliases: `!stats`, `!info` |
 | `!invite` | everyone | Button to add SYKE to your own server |
+| `!inviter [@member]` | everyone | Who invited that member. SYKE only knows people who joined while it was in the server (its role needs **Manage Server**). Alias: `!invitedby` |
 | `!servers` | SYKE owners | Every server SYKE is in, biggest first, with watched channels and join dates |
 | `!scanme` | everyone | Reads back through watched channels (up to `SYKE_DEEP_SCAN_LIMIT` messages each) and adds your older messages to your profile. Aliases: `!scan`, `!addme`. Once per 10 minutes |
 | `!mimic [@member]` | everyone | A made-up message in someone's style, from a Markov chain of their messages. Aliases: `!impersonate`, `!copy` |
@@ -108,10 +109,12 @@ Members need `SYKE_MIN_MESSAGES` (default 15) messages in watched channels befor
 
 1. Go to <https://discord.com/developers/applications> and create an app named **SYKE**.
 2. **Bot** tab: copy the token. Under *Privileged Gateway Intents*, enable
-   **Message Content Intent** (SYKE can't read messages without it).
+   **Message Content Intent** (SYKE can't read messages without it) and **Server Members Intent**
+   (SYKE can't see joins, so `!inviter` stays empty, without it).
 3. **OAuth2 → URL Generator**: scopes `bot` and `applications.commands`; permissions
    **View Channels**, **Read Message History**, **Send Messages**, **Embed Links**,
-   **Use External Emojis**, **Add Reactions**, and **Manage Expressions** (so `!steal`, `!emoji` and `!sticker` can add them).
+   **Use External Emojis**, **Add Reactions**, **Manage Expressions** (so `!steal`, `!emoji` and `!sticker` can add them),
+   and **Manage Server** (so `!inviter` can read which invite was used).
    Open the generated URL to invite SYKE to your server.
 4. **Add App button**: keep **Public Bot** on (Bot tab) so other people can add SYKE. On startup SYKE sets
    its own guild-install settings (scopes `bot` + `applications.commands`, the permissions above), so **Add App** on SYKE's profile adds it to a server.
@@ -154,7 +157,7 @@ command and restart policy.
 4. Deploy. The **Deploy Logs** should show `Synced 2 global commands` and `SYKE online as ...`.
 
 No external database (Supabase, Postgres, etc.) is needed. SYKE stores watched channels,
-opt-outs, per-server settings and the Markov corpus in that SQLite file.
+opt-outs, per-server settings, who invited each member, and the Markov corpus in that SQLite file.
 
 ## Configuration
 
