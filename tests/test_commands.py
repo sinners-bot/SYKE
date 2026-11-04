@@ -73,6 +73,46 @@ def test_mention_only_prefix(cog):
     assert cog.bot.storage.prefix(42) is None
 
 
+def test_new_commands_follow_a_custom_prefix(cog):
+    """syke inviter, Syke Verify Setup, and a real @mention all reach the new commands."""
+
+    async def checks():
+        bot = cog.bot
+        bot._connection.user = types.SimpleNamespace(id=999, mention="<@999>", name="SYKE")
+        await bot.add_cog(cog)
+        bot.set_prefix(42, "syke")
+        guild = types.SimpleNamespace(id=42)
+        author = types.SimpleNamespace(id=7, bot=False)
+
+        async def lookup(content):
+            message = types.SimpleNamespace(
+                content=content, guild=guild, author=author, _state=bot._connection,
+            )
+            ctx = await bot.get_context(message)
+            if ctx.command is None:
+                return None, None
+            sub = None
+            if hasattr(ctx.command, "all_commands"):
+                ctx.view.skip_ws()
+                word = ctx.view.get_word()
+                child = ctx.command.all_commands.get(word) if word else None
+                sub = child.qualified_name if child else None
+            return ctx.command.qualified_name, sub
+
+        assert await lookup("sykeinviter") == ("inviter", None)
+        assert await lookup("syke inviter") == ("inviter", None)
+        assert await lookup("Syke Inviter") == ("inviter", None)
+        assert await lookup("syke verify") == ("verify", None)
+        assert await lookup("syke verify setup") == ("verify", "verify setup")
+        assert await lookup("Syke Verify Setup") == ("verify", "verify setup")
+        assert await lookup("<@999> verify setup") == ("verify", "verify setup")
+        assert await lookup("syke emoji list") == ("emoji", "emoji list")
+        assert bot.is_command_text(42, "Syke verify setup")
+        assert not bot.is_command_text(42, "hello there")
+
+    run(checks())
+
+
 def test_help_uses_server_prefix(cog):
     cog.bot.set_prefix(42, "s.")
     ctx = FakeCtx()

@@ -212,7 +212,12 @@ async def resolve_prefix(bot: Syke, message: discord.Message) -> list[str]:
     prefix = bot.prefix_for(message.guild.id) if message.guild else bot.settings.default_prefix
     if prefix == MENTION_ONLY:
         return commands.when_mentioned(bot, message)
-    return commands.when_mentioned_or(prefix)(bot, message)
+    found = commands.when_mentioned_or(prefix)(bot, message)
+    # "Syke inviter" should hit a prefix stored as "syke". The mention forms stay first.
+    text = message.content or ""
+    if prefix and text[:len(prefix)].casefold() == prefix.casefold() and not text.startswith(prefix):
+        found.append(text[:len(prefix)])
+    return found
 
 
 class MissingChannelPermissions(commands.CheckFailure):
@@ -246,6 +251,8 @@ class Syke(commands.Bot):
             intents=intents,
             help_command=None,
             case_insensitive=True,
+            # "syke inviter" and "sykeinviter" are the same command when the prefix is syke.
+            strip_after_prefix=True,
             chunk_guilds_at_startup=False,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -798,12 +805,16 @@ class Syke(commands.Bot):
 
     def is_command_text(self, guild_id: int, text: str) -> bool:
         text = text.lstrip()
+        folded = text.casefold()
         starts = {self.settings.default_prefix}
         if self.prefix_for(guild_id) != MENTION_ONLY:
             starts.add(self.prefix_for(guild_id))
-        if self.user:
-            starts |= {f"<@{self.user.id}>", f"<@!{self.user.id}>"}
-        return any(text.startswith(s) for s in starts)
+        if any(folded.startswith(start.casefold()) for start in starts if start):
+            return True
+        if self.user is None:
+            return False
+        mentions = (f"<@{self.user.id}>", f"<@!{self.user.id}>")
+        return any(text.startswith(mention) for mention in mentions)
 
     def pick_yap(self, guild_id: int, exclude_id: int = 0, exclude: set[str] = frozenset()) -> str | None:
         seen = {folded(e) for e in exclude}
@@ -1623,7 +1634,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
         """Add every custom emoji and sticker from the message you reply to."""
         await self._expressions(ctx, "both", "add", text)
 
-    @commands.hybrid_group(name="emoji", aliases=["emote", "addemoji"], fallback="add",
+    @commands.hybrid_group(name="emoji", aliases=["emote", "addemoji"], fallback="add", case_insensitive=True,
                            description="Add, steal or manage custom emojis", usage="[name or link]")
     @app_commands.describe(image="A PNG, JPG or GIF file",
                            text="Name, image link, or message link. Leave empty when replying.")
@@ -1653,7 +1664,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
     async def emoji_rename(self, ctx: commands.Context, old: str, new: str) -> None:
         await self._expressions(ctx, "emoji", "rename", f"{old} {new}")
 
-    @commands.hybrid_group(name="sticker", aliases=["stickers", "addsticker"], fallback="add",
+    @commands.hybrid_group(name="sticker", aliases=["stickers", "addsticker"], fallback="add", case_insensitive=True,
                            description="Add, steal or manage custom stickers", usage="[name or link]")
     @app_commands.describe(image="A PNG, JPG or GIF file",
                            text="Name, image link, or message link. Leave empty when replying.")
@@ -1683,7 +1694,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
     async def sticker_rename(self, ctx: commands.Context, old: str, new: str) -> None:
         await self._expressions(ctx, "sticker", "rename", f"{old} {new}")
 
-    @commands.hybrid_group(name="verify", fallback="me", description="Get the verified role")
+    @commands.hybrid_group(name="verify", fallback="me", case_insensitive=True, description="Get the verified role")
     @commands.cooldown(1, 5, commands.BucketType.member)
     @public()
     async def verify(self, ctx: commands.Context) -> None:
