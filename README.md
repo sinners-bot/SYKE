@@ -43,13 +43,15 @@ switch a server to mentions only with `!prefix mention`.
 | `!about` | everyone | How many servers use SYKE, members watched, uptime. Aliases: `!stats`, `!info` |
 | `!invite` | everyone | Button to add SYKE to your own server |
 | `!inviter [@member]` | everyone | Who invited that member. SYKE only knows people who joined while it was in the server (its role needs **Manage Server**). Alias: `!invitedby` |
+| `!verify` | everyone | Get the verified role. The slash command is `/verify me`. An admin sets that role up first |
+| `!verify setup` | Manage Server | Show the verification gate and how to finish it. Also `role`, `take`, `channel`, `anywhere`, `panel`, `message`, `off` |
 | `!servers` | SYKE owners | Every server SYKE is in, biggest first, with watched channels and join dates |
 | `!scanme` | everyone | Reads back through watched channels (up to `SYKE_DEEP_SCAN_LIMIT` messages each) and adds your older messages to your profile. Aliases: `!scan`, `!addme`. Once per 10 minutes |
 | `!mimic [@member]` | everyone | A made-up message in someone's style, from a Markov chain of their messages. Aliases: `!impersonate`, `!copy` |
 | `!optout` / `!optin` | everyone | Exclude yourself from being read or judged (opting out also deletes your stored messages) |
 | `!help` | everyone | Command list using this server's prefix |
 | `!track #channel` / `!untrack #channel` | Manage Server | Choose which channels SYKE reads |
-| `!channels` | Manage Server | Watched channels, prefix, timezone and demo mode. Alias: `!settings` |
+| `!channels` | Manage Server | Watched channels, prefix, timezone, demo mode and verification. Alias: `!settings` |
 | `!prefix <new\|mention\|reset>` | Manage Server | Custom prefix (1-5 characters), `mention` so SYKE only answers to `@SYKE profile`, or `reset` for `!`. `!prefix` alone shows the current setting |
 | `!timezone <zone>` | Manage Server | Timezone used to spot late-night posting, e.g. `Europe/London`. Peak hours on cards don't need it: they are Discord timestamps, so every reader sees them in their own timezone. Alias: `!tz` |
 | `!rescan` | Manage Server | Drop the cache and re-read channels now |
@@ -68,6 +70,20 @@ switch a server to mentions only with `!prefix mention`.
    then run `!rescan` and `!profile`. You'll be ranked against the fake members.
    For quicker tests, set `SYKE_MIN_MESSAGES=5` in Railway's Variables.
 4. Turn it off with `!demo off` before real members start using SYKE.
+
+## Verification
+
+A gate for new members. SYKE gives the verified role, and can remove another one. Which channels that role can see stays in Discord's permission settings.
+
+1. Make a role such as **Verified** and drag it **under** SYKE's role. Give SYKE **Manage Roles**.
+2. In channel permissions, hide the server from @everyone and let **Verified** see it. Leave one channel, `#gate`, that newcomers can see.
+3. `!verify role @Verified`
+4. `!verify channel #gate`
+5. `!verify panel` posts a button in `#gate`.
+
+Members run `!verify` or press **Verify**. `!verify take @Unverified` also removes a role when they pass. `!verify message hello` changes the panel text (`!verify message reset` puts the default back). `!verify anywhere` drops the channel limit. `!verify off` turns the gate off. `!verify setup` shows where things stand.
+
+The button keeps working after a restart.
 
 ## How it works
 
@@ -114,7 +130,8 @@ Members need `SYKE_MIN_MESSAGES` (default 15) messages in watched channels befor
 3. **OAuth2 → URL Generator**: scopes `bot` and `applications.commands`; permissions
    **View Channels**, **Read Message History**, **Send Messages**, **Embed Links**,
    **Use External Emojis**, **Add Reactions**, **Manage Expressions** (so `!steal`, `!emoji` and `!sticker` can add them),
-   and **Manage Server** (so `!inviter` can read which invite was used).
+   **Manage Server** (so `!inviter` can read which invite was used),
+   and **Manage Roles** (so `!verify` can give the verified role).
    Open the generated URL to invite SYKE to your server.
 4. **Add App button**: keep **Public Bot** on (Bot tab) so other people can add SYKE. On startup SYKE sets
    its own guild-install settings (scopes `bot` + `applications.commands`, the permissions above), so **Add App** on SYKE's profile adds it to a server.

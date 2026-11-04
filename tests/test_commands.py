@@ -81,6 +81,8 @@ def test_help_uses_server_prefix(cog):
     assert "`s.inviter [@member]`" in ctx.replies[-1].description
     assert "`s.steal`" in ctx.replies[-1].description
     assert "`s.emoji <name>`" in ctx.replies[-1].description
+    assert "`s.verify`" in ctx.replies[-1].description
+    assert "`s.verify setup`" in ctx.replies[-1].description
     assert len(ctx.replies[-1].description) <= 4096
 
 
@@ -251,6 +253,7 @@ def test_showcase_pages_have_examples(cog):
     assert "yaps instead of asking" in tour_page("ask", "?")[0].description
     assert "`?steal`" in tour_page("emoji", "?")[0].description
     assert "`?inviter [@member]`" in tour_page("data", "?")[0].description
+    assert "`?verify setup`" in tour_page("admin", "?")[0].description
     assert "PNG, JPG or GIF" in tour_page("emoji", "?")[0].description
 
 

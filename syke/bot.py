@@ -40,6 +40,19 @@ from .scanner import Scanner, to_msg
 from .showcase import ShowcaseView, tour_page
 from .storage import Storage
 from .traits import TRAIT_META, TRAITS
+from .verify import (
+    VerifyView,
+    clear_channel,
+    explain_current,
+    grant,
+    post_panel,
+    refresh_panel,
+    set_channel,
+    set_grant_role,
+    set_remove_role,
+    set_text,
+    turn_off,
+)
 from .yap import Turn, Voice, build_voice, detect_tone, folded, query_weights, rank, remixes, search_terms
 
 log = logging.getLogger("syke")
@@ -54,10 +67,11 @@ MENTION_WORDS = {"mention", "@", "ping", "@mention"}
 VERSION = (os.getenv("RAILWAY_GIT_COMMIT_SHA") or "dev")[:7]
 NEEDED_PERMISSIONS = ("view_channel", "send_messages", "embed_links", "read_message_history")
 # Requested on invite: what SYKE needs to work, plus posting server emojis, reactions,
-# adding emojis and stickers (Manage Expressions), and reading invites (Manage Server)
-# so !inviter can tell who brought someone in.
+# adding emojis and stickers (Manage Expressions), reading invites (Manage Server)
+# so !inviter can tell who brought someone in, and handing out roles (Manage Roles)
+# so !verify can give the verified role.
 INVITE_PERMISSIONS = NEEDED_PERMISSIONS + (
-    "use_external_emojis", "add_reactions", "manage_emojis", "manage_guild",
+    "use_external_emojis", "add_reactions", "manage_emojis", "manage_guild", "manage_roles",
 )
 INSTALL_SCOPES = ["bot", "applications.commands"]
 MIN_MIMIC_MESSAGES = 10
@@ -265,6 +279,7 @@ class Syke(commands.Bot):
         await self.add_cog(SykeCommands(self))
         self.add_view(ProfileView(self.load_card))
         self.add_view(ShowcaseView(self.tour_prefix, self.invite_url()))
+        self.add_view(VerifyView())
         self.spawn(self._configure_install())
         log.info("SYKE %s starting: %d prefix commands, default prefix %r",
                  VERSION, len(self.commands), self.settings.default_prefix)
@@ -1451,11 +1466,14 @@ class SykeCommands(commands.Cog, name="SYKE"):
         expr_perms = getattr(getattr(guild, "me", None), "guild_permissions", None)
         can_expr = True
         can_track_invites: bool | None = None
+        can_roles = True
         if expr_perms is not None:
             can_expr = bool(expr_perms.administrator or expr_perms.manage_emojis or expr_perms.manage_expressions)
             rows.append(f"{'✅' if can_expr else '⚠️'} Manage Expressions for emojis and stickers")
             can_track_invites = bool(expr_perms.administrator or expr_perms.manage_guild)
             rows.append(f"{'✅' if can_track_invites else '⚠️'} Manage Server, so SYKE can see who used an invite")
+            can_roles = bool(expr_perms.administrator or expr_perms.manage_roles)
+            rows.append(f"{'✅' if can_roles else '⚠️'} Manage Roles for verification")
 
         p = self.bot.display_prefix(guild.id)
         tracked = self.bot.storage.tracked(guild.id)
@@ -1479,6 +1497,8 @@ class SykeCommands(commands.Cog, name="SYKE"):
             verdict += " Emoji and sticker commands need **Manage Expressions** on SYKE's role."
         if can_track_invites is False:
             verdict += f" `{p}inviter` needs **Manage Server** on SYKE's role to record new joins."
+        if not can_roles:
+            verdict += f" `{p}verify` needs **Manage Roles** on SYKE's role, above the verified role."
         embed = notice("🩺 SYKE diagnostics", "\n".join(rows) + f"\n\n{verdict}", WARN if missing else BRAND)
         embed.set_footer(text=f"SYKE version {VERSION}")
         await ctx.reply(embed=embed, ephemeral=True)
@@ -1663,6 +1683,78 @@ class SykeCommands(commands.Cog, name="SYKE"):
     async def sticker_rename(self, ctx: commands.Context, old: str, new: str) -> None:
         await self._expressions(ctx, "sticker", "rename", f"{old} {new}")
 
+    @commands.hybrid_group(name="verify", fallback="me", description="Get the verified role")
+    @commands.cooldown(1, 5, commands.BucketType.member)
+    @public()
+    async def verify(self, ctx: commands.Context) -> None:
+        """Get the verified role."""
+        assert ctx.guild is not None
+        embed = await grant(
+            self.bot, ctx.guild, ctx.author, getattr(ctx.channel, "id", None),
+            prefix=self.p(ctx), admin=is_admin(self.bot, ctx.author),
+        )
+        await ctx.reply(embed=embed, ephemeral=True)
+
+    @verify.command(name="setup", description="Show how verification is set up")
+    @admin()
+    async def verify_setup(self, ctx: commands.Context) -> None:
+        assert ctx.guild is not None
+        await ctx.reply(embed=explain_current(self.bot, ctx.guild, self.p(ctx)), ephemeral=True)
+
+    @verify.command(name="role", description="Role members get when they verify")
+    @app_commands.describe(role="The role to give")
+    @admin()
+    async def verify_role(self, ctx: commands.Context, role: discord.Role) -> None:
+        assert ctx.guild is not None
+        await ctx.reply(embed=set_grant_role(self.bot, ctx.guild, role, prefix=self.p(ctx)), ephemeral=True)
+
+    @verify.command(name="take", aliases=["remove"], description="Role to remove when someone verifies")
+    @app_commands.describe(role="The role to remove. Leave empty to stop removing one.")
+    @admin()
+    async def verify_take(self, ctx: commands.Context, role: discord.Role | None = None) -> None:
+        assert ctx.guild is not None
+        await ctx.reply(embed=set_remove_role(self.bot, ctx.guild, role, prefix=self.p(ctx)), ephemeral=True)
+
+    @verify.command(name="channel", description="Only allow verification in one channel")
+    @app_commands.describe(channel="The channel members must verify in")
+    @admin()
+    async def verify_channel(self, ctx: commands.Context, channel: discord.TextChannel) -> None:
+        assert ctx.guild is not None
+        await ctx.reply(embed=set_channel(self.bot, ctx.guild, channel, prefix=self.p(ctx)), ephemeral=True)
+
+    @verify.command(name="anywhere", description="Allow verification in any channel")
+    @admin()
+    async def verify_anywhere(self, ctx: commands.Context) -> None:
+        assert ctx.guild is not None
+        await ctx.reply(embed=clear_channel(self.bot, ctx.guild), ephemeral=True)
+
+    @verify.command(name="message", aliases=["text"], description="Change the text on the verification panel")
+    @app_commands.describe(text="What the panel should say. 'reset' restores the default.")
+    @admin()
+    async def verify_message(self, ctx: commands.Context, *, text: str = "") -> None:
+        assert ctx.guild is not None
+        embed = set_text(self.bot, ctx.guild, text, prefix=self.p(ctx))
+        if embed.colour != WARN and await refresh_panel(self.bot, ctx.guild, self.p(ctx)):
+            embed.description = (
+                "The posted panel is back to the default."
+                if embed.title.startswith("Default")
+                else "The posted panel is updated."
+            )
+        await ctx.reply(embed=embed, ephemeral=True)
+
+    @verify.command(name="panel", description="Post the verification button")
+    @admin()
+    async def verify_panel(self, ctx: commands.Context) -> None:
+        assert ctx.guild is not None
+        embed = await post_panel(self.bot, ctx.guild, ctx.channel, self.p(ctx))
+        await ctx.reply(embed=embed, ephemeral=True)
+
+    @verify.command(name="off", description="Turn verification off")
+    @admin()
+    async def verify_off(self, ctx: commands.Context) -> None:
+        assert ctx.guild is not None
+        await ctx.reply(embed=turn_off(self.bot, ctx.guild), ephemeral=True)
+
     @commands.hybrid_command(name="help", aliases=["commands"], description="How to use SYKE")
     @public()
     async def help(self, ctx: commands.Context) -> None:
@@ -1689,8 +1781,10 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"`{p}showcase` — a tour of every feature, with examples\n"
                 f"`{p}about` — how many servers use SYKE • `{p}invite` — add it to yours\n"
                 f"`{p}inviter [@member]` — who invited them into this server\n"
+                f"`{p}verify` — get the verified role (slash: `/verify me`)\n"
                 "`/diagnose` — check why prefix commands might not work here\n\n"
                 "**Admins (Manage Server)**\n"
+                f"`{p}verify setup` — verification gate: role, channel, button, wording\n"
                 f"`{p}track #channel` / `{p}untrack #channel` — choose what SYKE reads\n"
                 f"`{p}channels` — show settings and watched channels\n"
                 f"`{p}prefix <new|mention|reset>` — custom prefix, @mention only, or back to `{self.bot.settings.default_prefix}`\n"
@@ -1747,6 +1841,16 @@ class SykeCommands(commands.Cog, name="SYKE"):
         embed.add_field(name="Prefix", value=f"`{self.p(ctx)}`")
         embed.add_field(name="Timezone", value=tz)
         embed.add_field(name="Demo mode", value=demo)
+        role_id = self.bot.storage.verification(ctx.guild.id)[0]
+        get_role = getattr(ctx.guild, "get_role", None)
+        verified = get_role(role_id) if get_role and role_id else None
+        if not role_id:
+            gate = "off"
+        elif verified is None:
+            gate = "role missing"
+        else:
+            gate = verified.mention
+        embed.add_field(name="Verification", value=gate)
         await ctx.reply(embed=embed, ephemeral=True)
 
     @commands.hybrid_command(name="prefix", description="Choose SYKE's prefix: a custom one, mentions only, or reset")
