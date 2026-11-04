@@ -191,6 +191,7 @@ def test_setup_panel_message_and_off(cog):
     run(cog.verify_setup.callback(cog, ctx))
     assert ctx.replies[-1].title == "Set up verification 🚪"
     assert "`!verify role @Verified`" in ctx.replies[-1].description
+    assert "`!verify @member @Role`" in ctx.replies[-1].description
 
     run(cog.verify_panel.callback(cog, ctx))
     assert ctx.replies[-1].title == "Set up verification 🚪"
@@ -266,11 +267,126 @@ def test_missing_manage_roles_is_reported(cog, monkeypatch):
 def test_verify_commands_are_gated(cog):
     group = next(command for command in cog.get_commands() if command.name == "verify")
     assert _admin_predicate not in group.checks
+    assert group.invoke_without_command
+    assert [name for name in group.params] == ["member", "role"]
+    assert group.params["member"].required is False
+    assert group.params["role"].required is False
+    slash = group.app_command.get_command("me")
+    assert [param.name for param in slash.parameters] == ["member", "role"]
+    assert all(not param.required for param in slash.parameters)
     by_name = {command.name: command for command in group.commands}
     for name in ("setup", "role", "take", "channel", "anywhere", "message", "panel", "off"):
         assert _admin_predicate in by_name[name].checks, name
     assert "remove" in by_name["take"].aliases
     assert "text" in by_name["message"].aliases
+
+
+def test_admin_verifies_someone_and_can_choose_the_role(cog):
+    verified = _role(5, "Verified")
+    newbie = _role(6, "Newbie")
+    trusted = _role(11, "Trusted")
+    high = _role(8, "Admin", position=50)
+    gate = Chan(3)
+    staff = Chan(9)
+    guild = _guild([verified, newbie, trusted, high], gate)
+    admin = Person(uid=1, admin=True)
+    member = Person(uid=8)
+    member.mention = "<@8>"
+    member.roles = [newbie]
+    ctx = _ctx(guild, admin, staff)
+
+    run(cog.verify.callback(cog, ctx, member))
+    assert ctx.replies[-1].title == "Set up verification 🚪"
+    assert member.added == [] and member.removed == []
+
+    picked = Person(uid=20)
+    picked.mention = "<@20>"
+    picked.roles = [newbie]
+    run(cog.verify.callback(cog, ctx, picked, trusted))
+    assert ctx.replies[-1].title == "Verified ✅"
+    assert "<@&11>" in ctx.replies[-1].description
+    assert "Nothing is set to take away" in ctx.replies[-1].description
+    assert [role.id for role in picked.roles] == [6, 11]
+    assert cog.bot.storage.verification(42)[0] is None
+
+    run(cog.verify_role.callback(cog, ctx, verified))
+    run(cog.verify_take.callback(cog, ctx, newbie))
+    run(cog.verify_channel.callback(cog, ctx, gate))
+    run(cog.verify.callback(cog, ctx, member))
+    assert ctx.replies[-1].title == "Verified ✅"
+    assert "<@8>" in ctx.replies[-1].description
+    assert "<@&5>" in ctx.replies[-1].description
+    assert "<@&6> is gone" in ctx.replies[-1].description
+    assert [role.id for role in member.roles] == [5]
+    assert member.removed[0][0] == (newbie,)
+
+    run(cog.verify.callback(cog, ctx, member))
+    assert ctx.replies[-1].title == "Already verified"
+    assert "already has" in ctx.replies[-1].description
+
+    both = Person(uid=15)
+    both.mention = "<@15>"
+    both.roles = [verified, newbie]
+    run(cog.verify.callback(cog, ctx, both))
+    assert ctx.replies[-1].title == "Verified ✅"
+    assert "<@&6> is gone" in ctx.replies[-1].description
+    assert both.added == []
+    assert [role.id for role in both.roles] == [5]
+
+    other = Person(uid=9)
+    other.mention = "<@9>"
+    other.roles = [newbie]
+    run(cog.verify.callback(cog, ctx, other, trusted))
+    assert ctx.replies[-1].title == "Verified ✅"
+    assert "<@&11>" in ctx.replies[-1].description
+    assert "<@&6> is gone" in ctx.replies[-1].description
+    assert [role.id for role in other.roles] == [11]
+    assert cog.bot.storage.verification(42)[0] == 5
+
+    stuck = Person(uid=10)
+    stuck.roles = [newbie]
+    run(cog.verify.callback(cog, ctx, stuck, high))
+    assert ctx.replies[-1].title == "Role won't work"
+    assert stuck.added == [] and stuck.removed == []
+    run(cog.verify.callback(cog, ctx, stuck, newbie))
+    assert "other verification role" in ctx.replies[-1].description
+    assert [role.id for role in stuck.roles] == [6]
+
+    plain = Person(uid=12)
+    run(cog.verify_take.callback(cog, ctx, None))
+    run(cog.verify.callback(cog, ctx, plain))
+    assert ctx.replies[-1].title == "Verified ✅"
+    assert "Nothing is set to take away" in ctx.replies[-1].description
+    assert [role.id for role in plain.roles] == [5]
+
+    robot = Person(uid=13)
+    robot.bot = True
+    run(cog.verify.callback(cog, ctx, robot, trusted))
+    assert ctx.replies[-1].title == "Bots stay out"
+    assert robot.added == []
+
+
+def test_members_cannot_verify_someone_else_or_pick_a_role(cog):
+    verified = _role(5, "Verified")
+    guild = _guild([verified])
+    person = Person(admin=False)
+    other = Person(uid=8)
+    ctx = _ctx(guild, person, Chan())
+    cog.bot.storage.update_verification(42, role_id=5, remove_role_id=6)
+
+    run(cog.verify.callback(cog, ctx, other))
+    assert ctx.replies[-1].title == "Admins only"
+    assert "another person" in ctx.replies[-1].description
+    assert other.added == []
+
+    run(cog.verify.callback(cog, ctx, None, verified))
+    assert ctx.replies[-1].title == "Admins only"
+    assert "choose the role" in ctx.replies[-1].description
+    assert person.added == []
+
+    run(cog.verify.callback(cog, ctx))
+    assert ctx.replies[-1].title == "You're in ✅"
+    assert [role.id for role in person.roles] == [5]
 
 
 def test_channels_shows_verification(cog):

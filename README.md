@@ -44,6 +44,7 @@ switch a server to mentions only with `!prefix mention`.
 | `!invite` | everyone | Button to add SYKE to your own server |
 | `!inviter [@member]` | everyone | Who invited that member. SYKE only knows people who joined while it was in the server (its role needs **Manage Server**). Alias: `!invitedby` |
 | `!verify` | everyone | Get the verified role. The slash command is `/verify me`. An admin sets that role up first |
+| `!verify @member [@role]` | Manage Server | Verify that member: remove the unverified role and add the verified role, or `@role` if you name one. The slash form is `/verify me` with those options |
 | `!verify setup` | Manage Server | Show the verification gate and how to finish it. Also `role`, `take`, `channel`, `anywhere`, `panel`, `message`, `off` |
 | `!servers` | SYKE owners | Every server SYKE is in, biggest first, with watched channels and join dates |
 | `!scanme` | everyone | Reads back through watched channels (up to `SYKE_DEEP_SCAN_LIMIT` messages each) and adds your older messages to your profile. Aliases: `!scan`, `!addme`. Once per 10 minutes |
@@ -81,7 +82,7 @@ A gate for new members. SYKE gives the verified role, and can remove another one
 4. `!verify channel #gate`
 5. `!verify panel` posts a button in `#gate`.
 
-Members run `!verify` or press **Verify**. `!verify take @Unverified` also removes a role when they pass. `!verify message hello` changes the panel text (`!verify message reset` puts the default back). `!verify anywhere` drops the channel limit. `!verify off` turns the gate off. `!verify setup` shows where things stand.
+Members run `!verify` or press **Verify**. An admin can verify someone else with `!verify @member`, from any channel. `!verify @member @Role` grants that role instead of the saved one. `!verify take @Unverified` removes a role when they pass, including when an admin verifies them. `!verify message hello` changes the panel text (`!verify message reset` puts the default back). `!verify anywhere` drops the channel limit. `!verify off` turns the gate off. `!verify setup` shows where things stand.
 
 The button keeps working after a restart.
 

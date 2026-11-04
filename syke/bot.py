@@ -42,6 +42,7 @@ from .storage import Storage
 from .traits import TRAIT_META, TRAITS
 from .verify import (
     VerifyView,
+    bots_stay_out,
     clear_channel,
     explain_current,
     grant,
@@ -51,6 +52,7 @@ from .verify import (
     set_grant_role,
     set_remove_role,
     set_text,
+    staff_only,
     turn_off,
 )
 from .yap import Turn, Voice, build_voice, detect_tone, folded, query_weights, rank, remixes, search_terms
@@ -1714,15 +1716,37 @@ class SykeCommands(commands.Cog, name="SYKE"):
     async def sticker_rename(self, ctx: commands.Context, old: str, new: str) -> None:
         await self._expressions(ctx, "sticker", "rename", f"{old} {new}")
 
-    @commands.hybrid_group(name="verify", fallback="me", case_insensitive=True, description="Get the verified role")
+    @commands.hybrid_group(
+        name="verify", fallback="me", case_insensitive=True, usage="[@member] [@role]",
+        description="Get the verified role, or give one to somebody",
+    )
+    @app_commands.describe(
+        member="Member to verify. Leave empty to verify yourself.",
+        role="Verified role to give. Leave empty to use the saved one.",
+    )
     @commands.cooldown(1, 5, commands.BucketType.member)
     @public()
-    async def verify(self, ctx: commands.Context) -> None:
-        """Get the verified role."""
+    async def verify(
+        self,
+        ctx: commands.Context,
+        member: discord.Member | None = None,
+        role: discord.Role | None = None,
+    ) -> None:
+        """Get the verified role, or verify someone else."""
         assert ctx.guild is not None
+        target = member or ctx.author
+        admin = is_admin(self.bot, ctx.author)
+        other = target.id != ctx.author.id
+        if (other or role is not None) and not admin:
+            await ctx.reply(embed=staff_only(self.p(ctx), other=other), ephemeral=True)
+            return
+        if getattr(target, "bot", False):
+            await ctx.reply(embed=bots_stay_out(), ephemeral=True)
+            return
         embed = await grant(
-            self.bot, ctx.guild, ctx.author, getattr(ctx.channel, "id", None),
-            prefix=self.p(ctx), admin=is_admin(self.bot, ctx.author),
+            self.bot, ctx.guild, target, getattr(ctx.channel, "id", None),
+            prefix=self.p(ctx), admin=admin, chosen_role=role,
+            ignore_channel=other, for_self=not other,
         )
         await ctx.reply(embed=embed, ephemeral=True)
 
@@ -1816,6 +1840,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 "`/diagnose` — check why prefix commands might not work here\n\n"
                 "**Admins (Manage Server)**\n"
                 f"`{p}verify setup` — verification gate: role, channel, button, wording\n"
+                f"`{p}verify @member [@role]` — take their unverified role and give the verified one, or @role\n"
                 f"`{p}track #channel` / `{p}untrack #channel` — choose what SYKE reads\n"
                 f"`{p}channels` — show settings and watched channels\n"
                 f"`{p}prefix <new|mention|reset>` — custom prefix, @mention only, or back to `{self.bot.settings.default_prefix}`\n"
