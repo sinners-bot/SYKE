@@ -138,6 +138,8 @@ def tour_page(key: str, p: str) -> list[discord.Embed]:
         )), example]
     if key == "data":
         return [_page("⛏️ Your data", (
+            f"`{p}inviter [@member]`: who invited them. SYKE only knows for people who joined while it was "
+            "here, and its role needs **Manage Server**.\n"
             f"`{p}scanme`: dig through older history so all your messages count towards your profile.\n"
             f"`{p}optout`: SYKE stops reading or judging you and deletes your stored messages. "
             f"`{p}optin` brings you back.\n\n"

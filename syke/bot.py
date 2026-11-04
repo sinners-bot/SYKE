@@ -24,6 +24,15 @@ from .config import Settings, load_settings
 from .dexify import dexify_text
 from . import expressions
 from .demo import PERSONAS, build_demo_server
+from .invites import (
+    INVITE_GONE_SECONDS,
+    INVITE_SETTLE_SECONDS,
+    InviteUse,
+    invite_from_discord,
+    join_lines,
+    remember_invite,
+    settle_invites,
+)
 from .markov import build_chain
 from .models import Msg
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
@@ -45,8 +54,11 @@ MENTION_WORDS = {"mention", "@", "ping", "@mention"}
 VERSION = (os.getenv("RAILWAY_GIT_COMMIT_SHA") or "dev")[:7]
 NEEDED_PERMISSIONS = ("view_channel", "send_messages", "embed_links", "read_message_history")
 # Requested on invite: what SYKE needs to work, plus posting server emojis, reactions,
-# and adding emojis and stickers (Manage Expressions).
-INVITE_PERMISSIONS = NEEDED_PERMISSIONS + ("use_external_emojis", "add_reactions", "manage_emojis")
+# adding emojis and stickers (Manage Expressions), and reading invites (Manage Server)
+# so !inviter can tell who brought someone in.
+INVITE_PERMISSIONS = NEEDED_PERMISSIONS + (
+    "use_external_emojis", "add_reactions", "manage_emojis", "manage_guild",
+)
 INSTALL_SCOPES = ["bot", "applications.commands"]
 MIN_MIMIC_MESSAGES = 10
 SERVER_LIST_LIMIT = 20
@@ -212,11 +224,15 @@ class Syke(commands.Bot):
     def __init__(self, settings: Settings) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
+        # Join events, so !inviter can see who used an invite. Chunking every member
+        # isn't needed for that and would delay startup on large servers.
+        intents.members = True
         super().__init__(
             command_prefix=resolve_prefix,
             intents=intents,
             help_command=None,
             case_insensitive=True,
+            chunk_guilds_at_startup=False,
             allowed_mentions=discord.AllowedMentions.none(),
         )
         self.settings = settings
@@ -236,6 +252,11 @@ class Syke(commands.Bot):
         self._history_version: dict[int, int] = {}
         self._last_summary: dict[tuple[int, int], str] = {}
         self._deep_scans: set[tuple[int, int]] = set()
+        self._invite_cache: dict[int, dict[str, InviteUse]] = {}
+        self._invite_gone: dict[int, dict[str, tuple[InviteUse, float]]] = {}
+        self._invite_locks: dict[int, asyncio.Lock] = {}
+        self._invite_blind: set[int] = set()
+        self._invite_settle = INVITE_SETTLE_SECONDS
         self._started = time.time()
         self.app_public: bool | None = None
         self.add_check(self.channel_check)
@@ -264,9 +285,147 @@ class Syke(commands.Bot):
 
     async def on_guild_join(self, guild: discord.Guild) -> None:
         log.info("Joined %r (%s)", guild.name, guild.id)
+        self.spawn(self._load_invites(guild))
 
     async def on_guild_remove(self, guild: discord.Guild) -> None:
         log.info("Removed from %r (%s)", guild.name, guild.id)
+        self._invite_cache.pop(guild.id, None)
+        self._invite_gone.pop(guild.id, None)
+        self._invite_locks.pop(guild.id, None)
+        self._invite_blind.discard(guild.id)
+
+    def _invite_lock(self, guild_id: int) -> asyncio.Lock:
+        lock = self._invite_locks.get(guild_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._invite_locks[guild_id] = lock
+        return lock
+
+    async def _fetch_invite_uses(self, guild: discord.Guild) -> list[InviteUse] | None:
+        """Current invites, or None when SYKE isn't allowed to read them."""
+        me = getattr(guild, "me", None)
+        perms = getattr(me, "guild_permissions", None)
+        if perms is not None and not (perms.manage_guild or perms.administrator):
+            return None
+        try:
+            invites = await guild.invites()
+        except discord.Forbidden:
+            return None
+        except discord.HTTPException:
+            log.warning("Couldn't list invites in %s", getattr(guild, "id", "?"), exc_info=True)
+            return None
+        found = [invite_from_discord(invite) for invite in invites]
+        vanity = await self._vanity_use(guild)
+        if vanity is not None:
+            found = [inv for inv in found if inv.code != vanity.code]
+            found.append(vanity)
+        return found
+
+    async def _vanity_use(self, guild: discord.Guild) -> InviteUse | None:
+        if "VANITY_URL" not in (getattr(guild, "features", None) or ()):
+            return None
+        try:
+            invite = await guild.vanity_invite()
+        except discord.HTTPException:
+            return None
+        if invite is None:
+            return None
+        return invite_from_discord(invite, vanity=True)
+
+    async def _load_invites(self, guild: discord.Guild) -> None:
+        async with self._invite_lock(guild.id):
+            found = await self._fetch_invite_uses(guild)
+            if found is None:
+                if guild.id not in self._invite_blind:
+                    self._invite_blind.add(guild.id)
+                    log.warning(
+                        "Can't read invites in %s (%s). Give SYKE Manage Server so !inviter works.",
+                        getattr(guild, "name", "?"), guild.id,
+                    )
+                return
+            self._invite_blind.discard(guild.id)
+            self._invite_cache[guild.id] = {inv.code: inv for inv in found}
+            log.info("Watching %d invite(s) in %s", len(found), guild.id)
+
+    def _store_join(self, guild_id: int, user_id: int, joined_at: float, chosen: InviteUse | None) -> None:
+        if chosen is None:
+            self.storage.remember_join(
+                guild_id, user_id, inviter_id=None, inviter_name="", code="", kind="unknown", joined_at=joined_at,
+            )
+            return
+        self.storage.remember_join(
+            guild_id, user_id,
+            inviter_id=None if chosen.vanity else chosen.inviter_id,
+            inviter_name="" if chosen.vanity else chosen.inviter_name,
+            code=chosen.code,
+            kind="vanity" if chosen.vanity else "user",
+            joined_at=joined_at,
+        )
+
+    async def _record_join(self, member: discord.Member) -> None:
+        guild = member.guild
+        if guild is None:
+            return
+        async with self._invite_lock(guild.id):
+            had_cache = guild.id in self._invite_cache
+            before = dict(self._invite_cache.get(guild.id, {}))
+            if had_cache:
+                now = time.monotonic()
+                pending: dict[str, InviteUse] = {}
+                for code, (inv, seen) in self._invite_gone.get(guild.id, {}).items():
+                    if now - seen <= INVITE_GONE_SECONDS:
+                        pending[code] = inv
+                        before.setdefault(code, inv)
+                if pending:
+                    self._invite_gone[guild.id] = {
+                        code: self._invite_gone[guild.id][code] for code in pending
+                    }
+                else:
+                    self._invite_gone.pop(guild.id, None)
+            await asyncio.sleep(self._invite_settle)
+            found = await self._fetch_invite_uses(guild)
+            if found is None:
+                return
+            if not had_cache:
+                self._invite_cache[guild.id] = {inv.code: inv for inv in found}
+                log.info("Started watching %d invite(s) in %s after a join", len(found), guild.id)
+                return
+            chosen, cache = settle_invites(before, found)
+            self._invite_cache[guild.id] = cache
+            self._invite_gone.pop(guild.id, None)
+            joined = getattr(member, "joined_at", None)
+            joined_at = joined.timestamp() if joined is not None and hasattr(joined, "timestamp") else time.time()
+            self._store_join(guild.id, member.id, joined_at, chosen)
+            log.info("Recorded join of %s in %s via %s", member.id, guild.id, chosen.code if chosen else "unknown")
+
+    async def on_invite_create(self, invite: discord.Invite) -> None:
+        guild_id = getattr(getattr(invite, "guild", None), "id", None)
+        if guild_id is None or guild_id not in self._invite_cache:
+            return
+        async with self._invite_lock(guild_id):
+            cache = self._invite_cache.get(guild_id)
+            if cache is None:
+                return
+            remember_invite(cache, invite_from_discord(invite))
+            self._invite_gone.get(guild_id, {}).pop(getattr(invite, "code", ""), None)
+
+    async def on_invite_delete(self, invite: discord.Invite) -> None:
+        guild_id = getattr(getattr(invite, "guild", None), "id", None)
+        code = getattr(invite, "code", None)
+        if guild_id is None or not code or guild_id not in self._invite_cache:
+            return
+        async with self._invite_lock(guild_id):
+            cache = self._invite_cache.get(guild_id)
+            if not cache:
+                return
+            removed = cache.pop(code, None)
+            if removed is not None:
+                self._invite_gone.setdefault(guild_id, {})[code] = (removed, time.monotonic())
+
+    async def on_member_join(self, member: discord.Member) -> None:
+        if not self.intents.members:
+            return
+        await self._record_join(member)
 
     def invite_url(self) -> str:
         return discord.utils.oauth_url(
@@ -326,6 +485,11 @@ class Syke(commands.Bot):
         log.info("SYKE %s online as %s in %d servers (AI: %s)", VERSION, self.user, len(self.guilds), self.settings.ai_provider)
         if not self.intents.message_content:
             log.warning("Message Content intent is off: prefix commands will not work")
+        if not self.intents.members:
+            log.warning("Server Members intent is off, so !inviter cannot record new joins")
+        else:
+            for guild in self.guilds:
+                self.spawn(self._load_invites(guild))
         for guild in self.guilds:
             log.info("  member of %r (%s), prefix %r", guild.name, guild.id, self.display_prefix(guild.id))
         if self.settings.owner_ids:
@@ -1270,7 +1434,8 @@ class SykeCommands(commands.Cog, name="SYKE"):
         channel_id = ctx.interaction.channel_id if ctx.interaction else ctx.channel.id
         channel = guild.get_channel_or_thread(channel_id)
         rows = ["✅ SYKE is a member of this server",
-                f"{'✅' if self.bot.intents.message_content else '❌'} Message Content intent"]
+                f"{'✅' if self.bot.intents.message_content else '❌'} Message Content intent",
+                f"{'✅' if self.bot.intents.members else '❌'} Server Members intent"]
         missing: list[str] = []
         if channel is None:
             rows.append("❌ SYKE can't see this channel at all")
@@ -1285,9 +1450,12 @@ class SykeCommands(commands.Cog, name="SYKE"):
 
         expr_perms = getattr(getattr(guild, "me", None), "guild_permissions", None)
         can_expr = True
+        can_track_invites: bool | None = None
         if expr_perms is not None:
             can_expr = bool(expr_perms.administrator or expr_perms.manage_emojis or expr_perms.manage_expressions)
             rows.append(f"{'✅' if can_expr else '⚠️'} Manage Expressions for emojis and stickers")
+            can_track_invites = bool(expr_perms.administrator or expr_perms.manage_guild)
+            rows.append(f"{'✅' if can_track_invites else '⚠️'} Manage Server, so SYKE can see who used an invite")
 
         p = self.bot.display_prefix(guild.id)
         tracked = self.bot.storage.tracked(guild.id)
@@ -1309,6 +1477,8 @@ class SykeCommands(commands.Cog, name="SYKE"):
             verdict = f"All good here. Try `{p}help`."
         if not can_expr:
             verdict += " Emoji and sticker commands need **Manage Expressions** on SYKE's role."
+        if can_track_invites is False:
+            verdict += f" `{p}inviter` needs **Manage Server** on SYKE's role to record new joins."
         embed = notice("🩺 SYKE diagnostics", "\n".join(rows) + f"\n\n{verdict}", WARN if missing else BRAND)
         embed.set_footer(text=f"SYKE version {VERSION}")
         await ctx.reply(embed=embed, ephemeral=True)
@@ -1375,6 +1545,26 @@ class SykeCommands(commands.Cog, name="SYKE"):
             ),
         )
         await ctx.reply(embed=embed, view=invite_view(self.bot.invite_url()), ephemeral=True)
+
+    @commands.hybrid_command(name="inviter", aliases=["invitedby"], description="See who invited a member")
+    @app_commands.describe(member="Whose inviter to look up. Leave empty for yourself.")
+    @commands.cooldown(1, 3, commands.BucketType.member)
+    @public()
+    async def inviter(self, ctx: commands.Context, member: discord.Member | None = None) -> None:
+        target = member or ctx.author
+        assert ctx.guild is not None
+        row = self.bot.storage.join_of(ctx.guild.id, target.id)
+        title, description, found = join_lines(
+            author_name(target),
+            self_lookup=target.id == ctx.author.id,
+            owner=getattr(ctx.guild, "owner_id", None) == target.id,
+            row=row,
+        )
+        embed = discord.Embed(title=title, description=description, colour=BRAND if found else WARN)
+        avatar = getattr(getattr(target, "display_avatar", None), "url", None)
+        if avatar:
+            embed.set_author(name=author_name(target), icon_url=avatar)
+        await ctx.reply(embed=embed)
 
     @commands.hybrid_command(name="servers", aliases=["guilds"], description="SYKE owners only: every server using SYKE")
     @app_commands.default_permissions(administrator=True)
@@ -1498,6 +1688,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"`{p}optout` / `{p}optin` — control whether you're judged\n"
                 f"`{p}showcase` — a tour of every feature, with examples\n"
                 f"`{p}about` — how many servers use SYKE • `{p}invite` — add it to yours\n"
+                f"`{p}inviter [@member]` — who invited them into this server\n"
                 "`/diagnose` — check why prefix commands might not work here\n\n"
                 "**Admins (Manage Server)**\n"
                 f"`{p}track #channel` / `{p}untrack #channel` — choose what SYKE reads\n"

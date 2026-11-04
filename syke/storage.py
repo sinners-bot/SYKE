@@ -72,6 +72,16 @@ CREATE TABLE IF NOT EXISTS expressions (
     created_at    REAL NOT NULL,
     PRIMARY KEY (guild_id, kind, expression_id)
 );
+CREATE TABLE IF NOT EXISTS joins (
+    guild_id     INTEGER NOT NULL,
+    user_id      INTEGER NOT NULL,
+    inviter_id   INTEGER,
+    inviter_name TEXT NOT NULL DEFAULT '',
+    code         TEXT NOT NULL DEFAULT '',
+    kind         TEXT NOT NULL,
+    joined_at    REAL NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
+);
 """
 
 
@@ -323,6 +333,36 @@ class Storage:
             (message_id, time.time() - CARD_TTL_SECONDS),
         )
         return (rows[0][0], json.loads(rows[0][1])) if rows else None
+
+    def remember_join(
+        self,
+        guild_id: int,
+        user_id: int,
+        *,
+        inviter_id: int | None,
+        inviter_name: str,
+        code: str,
+        kind: str,
+        joined_at: float,
+    ) -> None:
+        """Remember who brought `user_id` in. A later rejoin replaces the previous row."""
+        self._write(
+            "INSERT INTO joins (guild_id, user_id, inviter_id, inviter_name, code, kind, joined_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(guild_id, user_id) DO UPDATE SET "
+            "inviter_id = excluded.inviter_id, inviter_name = excluded.inviter_name, "
+            "code = excluded.code, kind = excluded.kind, joined_at = excluded.joined_at",
+            (guild_id, user_id, inviter_id, inviter_name, code, kind, joined_at),
+        )
+
+    def join_of(self, guild_id: int, user_id: int) -> tuple[int | None, str, str, str, float] | None:
+        """`(inviter_id, inviter_name, code, kind, joined_at)` or None if this join wasn't seen."""
+        rows = self._read(
+            "SELECT inviter_id, inviter_name, code, kind, joined_at FROM joins "
+            "WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id),
+        )
+        return rows[0] if rows else None
 
     def demo_mode(self, guild_id: int) -> bool:
         rows = self._read("SELECT demo_mode FROM guild_settings WHERE guild_id = ?", (guild_id,))
