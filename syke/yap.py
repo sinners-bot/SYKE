@@ -40,11 +40,6 @@ TONE_FLOOR = 0.45
 TONE_BOOST = 0.7
 REMIX_PENALTY = 0.25
 REMIX_MAX_WORDS = 20
-# "you're so bad", "ur trash": aimed insults the word lists alone can miss.
-AIMED_INSULT = re.compile(
-    r"\b(you'?re|youre|you are|ur|u r|you|u)\b(\s+\w+){0,3}?\s+(bad|trash|ass|mid|washed|garbage|dogwater|"
-    r"worst|ugly|dumb|stupid|clown|annoying|weird|loser|broke|cringe|fat|slow|useless|irrelevant|ratio)\b",
-    re.IGNORECASE)
 MAX_REPLY = 400
 FILLER = STOPWORDS | {"who's", "what's", "that's", "there's", "it'll", "anyone", "someone", "everyone",
                       "lol", "lmao", "bro", "guys", "gonna", "wanna", "kinda", "literally", "actually",
@@ -57,7 +52,8 @@ TONE_WORDS = {
 }
 # Lexicon entries that help spot toxicity but must never be handed to the AI to say.
 NEVER_OFFER = {"retard", "retarded", "cunt", "kys", "kill", "incel", "yourself", "fatass", "ugly",
-               "hentai", "ahegao", "nudes", "onlyfans", "breed", "bred", "choke", "degrade"}
+               "hentai", "ahegao", "nudes", "onlyfans", "breed", "bred", "choke", "degrade",
+               "boner", "dtf", "breedable", "rawdog", "fansly"}
 
 
 @dataclass
@@ -325,8 +321,6 @@ def tidy_reply(text, sources: Iterable[str] = (), banned: Iterable[str] = (),
 def tone_scores(text: str, labels: frozenset[str] = frozenset()) -> dict[str, float]:
     msg = Msg(0, "", text, datetime(2000, 1, 1, 12, tzinfo=timezone.utc))
     values = score_message(msg, timezone.utc, ai_labels=labels)
-    if AIMED_INSULT.search(text):
-        values["toxic"] += 0.8
     return {t: values[t] for t in TONES}
 
 

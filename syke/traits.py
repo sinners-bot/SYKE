@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import tzinfo
 
@@ -37,12 +38,40 @@ SENSITIVITY: dict[str, float] = {
     "chaotic": 1.5,
 }
 
-KEYBOARD_SMASH_RE = re.compile(r"\b[asdfghjkl;]{6,}\b", re.IGNORECASE)
+KEYBOARD_SMASH_RE = re.compile(
+    r"\b(?:[asdfghjkl;]{5,}|[qwertyuiop]{5,}|[zxcvbnm]{5,})\b", re.IGNORECASE
+)
 STRETCH_RE = re.compile(r"([a-z])\1{3,}", re.IGNORECASE)
 PUNCT_SPAM_RE = re.compile(r"[!?]{3,}")
+SHOUT_RE = re.compile(r"\b[A-Z]{4,}\b")
+# "you're so bad", "ur trash": aimed insults the word lists alone miss.
+AIMED_INSULT = re.compile(
+    r"\b(you'?re|youre|you are|ur|u r|you|u)\b(\s+\w+){0,3}?\s+(bad|trash|ass|mid|washed|garbage|dogwater|"
+    r"worst|ugly|dumb|stupid|clown|annoying|weird|loser|broke|cringe|fat|slow|useless|irrelevant|ratio|"
+    r"cooked|finished|embarrassing|delusional|pathetic|dense|pressed)\b",
+    re.IGNORECASE,
+)
 BURST_SECONDS = 8
 # Extra signal for a trait the AI tagged on this exact message (see ai.write_roast).
 AI_LABEL_WEIGHT = 1.4
+# A message has to clear this before it counts as actually showing the trait.
+# Below it is noise (one exclamation, a lone "lol") and must not define a profile.
+SHOWN_AT: dict[str, float] = {
+    "funny": 0.7,
+    "toxic": 0.85,
+    "cringe": 0.7,
+    "freaky": 0.85,
+    "serious": 0.75,
+    "chaotic": 1.0,
+}
+# How far a real streak (not one slip) pulls the average toward those messages.
+STREAK_PULL = 0.62
+HIGHLIGHT_FLOOR: dict[str, float] = {
+    "funny": 0.55,
+    "chaotic": 0.9,
+    "freaky": 0.75,
+    "toxic": 0.75,
+}
 
 
 @dataclass
@@ -101,11 +130,15 @@ def score_message(
         + hints["toxic"]
     )
     toxic_phrases = _phrases(lowered, lx.TOXIC_PHRASES)
+    aimed = bool(AIMED_INSULT.search(content))
     toxic = (
         min(toxic_hits, 3) * 0.5
-        + min(toxic_phrases, 2) * 0.7
-        + (0.5 if (toxic_hits or toxic_phrases) and caps > 0.7 else 0.0)
+        + min(toxic_phrases, 3) * 0.7
+        + (0.9 if aimed else 0.0)
+        + (0.5 if (toxic_hits or toxic_phrases or aimed) and caps > 0.7 else 0.0)
     )
+    if toxic >= 0.9 and (toxic_hits >= 2 or toxic_phrases >= 2 or (aimed and caps > 0.5)):
+        toxic += 0.4
 
     cringe = (
         len(word_set & lx.CRINGE_WORDS) * 0.6
@@ -115,11 +148,16 @@ def score_message(
         + (0.3 if STRETCH_RE.search(content) else 0.0)
     )
 
+    freaky_emoji = sum(e in lx.FREAKY_EMOJIS for e in emojis) + hints["freaky"]
     freaky = (
-        len(word_set & lx.FREAKY_WORDS) * 0.6
-        + _phrases(lowered, lx.FREAKY_PHRASES) * 0.8
-        + min(sum(e in lx.FREAKY_EMOJIS for e in emojis) + hints["freaky"], 3) * 0.5
+        min(len(word_set & lx.FREAKY_WORDS), 4) * 0.65
+        + min(_phrases(lowered, lx.FREAKY_PHRASES), 3) * 0.8
+        + min(freaky_emoji, 3) * 0.5
     )
+    if freaky >= 0.8 and freaky_emoji:
+        freaky += 0.35
+    if freaky >= 0.6 and (hour < 5 or hour >= 23):
+        freaky += 0.3
 
     serious = 0.0
     if len(words) >= 15:
@@ -133,14 +171,26 @@ def score_message(
     if laugh_hits or (emojis and not hints["serious"]):
         serious *= 0.5
 
+    shouts = len(SHOUT_RE.findall(content))
+    emoji_spam = 0.5 if len(emojis) >= 6 else 0.2 if len(emojis) >= 4 else 0.0
+    if emojis and Counter(emojis).most_common(1)[0][1] >= 3:
+        emoji_spam += 0.35
     chaotic = (
         (0.8 if caps > 0.7 else 0.0)
         + (0.6 if PUNCT_SPAM_RE.search(content) else 0.0)
         + (1.0 if KEYBOARD_SMASH_RE.search(content) else 0.0)
         + (0.3 if STRETCH_RE.search(content) else 0.0)
-        + (0.4 if hour < 5 else 0.0)
-        + (0.4 if in_burst else 0.0)
+        + (0.45 if hour < 5 else 0.2 if hour >= 23 else 0.0)
+        + (0.45 if in_burst else 0.0)
+        + min(shouts, 3) * 0.3
+        + emoji_spam
+        + min(len(word_set & lx.CHAOTIC_WORDS), 3) * 0.6
+        + min(_phrases(lowered, lx.CHAOTIC_PHRASES), 2) * 0.8
+        + min(hints["chaotic"], 2) * 0.45
+        + (0.7 if not words and len(emojis) >= 3 else 0.0)
     )
+    if chaotic >= 1.3:
+        chaotic += 0.4
 
     values = {
         "funny": funny,
@@ -170,12 +220,27 @@ def score_user(
         signals.append(MessageSignals(msg, score_message(msg, tz, in_burst, tagged)))
         previous = msg.created_at
 
-    count = max(len(signals), 1)
-    scores: dict[str, int] = {}
-    for trait in TRAITS:
-        mean = sum(s.values[trait] for s in signals) / count
-        scores[trait] = round(100 * (1 - math.exp(-mean * SENSITIVITY[trait])))
+    scores = {trait: _trait_score([s.values[trait] for s in signals], trait) for trait in TRAITS}
     return scores, signals
+
+
+def _trait_score(values: list[float], trait: str) -> int:
+    """0-100 from the average signal, lifted when a real streak clears SHOWN_AT.
+
+    One thirsty or hostile line should not define someone. A run of them should,
+    even when most of their messages are ordinary.
+    """
+    count = max(len(values), 1)
+    mean = sum(values) / count
+    hot = [v for v in values if v >= SHOWN_AT[trait]]
+    needed = max(2, math.ceil(count * 0.025))
+    blended = mean
+    if len(hot) >= needed:
+        rate = min(len(hot) / count, 0.18) / 0.18
+        k = max(needed, math.ceil(count * 0.06))
+        peak = sum(sorted(hot, reverse=True)[:k]) / min(k, len(hot))
+        blended = mean + (peak - mean) * STREAK_PULL * rate
+    return round(100 * (1 - math.exp(-blended * SENSITIVITY[trait])))
 
 
 HIGHLIGHT_TRAITS: dict[str, str] = {
@@ -191,9 +256,10 @@ def pick_highlights(signals: list[MessageSignals]) -> dict[str, Msg | None]:
     picks: dict[str, Msg | None] = {}
     used: set[int] = set()
     for slot, trait in HIGHLIGHT_TRAITS.items():
+        floor = HIGHLIGHT_FLOOR[trait]
         candidates = [
             s for s in signals
-            if s.values[trait] > 0 and len(s.msg.content.strip()) >= 3 and id(s.msg) not in used
+            if s.values[trait] >= floor and len(s.msg.content.strip()) >= 3 and id(s.msg) not in used
         ]
         if not candidates:
             picks[slot] = None

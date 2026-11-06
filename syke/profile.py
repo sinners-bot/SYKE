@@ -102,6 +102,8 @@ def award_achievements(user: UserAnalysis, server: ServerAnalysis) -> list[tuple
     emoji_total = sum(c for _, c in st.top_emojis)
 
     rules: list[tuple[bool, str, str]] = [
+        (s["freaky"] >= 55 and s["chaotic"] >= 50, "🫣", "Unhinged After Dark"),
+        (s["toxic"] >= 45 and s["chaotic"] >= 50, "🚨", "Supervised Crashout"),
         (s["toxic"] >= 35 and s["chaotic"] >= 50, "🏆", "Professional Menace"),
         (s["funny"] >= 65, "🤡", "Class Clown"),
         (st.late_night_ratio >= 0.3, "🌙", "Night Creature"),

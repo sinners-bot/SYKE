@@ -9,6 +9,7 @@ import os
 import random
 import sys
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Callable, Optional, TypeVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
@@ -17,7 +18,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from .ai import compose_reply, write_roast
+from .ai import compose_reply, write_roast, write_ship_blurb, write_tldr
 from .ask import AskUnavailable, ask
 from .cards import MESSAGE_VIEW_TIMEOUT, ProfileView, aura_page, build_pages, iq_page, leaderboard_page
 from .config import Settings, load_settings
@@ -37,8 +38,20 @@ from .markov import build_chain
 from .models import Msg
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
 from .scanner import Scanner, to_msg
+from .ship import read_ship, ship_embed, voice_sample
 from .showcase import ShowcaseView, tour_page
 from .storage import Storage
+from .tldr import (
+    TLDR_CAP,
+    TLDR_FETCH,
+    TLDR_TARGET,
+    Line,
+    assemble,
+    from_discord_message,
+    offline_summary,
+    prompt_sample,
+    tldr_embed,
+)
 from .traits import TRAIT_META, TRAITS
 from .verify import (
     VerifyView,
@@ -210,6 +223,14 @@ def admin() -> Callable[[F], F]:
     return decorator
 
 
+def dollar_tldr(text: str) -> bool:
+    """`$tldr` is its own command, whatever prefix this server uses."""
+    head = (text or "").lstrip()
+    if len(head) < 5 or not head.casefold().startswith("$tldr"):
+        return False
+    return len(head) == 5 or head[5].isspace()
+
+
 async def resolve_prefix(bot: Syke, message: discord.Message) -> list[str]:
     try:
         prefix = bot.prefix_for(message.guild.id) if message.guild else bot.settings.default_prefix
@@ -226,6 +247,8 @@ async def resolve_prefix(bot: Syke, message: discord.Message) -> list[str]:
     folded = text[:len(prefix)].casefold()
     if folded == prefix.casefold() and not text.startswith(prefix):
         found.append(text[:len(prefix)])
+    if dollar_tldr(text) and "$" not in found:
+        found.append("$")
     return [item for item in found if isinstance(item, str) and item]
 
 
@@ -820,6 +843,8 @@ class Syke(commands.Bot):
                 self.remember_yap(message.channel.id, reply)
 
     def is_command_text(self, guild_id: int, text: str) -> bool:
+        if dollar_tldr(text):
+            return True
         text = text.lstrip()
         folded = text.casefold()
         starts = {self.settings.default_prefix}
@@ -1216,6 +1241,138 @@ class SykeCommands(commands.Cog, name="SYKE"):
         more_than = round(sum(v < user.aura.aura for v in others) / len(others) * 100) if len(others) >= 2 else None
         await ctx.reply(embed=aura_page(target.display_name, user.aura, more_than, target.display_avatar.url,
                                         demo=self.bot.storage.demo_mode(ctx.guild.id)))
+
+    def _off_limits(self, ctx: commands.Context, member) -> discord.Embed | None:
+        if getattr(member, "bot", False):
+            return notice("Nice try", "Bots don't ship. They deploy.")
+        if member.id in self.bot.storage.optouts(ctx.guild.id):
+            return notice("Off limits", f"{member.display_name} has opted out of SYKE.")
+        return None
+
+    @commands.hybrid_command(name="ship", aliases=["compatibility"],
+                             description="See how well two people match, from how they actually talk")
+    @app_commands.describe(first="Who to ship with you, or the first of two people",
+                           second="Ship these two instead of including yourself")
+    @commands.cooldown(1, 10, commands.BucketType.member)
+    @public()
+    async def ship(self, ctx: commands.Context, first: discord.Member | None = None,
+                   second: discord.Member | None = None) -> None:
+        assert ctx.guild is not None
+        if first is None and second is None:
+            await ctx.reply(embed=notice(
+                "Ship who? 💘",
+                f"`{self.p(ctx)}ship @someone` ships you with them. `{self.p(ctx)}ship @a @b` ships those two.",
+            ), ephemeral=True)
+            return
+        if first is None:
+            first = second
+            second = None
+        assert first is not None
+        left_member, right_member = (ctx.author, first) if second is None else (first, second)
+        if left_member.id == right_member.id:
+            await ctx.reply(embed=notice(
+                "That's just a mirror",
+                "Pick someone else. Shipping yourself with yourself is a cry for help.",
+            ), ephemeral=True)
+            return
+        for member in (left_member, right_member):
+            blocked = self._off_limits(ctx, member)
+            if blocked is not None:
+                await ctx.reply(embed=blocked, ephemeral=True)
+                return
+
+        async with ctx.typing():
+            result = await self.bot.analyze(ctx.guild)
+            if result is None:
+                await ctx.reply(embed=self.bot.no_channels(ctx.guild.id))
+                return
+            server, _ = result
+            pair = []
+            for member in (left_member, right_member):
+                if member.id not in server.users:
+                    await ctx.reply(embed=self.not_enough(ctx, member, server))
+                    return
+                pair.append(replace(server.users[member.id], name=member.display_name))
+            left, right = pair
+            reading = read_ship(left, right)
+            blurb = await write_ship_blurb(
+                self.bot.settings, left.name, right.name, reading.score, reading.label,
+                voice_sample(left), voice_sample(right),
+            )
+            if blurb:
+                reading.blurb = blurb
+                reading.ai_used = True
+            avatar = getattr(getattr(left_member, "display_avatar", None), "url", None)
+            embed = ship_embed(
+                reading, left.name, right.name,
+                left.stats.message_count, right.stats.message_count, avatar,
+            )
+        await ctx.reply(embed=embed)
+
+    async def _tldr_lines(self, ctx: commands.Context) -> list:
+        """Recent channel lines, newest discord history first, then older stored ones if under 300."""
+        guild, channel = ctx.guild, ctx.channel
+        optouts = self.bot.storage.optouts(guild.id)
+        live = []
+        history = getattr(channel, "history", None)
+        if history is not None:
+            kwargs = {"limit": TLDR_FETCH}
+            origin = getattr(ctx, "message", None)
+            if origin is not None and getattr(origin, "id", None):
+                kwargs["before"] = origin
+            try:
+                async for message in history(**kwargs):
+                    line = from_discord_message(message)
+                    if line is None or message.author.id in optouts or self.bot.is_command_text(guild.id, line.text):
+                        continue
+                    live.append(line)
+                    if len(live) >= TLDR_CAP:
+                        break
+            except (discord.HTTPException, TypeError, AttributeError):
+                log.warning("Couldn't read history in #%s for $tldr", getattr(channel, "name", "?"))
+        older: list[Line] = []
+        channel_id = getattr(channel, "id", None)
+        if len(live) < TLDR_TARGET and channel_id is not None:
+            rows = await asyncio.to_thread(self.bot.storage.history, guild.id, [channel_id])
+            oldest = min((line.created for line in live), default=None)
+            for _mid, _cid, author, name, content, created, _laughs, _total in rows:
+                text = (content or "").strip()
+                if not text or author in optouts or self.bot.is_command_text(guild.id, text):
+                    continue
+                if oldest is not None and created >= oldest - 1:
+                    continue
+                older.append(Line(name or "someone", text, float(created)))
+            older.sort(key=lambda line: line.created, reverse=True)
+        return assemble(live, older)
+
+    @commands.hybrid_command(name="tldr", aliases=["recap", "summary"],
+                             description="Summarise the last 300 or more messages in this channel")
+    @commands.cooldown(1, 30, commands.BucketType.channel)
+    @public()
+    async def tldr(self, ctx: commands.Context) -> None:
+        assert ctx.guild is not None and ctx.channel is not None
+        channel_name = getattr(ctx.channel, "name", None) or "channel"
+        async with ctx.typing():
+            lines = await self._tldr_lines(ctx)
+            if not lines:
+                await ctx.reply(embed=notice(
+                    "Nothing to summarise",
+                    f"SYKE reads the last {TLDR_TARGET} messages or more when this channel has them. "
+                    "It doesn't have any it can use yet.",
+                ))
+                return
+            sample = prompt_sample(lines)
+            written = await write_tldr(
+                self.bot.settings, channel_name,
+                [(line.author, line.text) for line in sample], len(lines),
+            )
+            if written:
+                summary, vibe = written
+                ai_used = True
+            else:
+                summary, vibe = offline_summary(lines, channel_name)
+                ai_used = False
+        await ctx.reply(embed=tldr_embed(summary, vibe, len(lines), channel_name, ai_used))
 
     def not_enough(self, ctx: commands.Context, target: discord.abc.User, server: ServerAnalysis) -> discord.Embed:
         have = server.below_threshold.get(target.id, 0)
@@ -1821,6 +1978,8 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"Prefix here: `{p}` • slash commands work too.\n\n"
                 "**Everyone**\n"
                 f"`{p}profile [@member]` — the full personality report\n"
+                f"`{p}ship [@member] [@member]` — how well two people match, from their chats\n"
+                f"`$tldr` — summarise the last {TLDR_TARGET}+ messages here (also `{p}tldr`)\n"
                 f"`{p}ask <question>` — ask SYKE anything, like ChatGPT (DMs too)\n"
                 "**@mention SYKE** — it yaps back in this server's voice\n"
                 f"`{p}iq [@member]` — SYKE's very unscientific IQ estimate\n"

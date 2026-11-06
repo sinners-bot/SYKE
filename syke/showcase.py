@@ -14,6 +14,7 @@ from .demo import build_demo_server
 from .markov import build_chain
 from .profile import ServerAnalysis, analyze_server, build_profile
 from .roast import fallback_summary
+from .ship import read_ship, ship_embed
 
 BRAND = discord.Colour.from_str("#8B5CF6")
 TOUR_ID = "syke:tour"
@@ -27,6 +28,7 @@ TOUR = [
     ("aura", "✨", "Aura check", "A very unscientific aura reading"),
     ("top", "🏆", "Leaderboards", "Who's the funniest, most toxic, smartest"),
     ("talk", "🗣️", "Mimic, yap & dexify", "SYKE talks like your members"),
+    ("ship", "💘", "Ship & TL;DR", "Compatibility, and what you missed"),
     ("emoji", "😛", "Emojis & stickers", "Steal them, or add a PNG, JPG or GIF"),
     ("ask", "💬", "Ask anything", "ChatGPT-style answers to any question"),
     ("data", "⛏️", "Your data", "Scanning, opting out, privacy"),
@@ -107,6 +109,21 @@ def tour_page(key: str, p: str) -> list[discord.Embed]:
             f"`{p}yap on` (admins): now and then SYKE chimes in using this server's slang and running jokes. "
             "**@mention SYKE** with anything that isn't a command and it yaps back in that voice, even if "
             "yap isn't on here. **Reply to a yap** and it keeps going, written from what people here actually say."
+        )), example]
+    if key == "ship":
+        server = demo_server()
+        reading = read_ship(server.users[1], server.users[5])
+        example = ship_embed(
+            reading, "Zyro", "Vex",
+            server.users[1].stats.message_count, server.users[5].stats.message_count,
+        )
+        example.set_footer(text=f"{EXAMPLE_NOTE} • the real command uses both people's chats, and AI when a key is set")
+        return [_page("💘 Ship & TL;DR", (
+            f"`{p}ship @someone` ships you with them. `{p}ship @a @b` ships those two. "
+            "The percent comes from how they actually write (shared freaky, toxic, chaotic and funny energy), "
+            "and the blurb quotes both of them. With an AI key, that blurb is written fresh from both chats.\n\n"
+            f"`$tldr` (or `{p}tldr`) summarises the last 300 messages or more in this channel: what happened, "
+            "who was loud, and the vibe. It reads further back when the channel has the history."
         )), example]
     if key == "emoji":
         example = discord.Embed(description="✅ <:KEKW:1> `KEKW`\n✅ sticker **sad_cat**", colour=BRAND)
