@@ -157,6 +157,40 @@ def test_offline_summaries_vary_and_use_real_messages():
     assert with_emoji.endswith("<:KEKW:9>")
 
 
+def test_subtle_freaky_toxic_and_unhinged_lines_count():
+    from syke.traits import pick_highlights, score_message
+
+    plain = score_message(msg("see you tomorrow then"), UTC)
+    assert score_message(msg("how are you this bad at the game"), UTC)["toxic"] > plain["toxic"] + 0.7
+    assert score_message(msg("you're cooked, take the L"), UTC)["toxic"] > 1
+    assert score_message(msg("To be fair, the issue is the drop rate."), UTC)["toxic"] < 0.5
+    thirst = score_message(msg("i'm down horrendous for them, come over 😏"), UTC)
+    assert thirst["freaky"] > 1.2
+    crashout = score_message(msg("i am losing my mind this is actually unhinged"), UTC)
+    assert crashout["chaotic"] > 1
+    shout = score_message(msg("WAIT WHAT NOOOOO"), UTC)
+    assert shout["chaotic"] > plain["chaotic"] + 0.5
+
+    _, signals = score_user(
+        [msg("see you tomorrow then", i) for i in range(8)]
+        + [msg("i am losing my mind this is actually unhinged", 30)],
+        UTC,
+    )
+    assert "unhinged" in pick_highlights(signals)["unhinged"].content
+
+
+def test_a_streak_is_not_washed_out_by_normal_chat():
+    calm = [msg("see you tomorrow then", i) for i in range(40)]
+    slip = calm + [msg("down horrendous 😏 come over", 200)]
+    streak = calm + [msg("down horrendous 😏 come over", 200 + i) for i in range(4)]
+    base, _ = score_user(calm, UTC)
+    once, _ = score_user(slip, UTC)
+    often, _ = score_user(streak, UTC)
+    assert once["freaky"] < 45
+    assert often["freaky"] > once["freaky"] + 20
+    assert often["freaky"] > base["freaky"] + 30
+
+
 def test_custom_emoji_names_and_phrases_count():
     from syke.traits import score_message
 

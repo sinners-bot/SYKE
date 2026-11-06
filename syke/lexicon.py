@@ -28,14 +28,16 @@ TOXIC_WORDS = {
     "loser", "losers", "moron", "morons", "pathetic", "garbage", "ratio", "ratioed", "cope",
     "coping", "seethe", "seething", "mald", "malding", "bozo", "noob", "shut", "fuck", "fucking",
     "fucker", "fuckin", "fk", "fkn", "fking", "shit", "shitty", "bullshit", "bitch", "bitches",
-    "ass", "asshole", "hate", "hated", "annoying", "worst", "useless", "kill", "kys", "wtf",
-    "skill", "issue", "retard", "retarded", "cunt", "twat", "prick", "dick", "dickhead",
+    "ass", "asshole", "hate", "hated", "annoying", "worst", "useless", "kys", "wtf",
+    "retard", "retarded", "cunt", "twat", "prick", "dick", "dickhead",
     "wanker", "bastard", "scum", "dogshit", "braindead", "brainless", "dipshit", "jackass",
     "imbecile", "incompetent", "clueless", "ugly", "fatass", "nerd", "virgin", "incel", "simp",
     "irrelevant", "fraud", "washed", "mid", "ez",
-    "cry", "crybaby", "bum", "rat", "snake", "toxic", "trash-talk",
-    "lame", "suck", "sucks", "sucked", "dogwater", "hardstuck", "uninstall", 
-    "hell", "damn", "dammit", "goddamn", "screw", "pissed", "piss", "crap",
+    "crybaby", "bum", "rat", "snake", "toxic", "trash-talk",
+    "lame", "suck", "sucks", "sucked", "dogwater", "hardstuck", "uninstall",
+    "damn", "dammit", "goddamn", "screw", "pissed", "piss", "crap",
+    "embarrassing", "delusional", "worthless", "insufferable", "obnoxious",
+    "clownery", "npc", "butthurt", "copium",
 }
 TOXIC_PHRASES = (
     "shut up", "shut the", "skill issue", "get good", "git gud", "go cry", "cry about it",
@@ -47,6 +49,21 @@ TOXIC_PHRASES = (
     "dog water", "uninstall the game", "delete the game", "log off", "get rekt", "get wrecked",
     "go back to", "you're annoying", "ur annoying", "nobody likes", "no one likes", "shut it",
     "zip it", "who tf", "what tf", "tf is wrong", "the hell is wrong", "hold this l",
+    "you're cooked", "youre cooked", "ur cooked", "get cooked",
+    "take the l", "take this l", "hold the l", "it's over for you", "its over for you",
+    "you wish", "in your dreams", "be so for real", "the audacity", "how dare you",
+    "watch your mouth", "know your place", "stay in your lane", "pipe down", "sit down",
+    "pack it up", "your mom", "ur mom", "yo mama", "ya mom", "no bitches",
+    "clown behavior", "clown behaviour", "nobody cares", "no one cares", "who cares",
+    "sure jan", "ok buddy", "okay buddy", "whatever you say", "if you say so",
+    "get a grip", "grow up", "stop talking", "you know nothing", "you sound dumb",
+    "you sound stupid", "are you slow", "are you dense", "use your brain", "dumb take",
+    "bad take", "trash take", "worst take", "caught in 4k",
+    "cope and seethe", "stay pressed", "so pressed", "you're pressed", "ur pressed",
+    "big mad", "gg ez", "you're finished", "youre finished", "ur finished",
+    "that's embarrassing", "thats embarrassing", "imagine thinking", "you really thought",
+    "learn to read", "google is free", "mute yourself", "smooth brain",
+    "room temp iq", "negative iq", "out of your depth", "close your mouth",
 )
 TOXIC_EMOJIS = {"🖕", "🤡", "🙄", "😒", "🤬", "😡", "😤", "💩", "🤮", "🫵", "😠", "🗑️", "🚮"}
 
@@ -81,6 +98,8 @@ FREAKY_WORDS = {
     "spank", "spanked", "lick", "licking", "thighs", "thigh", "curvy", "juicy",
     "bedroom", "pegged", "rail", "railed", "breed", "bred", "risky", "frisky", "flirty",
     "flirt", "flirting", "simp", "simping", "pookie", "shawty", "shorty", "wifey", "hubby",
+    "thirst", "thirsty", "thirsting", "downbad", "whimper", "whimpering", "drool", "drooling",
+    "hookup", "breedable", "rawdog", "boner", "dtf", "fansly",
 }
 FREAKY_PHRASES = (
     "down bad", "step on me", "rail me", "ngl kinda", "would smash", "i'd smash", "id smash",
@@ -91,11 +110,45 @@ FREAKY_PHRASES = (
     "bend over", "on your knees", "netflix and chill", "smash or pass", "body count",
     "situationship", "rizz me", "rizzed", "make out", "kiss me", "touch me", "spit in",
     "i'm horny", "im horny", "so horny", "goon cave", "freak mode", "freak of the week",
+    "down horrendous", "down astronomical", "down catastrophic", "so fine", "you're hot",
+    "youre hot", "ur hot", "looking hot", "thirst trap", "mommy issues",
+    "daddy issues", "yes daddy", "yes mommy", "freak nasty", "friends with benefits",
+    "one night stand", "hook up", "hooked up", "making out", "would hit", "i'd hit",
+    "id hit", "hit that", "tap that", "smash that", "send nudes", "only fans",
+    "degrade me", "praise me", "breed me", "bent over", "on all fours", "ruin me",
+    "use me", "wreck me", "own me", "mark me", "in the sheets", "between the sheets",
+    "come to bed", "sleep with me", "sleep with you", "turn me on", "turns me on",
+    "i'm wet", "im wet", "you up?", "u up?", "wyll",
+    "what you look like", "pic for pic", "feral for", "down bad for",
+    "i want you", "slide into", "goon session", "raw dog", "sit on my", "ride me",
+    "moan for", "whimper for", "grab my",
 )
 FREAKY_EMOJIS = {
     "😏", "👅", "🥵", "😩", "😈", "🍑", "🍆", "💦", "🫦", "😳", "🥴", "🤤", "😘", "💋",
-    "🌶️", "🍒", "🍌", "😮‍💨", "🛏️", "⛓️", "👠",
+    "🌶️", "🍒", "🍌", "😮‍💨", "🛏️", "⛓️", "👠", "😍", "🤭", "😜", "😛",
 }
+
+# Crashouts, spirals and feral energy. Matched like the other lists, then folded into chaotic.
+CHAOTIC_WORDS = {
+    "unhinged", "crashout", "crashouts", "spiraling", "spiralling", "deranged", "manic",
+    "feral", "tweaking", "tweakin", "buggin", "meltdown", "delirious", "unwell", "bonkers",
+    "meltdowns",
+}
+CHAOTIC_PHRASES = (
+    "i'm losing it", "im losing it", "losing my mind", "lost my mind", "brain empty",
+    "no thoughts", "head empty", "i'm cooked", "im cooked", "we're cooked", "were cooked",
+    "this is insane", "actually insane", "this is unhinged", "i'm unhinged", "im unhinged",
+    "actually unhinged", "going crazy", "i'm crazy", "im crazy", "i'm spiraling",
+    "im spiraling", "having a breakdown", "mental breakdown", "i'm actually done",
+    "im actually done", "i can't do this", "i cant do this", "what is wrong with me",
+    "why am i like this", "i'm gonna lose it", "im gonna lose it", "about to crash out",
+    "crashing out", "full crashout", "feral hours", "going feral", "i'm feral", "im feral",
+    "i'm not okay", "im not okay", "mentally unwell", "i am unwell", "i give up",
+    "hello??", "excuse me??", "i can't even", "i cant even", "the way i just",
+    "i'm screaming", "im screaming", "i'm tweaking", "im tweaking",
+    "crash out", "so unhinged", "lowkey unhinged", "highkey unhinged", "i'm spiralling",
+    "im spiralling", "lost the plot", "losing the plot", "i'm cooked chat", "help me??",
+)
 
 SERIOUS_WORDS = {
     "actually", "however", "because", "therefore", "although", "honestly", "basically",
@@ -129,13 +182,17 @@ EMOJI_NAME_HINTS: dict[str, tuple[str, ...]] = {
               "skull", "clown", "xd", "wheeze", "rofl", "funny", "giggle", "lmfao", "icant"),
     "toxic": ("mad", "angry", "rage", "pout", "trash", "bin", "ban", "hammer", "gun", "knife",
               "middle", "finger", "fuck", "stfu", "reee", "triggered", "disgust", "smh", "bonk",
-              "ratio", "cope", "seethe", "mald", "kys", "die", "punch", "slap", "spit"),
+              "ratio", "cope", "seethe", "mald", "kys", "die", "punch", "slap", "spit",
+              "cooked", "clown", "pressed", "salty", "bozo"),
     "cringe": ("uwu", "owo", "blush", "shy", "cute", "kawaii", "nya", "cat", "pat", "hug",
                "heart", "love", "sparkle", "pog", "cringe", "sus", "amogus", "sigma", "rizz",
                "chad", "mew", "skibidi", "smol", "boop", "pleading", "pleadge"),
     "freaky": ("horny", "lewd", "bonk", "drool", "lick", "thirst", "smirk", "flirt", "wink",
                "freak", "kiss", "peach", "eggplant", "sweat", "hot", "spicy", "naughty", "moan",
-               "simp", "daddy", "gyat", "thicc", "bed", "nsfw", "kinky", "ahegao", "eyes"),
+               "simp", "daddy", "gyat", "thicc", "bed", "nsfw", "kinky", "ahegao", "eyes",
+               "downbad", "tongue", "hips", "whimper"),
+    "chaotic": ("scream", "crash", "unhinged", "feral", "panic", "meltdown", "wtf", "explode",
+                "boom", "spiral", "manic", "deranged", "tweak", "unwell", "bonkers"),
     "serious": ("think", "hmm", "nerd", "glasses", "book", "read", "study", "brain", "big_brain",
                 "bigbrain", "galaxy", "monocle", "science", "smart", "notes", "teacher", "wise"),
 }

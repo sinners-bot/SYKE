@@ -27,10 +27,16 @@ COMPOSE_CANDIDATES = 60
 TRAIT_GUIDE = """Trait definitions (judge meaning and intent, not just keywords; sarcasm and \
 in-jokes count, a lone "lol" does not make someone funny):
 - funny: jokes, wit, banter, absurd takes, bits that others would laugh at.
-- toxic: insults, trash talk, hostility or contempt aimed at people, rage-posting.
+- toxic: insults, trash talk, hostility or contempt aimed at a person, passive-aggressive digs \
+("sure jan", "nobody asked"), ratio/cope, "you're cooked". A swear with nobody attached is weak; \
+aimed at someone, it counts.
 - cringe: try-hard slang and brainrot (rizz, skibidi, sigma), uwu/:3 talk, roleplay actions, \
 second-hand-embarrassment energy.
-- freaky: sexual innuendo, thirst, flirting, "down bad" energy, suggestive emojis.
+- freaky: thirst, flirting, innuendo, down-bad comments, suggestive emojis, even when nobody says \
+an explicit word. A wink counts.
+- chaotic: also what the unhinged highlight is for. Caps, spam and keyboard smashes count, and so \
+do crashouts, spirals, feral non-sequiturs and "i'm losing it" energy in lowercase. Prefer a \
+message that feels unhinged over one that is merely loud.
 - serious: earnest, thoughtful or informative messages, real advice, careful arguments."""
 
 STYLES = [
@@ -137,8 +143,9 @@ def _parse_json(text: str) -> dict:
     return json.loads(match.group(0))
 
 
-async def _call_openai(settings: Settings, system: str, user: str, temperature: float = 1.0) -> str:
-    async with httpx.AsyncClient(timeout=AI_TIMEOUT_SECONDS) as client:
+async def _call_openai(settings: Settings, system: str, user: str, temperature: float = 1.0,
+                       timeout: float = AI_TIMEOUT_SECONDS) -> str:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {settings.openai_api_key}"},
@@ -156,8 +163,9 @@ async def _call_openai(settings: Settings, system: str, user: str, temperature: 
         return resp.json()["choices"][0]["message"]["content"]
 
 
-async def _call_anthropic(settings: Settings, system: str, user: str, temperature: float = 1.0) -> str:
-    async with httpx.AsyncClient(timeout=AI_TIMEOUT_SECONDS) as client:
+async def _call_anthropic(settings: Settings, system: str, user: str, temperature: float = 1.0,
+                          timeout: float = AI_TIMEOUT_SECONDS) -> str:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={
@@ -341,3 +349,110 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
             log.exception("AI yap reply failed; matching keywords instead")
     usable = [(score, text) for score, text in ranked if folded(text) not in banned_keys]
     return offline_pick(usable) or offline_pick(ranked)
+
+
+_PING = re.compile(r"<@[!&]?\d+>|@(everyone|here)\b", re.IGNORECASE)
+SHIP_TIMEOUT = 40
+TLDR_TIMEOUT = 50
+SHIP_BLURB_LIMIT = 700
+TLDR_SUMMARY_LIMIT = 1800
+
+
+def public_text(text: object, limit: int) -> str:
+    """Model copy safe to post: no pings, no blank, cut to the embed budget."""
+    cleaned = _PING.sub("", str(text or ""))
+    cleaned = re.sub(r"[^\S\n]+", " ", cleaned)
+    cleaned = re.sub(r" *\n *", "\n", cleaned).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 1].rstrip() + "…"
+
+
+async def _complete(settings: Settings, system: str, user: str, temperature: float, timeout: float) -> dict:
+    if settings.ai_provider == "openai":
+        reply = await _call_openai(settings, system, user, temperature, timeout)
+    else:
+        reply = await _call_anthropic(settings, system, user, temperature, timeout)
+    return _parse_json(reply)
+
+
+SHIP_PROMPT = """You are SYKE, writing a short compatibility blurb for two Discord members who just got shipped.
+You have real messages from BOTH of them. Be specific and funny: quote or closely paraphrase one real line \
+from each person. The joke has to fall apart if you swap in two other members.
+
+Rules:
+- 2-4 sentences, under 80 words. End on a deadpan verdict. Use their names exactly as given.
+- Roast the pairing, never identity. No comments on race, religion, gender, sexuality, disability, body, \
+or real mental-health diagnoses. No slurs. Nothing explicit; a wink is the ceiling.
+- Do not invent messages they did not send. Do not @mention anyone.
+- If the match percent is low, say why they would be a disaster. If it is high, say why that is concerning.
+
+Reply with JSON only: {"blurb": str}"""
+
+
+TLDR_PROMPT = """You are SYKE, summarising a Discord channel for someone who just opened the app.
+You get real messages, oldest first. Cover what actually happened: topics, arguments, bits, who was loud, \
+any running joke. Name people. Paraphrase real lines. Do not invent events, arrivals, or drama that is \
+not in the log.
+
+Rules:
+- Under 160 words. Discord markdown is fine (**bold**, short lists).
+- Funny and specific, like a friend catching someone up, not meeting minutes.
+- Write names as plain text. Never @mention anyone. No slurs. Nothing explicit; fade to a wink.
+- "vibe" is one sentence on the mood (toxic, freaky, unhinged, sincere, and so on).
+
+Reply with JSON only: {"summary": str, "vibe": str}"""
+
+
+def _numbered(lines: list[str]) -> str:
+    if not lines:
+        return "(nothing stored)"
+    return "\n".join(f"[{i}] {readable(line)[:180]}" for i, line in enumerate(lines))
+
+
+async def write_ship_blurb(settings: Settings, left_name: str, right_name: str, score: int, label: str,
+                           left_lines: list[str], right_lines: list[str]) -> str | None:
+    """A funny ship write-up from both chats, or None when there is no AI or it fails."""
+    if settings.ai_provider == "none" or not (left_lines or right_lines):
+        return None
+    user = (
+        f"PAIR: {left_name} × {right_name}\nMATCH: {score}% — {label}\n\n"
+        f"{left_name} MESSAGES:\n{_numbered(left_lines)}\n\n"
+        f"{right_name} MESSAGES:\n{_numbered(right_lines)}"
+    )
+    try:
+        data = await _complete(settings, SHIP_PROMPT, user, 1.0, SHIP_TIMEOUT)
+        blurb = public_text(data.get("blurb"), SHIP_BLURB_LIMIT)
+        return blurb if len(blurb) >= 20 else None
+    except Exception:
+        log.exception("AI ship blurb failed; using the offline one")
+        return None
+
+
+async def write_tldr(settings: Settings, channel: str, lines: list[tuple[str, str]], total: int
+                     ) -> tuple[str, str] | None:
+    """(summary, vibe) for a channel window, or None when there is no AI or it fails.
+
+    `lines` is the sample actually shown to the model; `total` is how many messages that window covers.
+    """
+    if settings.ai_provider == "none" or not lines:
+        return None
+    numbered = "\n".join(
+        f"[{i}] {author[:24]}: {readable(' '.join(text.split()))[:160]}"
+        for i, (author, text) in enumerate(lines)
+    )
+    covered = (
+        f"These {len(lines)} lines are spread across {total} messages, oldest first."
+        if len(lines) < total else f"These are all {total} messages, oldest first."
+    )
+    user = f"CHANNEL: #{channel}\n{covered}\n\nMESSAGES:\n{numbered}"
+    try:
+        data = await _complete(settings, TLDR_PROMPT, user, 0.8, TLDR_TIMEOUT)
+        summary = public_text(data.get("summary"), TLDR_SUMMARY_LIMIT)
+        vibe = public_text(data.get("vibe"), 300)
+        if len(summary) < 20:
+            return None
+        return summary, vibe or "The chat happened. That is the review."
+    except Exception:
+        log.exception("AI tldr failed; using the offline recap")
+        return None

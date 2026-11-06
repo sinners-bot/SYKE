@@ -109,8 +109,17 @@ def test_new_commands_follow_a_custom_prefix(cog):
         assert await lookup("Syke Verify Setup") == ("verify", "verify setup")
         assert await lookup("<@999> verify setup") == ("verify", "verify setup")
         assert await lookup("syke emoji list") == ("emoji", "emoji list")
+        assert await lookup("syke ship") == ("ship", None)
+        assert await lookup("syke tldr") == ("tldr", None)
+        assert await lookup("$tldr") == ("tldr", None)
+        assert await lookup("$TLDR please") == ("tldr", None)
+        assert await lookup("$tldrish") == (None, None)
         assert bot.is_command_text(42, "Syke verify setup")
+        assert bot.is_command_text(42, "$tldr")
+        assert bot.is_command_text(42, "$TLDR now")
         assert not bot.is_command_text(42, "hello there")
+        assert not bot.is_command_text(42, "that costs $10")
+        assert not bot.is_command_text(42, "$tldrish")
 
     run(checks())
 
@@ -147,6 +156,8 @@ def test_help_uses_server_prefix(cog):
     ctx = FakeCtx()
     run(cog.help.callback(cog, ctx))
     assert "`s.profile [@member]`" in ctx.replies[-1].description
+    assert "`s.ship [@member] [@member]`" in ctx.replies[-1].description
+    assert "`$tldr`" in ctx.replies[-1].description
     assert "`s.inviter [@member]`" in ctx.replies[-1].description
     assert "`s.steal`" in ctx.replies[-1].description
     assert "`s.emoji <name>`" in ctx.replies[-1].description
@@ -321,6 +332,8 @@ def test_showcase_pages_have_examples(cog):
     assert "`?dexify`" in tour_page("talk", "?")[0].description
     assert "@mention SYKE" in tour_page("talk", "?")[0].description
     assert "yaps instead of asking" in tour_page("ask", "?")[0].description
+    assert "$tldr" in tour_page("ship", "?")[0].description
+    assert "`?ship @someone`" in tour_page("ship", "?")[0].description
     assert "`?steal`" in tour_page("emoji", "?")[0].description
     assert "`?inviter [@member]`" in tour_page("data", "?")[0].description
     assert "`?verify setup`" in tour_page("admin", "?")[0].description

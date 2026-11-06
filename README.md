@@ -31,6 +31,8 @@ switch a server to mentions only with `!prefix mention`.
 | Command | Who | What it does |
 | --- | --- | --- |
 | `!profile [@member]` | everyone | Full personality report (yourself if no member). Aliases: `!judge`, `!p`, `!me` |
+| `!ship [@member] [@member]` | everyone | How well two people match. One member ships you with them; two members ships that pair. A percent from their traits, a ship name, a line from each, and a funny write-up. With an AI key the write-up is generated from both chats. Alias: `!compatibility` |
+| `$tldr` | everyone | Summarises the previous 300 messages or more in this channel: who talked, what it was about, the vibe. Also works as `!tldr` with the server prefix. Aliases: `recap`, `summary` |
 | `!iq [@member]` | everyone | A very unscientific IQ estimate (55-160) with a bell curve, a verdict written from that member's actual factors and quotes (not a stock line), what raised or lowered it, and their smartest and least smart messages. Also shown on `!profile`. Aliases: `!brain`, `!smarts` |
 | `!aura [@member]` | everyone | A very unscientific aura reading (0-200) with a personal verdict, what farmed or spent it, and their biggest aura farm and aura loss. Uses stored messages when it can, so it stays snappy. Also shown on `!profile`. Aliases: `!auracheck`, `!rizz` |
 | `!dexify` | everyone | Reply to a message and SYKE posts it back as normal text with `......` after a random few words, like Dex. No embed. Aliases: `!dex`, `!dots` |
@@ -100,9 +102,12 @@ The button keeps working after a restart.
    (repeated 2-3 word phrases).
 3. **Traits** (`syke/traits.py`): every message gets scored by word and phrase lists in
    `syke/lexicon.py`, custom emoji names (`:KEKW:` reads as laughing, `:pepe_horny:` as freaky),
-   signals like caps lock, `!!!`, keyboard smashes, late-night posting, rapid-fire bursts and
-   😂/💀 reactions from *other* people, plus any labels the AI gave that message. Scores are 0-100.
-   Because this is local and deterministic, SYKE scores everyone and computes the
+   signals like caps lock, `!!!`, keyboard smashes, shouted words, emoji spam, late-night posting,
+   rapid-fire bursts and 😂/💀 reactions from *other* people, plus any labels the AI gave that message.
+   Freaky, toxic and unhinged (chaotic) also catch thirst, aimed insults ("you're so bad") and
+   crashouts ("i'm losing it") that never use the obvious keyword. A streak of those messages
+   lifts the score even when the rest of someone's chat is ordinary, so volume doesn't wash them out.
+   Scores are 0-100. Because this is local and deterministic, SYKE scores everyone and computes the
    "Top X%" server comparison and leaderboards without any AI calls.
 4. **Roast** (`syke/ai.py`): the stats, scores and ~250 recent messages go to an LLM
    (OpenAI or Anthropic). Each run picks a random format (nature documentary, police report,
