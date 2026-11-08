@@ -47,8 +47,10 @@ from .tldr import (
     TLDR_TARGET,
     Line,
     assemble,
+    digest,
     from_discord_message,
     offline_summary,
+    prompt_facts,
     prompt_sample,
     tldr_embed,
 )
@@ -1361,18 +1363,19 @@ class SykeCommands(commands.Cog, name="SYKE"):
                     "It doesn't have any it can use yet.",
                 ))
                 return
+            facts = await asyncio.to_thread(digest, lines)
             sample = prompt_sample(lines)
             written = await write_tldr(
                 self.bot.settings, channel_name,
-                [(line.author, line.text) for line in sample], len(lines),
+                [(line.author, line.text) for line in sample], len(lines), prompt_facts(facts),
             )
             if written:
                 summary, vibe = written
                 ai_used = True
             else:
-                summary, vibe = offline_summary(lines, channel_name)
+                summary, vibe = offline_summary(lines, channel_name, facts)
                 ai_used = False
-        await ctx.reply(embed=tldr_embed(summary, vibe, len(lines), channel_name, ai_used))
+        await ctx.reply(embed=tldr_embed(summary, vibe, facts, channel_name, ai_used))
 
     def not_enough(self, ctx: commands.Context, target: discord.abc.User, server: ServerAnalysis) -> discord.Embed:
         have = server.below_threshold.get(target.id, 0)

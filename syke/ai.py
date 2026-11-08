@@ -356,6 +356,7 @@ SHIP_TIMEOUT = 40
 TLDR_TIMEOUT = 50
 SHIP_BLURB_LIMIT = 700
 TLDR_SUMMARY_LIMIT = 1800
+_BULLET = re.compile(r"^\s*(?:[-•·]|\*(?!\*)|\d+[.)])\s*")
 
 
 def public_text(text: object, limit: int) -> str:
@@ -391,17 +392,37 @@ Reply with JSON only: {"blurb": str}"""
 
 
 TLDR_PROMPT = """You are SYKE, summarising a Discord channel for someone who just opened the app.
-You get real messages, oldest first. Cover what actually happened: topics, arguments, bits, who was loud, \
-any running joke. Name people. Paraphrase real lines. Do not invent events, arrivals, or drama that is \
-not in the log.
+You get FACTS counted from the whole window, then real messages, oldest first. Cover what actually \
+happened: topics, arguments, bits, who was loud, any running joke. Name people. Paraphrase real lines. \
+Trust FACTS for who talked most and what repeated. Do not invent events, arrivals, or drama that is not \
+in the log.
 
 Rules:
-- Under 160 words. Discord markdown is fine (**bold**, short lists).
+- "headline": the whole window in one line, under 14 words. The thing they would ask "so what happened?" for.
+- "points": 2-5 bullets in the order things happened, each one thread of conversation, under 30 words. \
+Lead each with who or what, then the detail. Merge small talk into one point or drop it.
+- Under 160 words in total. **Bold** the key name or topic in each point; no headers, no nested lists.
 - Funny and specific, like a friend catching someone up, not meeting minutes.
 - Write names as plain text. Never @mention anyone. No slurs. Nothing explicit; fade to a wink.
 - "vibe" is one sentence on the mood (toxic, freaky, unhinged, sincere, and so on).
 
-Reply with JSON only: {"summary": str, "vibe": str}"""
+Reply with JSON only: {"headline": str, "points": [str], "vibe": str}"""
+
+
+def tldr_text(data: dict) -> str:
+    """The model's headline and bullets as one readable block; a plain "summary" still works."""
+    headline = public_text(data.get("headline"), 200).strip("*# ")
+    points = data.get("points")
+    bullets = []
+    if isinstance(points, list):
+        for point in points[:5]:
+            text = _BULLET.sub("", public_text(point, 320)).strip()
+            if text:
+                bullets.append(f"• {text}")
+    if not bullets:
+        return public_text(data.get("summary"), TLDR_SUMMARY_LIMIT)
+    parts = ([f"**{headline}**"] if headline else []) + ["\n".join(bullets)]
+    return public_text("\n\n".join(parts), TLDR_SUMMARY_LIMIT)
 
 
 def _numbered(lines: list[str]) -> str:
@@ -429,11 +450,12 @@ async def write_ship_blurb(settings: Settings, left_name: str, right_name: str, 
         return None
 
 
-async def write_tldr(settings: Settings, channel: str, lines: list[tuple[str, str]], total: int
-                     ) -> tuple[str, str] | None:
+async def write_tldr(settings: Settings, channel: str, lines: list[tuple[str, str]], total: int,
+                     facts: str = "") -> tuple[str, str] | None:
     """(summary, vibe) for a channel window, or None when there is no AI or it fails.
 
-    `lines` is the sample actually shown to the model; `total` is how many messages that window covers.
+    `lines` is the sample actually shown to the model; `total` is how many messages that window covers;
+    `facts` is what was counted over the whole window.
     """
     if settings.ai_provider == "none" or not lines:
         return None
@@ -445,10 +467,11 @@ async def write_tldr(settings: Settings, channel: str, lines: list[tuple[str, st
         f"These {len(lines)} lines are spread across {total} messages, oldest first."
         if len(lines) < total else f"These are all {total} messages, oldest first."
     )
-    user = f"CHANNEL: #{channel}\n{covered}\n\nMESSAGES:\n{numbered}"
+    grounding = f"FACTS:\n{facts}\n\n" if facts else ""
+    user = f"CHANNEL: #{channel}\n{covered}\n\n{grounding}MESSAGES:\n{numbered}"
     try:
         data = await _complete(settings, TLDR_PROMPT, user, 0.8, TLDR_TIMEOUT)
-        summary = public_text(data.get("summary"), TLDR_SUMMARY_LIMIT)
+        summary = tldr_text(data)
         vibe = public_text(data.get("vibe"), 300)
         if len(summary) < 20:
             return None

@@ -32,7 +32,7 @@ switch a server to mentions only with `!prefix mention`.
 | --- | --- | --- |
 | `!profile [@member]` | everyone | Full personality report (yourself if no member). Aliases: `!judge`, `!p`, `!me` |
 | `!ship [@member] [@member]` | everyone | How well two people match. One member ships you with them; two members ships that pair. A percent from their traits, a ship name, a line from each, and a funny write-up. With an AI key the write-up is generated from both chats. Alias: `!compatibility` |
-| `$tldr` | everyone | Summarises the previous 300 messages or more in this channel: who talked, what it was about, the vibe. Also works as `!tldr` with the server prefix. Aliases: `recap`, `summary` |
+| `$tldr` | everyone | Summarises the previous 300 messages or more in this channel: what it was about, where it drifted, who talked, the lines that landed, the vibe. Also works as `!tldr` with the server prefix. Aliases: `recap`, `summary` |
 | `!iq [@member]` | everyone | A very unscientific IQ estimate (55-160) with a bell curve, a verdict written from that member's actual factors and quotes (not a stock line), what raised or lowered it, and their smartest and least smart messages. Also shown on `!profile`. Aliases: `!brain`, `!smarts` |
 | `!aura [@member]` | everyone | A very unscientific aura reading (0-200) with a personal verdict, what farmed or spent it, and their biggest aura farm and aura loss. Uses stored messages when it can, so it stays snappy. Also shown on `!profile`. Aliases: `!auracheck`, `!rizz` |
 | `!dexify` | everyone | Reply to a message and SYKE posts it back as normal text with `......` after a random few words, like Dex. No embed. Aliases: `!dex`, `!dots` |
