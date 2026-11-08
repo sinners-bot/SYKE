@@ -1,11 +1,14 @@
 import types
 from datetime import datetime, timedelta, timezone
 
-from syke.ai import public_text, write_ship_blurb, write_tldr
+from syke.ai import public_text, tldr_text, write_ship_blurb, write_tldr
 from syke.demo import build_demo_server
 from syke.profile import analyze_server
 from syke.ship import match_percent, read_ship, ship_name
-from syke.tldr import Line, assemble, offline_summary, prompt_sample
+from syke.tldr import (
+    Line, assemble, digest, highlights, offline_summary, prompt_facts, prompt_sample, span_label, tldr_embed,
+    topics_of,
+)
 
 from test_commands import FakeCtx, run
 
@@ -133,7 +136,9 @@ def test_tldr_summarises_a_long_channel_and_backfills(cog):
     assert "raid" in embed.description
     assert "Only **" not in embed.description
     assert embed.fields[0].name == "Vibe"
-    assert embed.footer.text.startswith("320 messages")
+    assert embed.fields[1].name == "Loudest" and "Ada" in embed.fields[1].value
+    assert embed.fields[2].name == "Window" and "<t:" in embed.fields[2].value
+    assert embed.footer.text.startswith("320 messages • 2 people")
     assert len(embed) < 6000
 
     short = [_message(i, "just saying hello in here today", "Ada", 1) for i in range(4)]
@@ -180,3 +185,79 @@ def test_offline_ai_helpers_do_not_call_out(cog):
         "general",
     )
     assert "Ada" in summary and "heist" in summary and vibe
+
+
+def _chat(script, start=1_750_000_000.0):
+    return [Line(author, text, start + 60 * i) for i, (author, text) in enumerate(script)]
+
+
+def test_topics_ignore_slang_and_one_person_spamming():
+    script = [("Spam", "buy my mixtape right now")] * 40
+    for i in range(20):
+        script += [
+            ("Ada", f"the dungeon boss took {i} tries"),
+            ("Bea", "that dungeon is cooked fr lmao"),
+            ("Cleo", "dungeon loot was worth it though"),
+        ]
+    topics = topics_of(_chat(script))
+    assert topics[0] == "dungeon"
+    assert "cooked" not in topics and "lmao" not in topics
+    assert "mixtape" not in topics[:2]
+
+
+def test_topics_prefer_a_recurring_phrase_over_its_words():
+    script = []
+    for i in range(10):
+        script += [("Ada", f"the ice cream truck is back {i}"), ("Bea", f"chasing the ice cream truck again {i}")]
+    assert "cream truck" in topics_of(_chat(script)) or "ice cream" in topics_of(_chat(script))
+
+
+def test_digest_tracks_drift_span_and_quotes_lines_that_landed():
+    script = [("Ada", "who is joining the raid tonight with potions"), ("Bea", "raid boss wiped us again")] * 15
+    script += [("Cleo", "pizza thief is still at large in this house"), ("Dan", "pizza tribunal starts right now")] * 15
+    script[40] = ("Dan", "i ate the pizza and i regret nothing at all")
+    script[41] = ("Ada", "LMAOOO 💀")
+    lines = _chat(script)
+    facts = digest(lines)
+    assert facts.arc == ("raid", "pizza")
+    assert facts.span == "59m"
+    assert facts.people == 4
+    assert any(line.text.startswith("i ate the pizza") for line in facts.highlights)
+    assert len({line.author for line in facts.highlights}) == len(facts.highlights)
+    summary, _vibe = offline_summary(lines, "general", facts)
+    assert "Started on **raid**, ended up on **pizza**" in summary
+    assert "Best lines" in summary
+    grounding = prompt_facts(facts)
+    assert "4 people" in grounding and "raid" in grounding and "59m" in grounding
+
+
+def test_highlights_skip_short_lines_and_duplicates():
+    lines = _chat([("Ada", "ok"), ("Bea", "the same long line here"), ("Cleo", "the same long line here")])
+    picked = highlights(lines, [])
+    assert [line.text for line in picked] == ["the same long line here"]
+
+
+def test_span_label_reads_like_a_person_wrote_it():
+    assert span_label(20) == "under a minute"
+    assert span_label(45 * 60) == "45m"
+    assert span_label(3 * 3600) == "3h"
+    assert span_label(3 * 3600 + 20 * 60) == "3h 20m"
+    assert span_label(2 * 86400 + 4 * 3600) == "2d 4h"
+
+
+def test_tldr_text_formats_headline_and_bullets():
+    text = tldr_text({
+        "headline": "**Raid night fell apart**",
+        "points": ["- **Ada** begged for a healer <@123>", "", "• **Bea** died twice"],
+    })
+    assert text == "**Raid night fell apart**\n\n• **Ada** begged for a healer\n• **Bea** died twice"
+    assert tldr_text({"summary": "old style summary text"}) == "old style summary text"
+
+
+def test_tldr_embed_flags_a_thin_window():
+    lines = _chat([("Ada", "just the one message about tacos")])
+    facts = digest(lines)
+    embed = tldr_embed("Tacos.", "Calm.", facts, "food", ai_used=True)
+    assert "Only **1** message to go on" in embed.description
+    assert embed.footer.text == "1 message • 1 person • AI • $tldr"
+    assert [field.name for field in embed.fields] == ["Vibe", "Loudest"]
