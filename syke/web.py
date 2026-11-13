@@ -213,8 +213,9 @@ _BARE_ID = re.compile(r"(\d{15,25})$")
 
 
 class SearchFilters:
-    """A parsed dashboard query: free text plus Discord-style from:/has:/before:/after:."""
-    __slots__ = ("text", "from_ids", "from_names", "has", "before", "after")
+    """A parsed dashboard query: free text plus Discord-style from:/has:/mentions:/in:/before:/after:."""
+    __slots__ = ("text", "from_ids", "from_names", "has", "before", "after",
+                 "mention_ids", "mention_names", "in_ids", "in_names")
 
     def __init__(self):
         self.text = ""
@@ -223,14 +224,23 @@ class SearchFilters:
         self.has: set[str] = set()
         self.before: float | None = None
         self.after: float | None = None
+        self.mention_ids: set[int] = set()
+        self.mention_names: list[str] = []
+        self.in_ids: set[int] = set()
+        self.in_names: list[str] = []
 
     @property
     def structural(self) -> bool:
-        return bool(self.has or self.before is not None or self.after is not None)
+        return bool(self.has or self.before is not None or self.after is not None
+                    or self.mention_ids or self.mention_names)
 
     @property
     def has_from(self) -> bool:
         return bool(self.from_ids or self.from_names)
+
+    @property
+    def has_in(self) -> bool:
+        return bool(self.in_ids or self.in_names)
 
 
 def _parse_date(s: str) -> float | None:
@@ -257,6 +267,20 @@ def parse_search(query: str) -> SearchFilters:
                 f.from_names.append(v.lstrip("@").lower())
         elif low.startswith("has:") and low[4:] in HAS_KINDS:
             f.has.add(low[4:])
+        elif low.startswith("mentions:") and len(tok) > 9:
+            v = tok[9:]
+            m = _MENTION_ID.match(v) or _BARE_ID.match(v)
+            if m:
+                f.mention_ids.add(int(m.group(1)))
+            else:
+                f.mention_names.append(v.lstrip("@").lower())
+        elif low.startswith("in:") and len(tok) > 3:
+            v = tok[3:]
+            m = re.match(r"<#(\d+)>$", v)
+            if m:
+                f.in_ids.add(int(m.group(1)))
+            else:
+                f.in_names.append(v.lstrip("#").lower())
         elif low.startswith("before:"):
             f.before = _parse_date(tok[7:]) or f.before
         elif low.startswith("after:"):
@@ -275,10 +299,12 @@ def _msg_has(m, kind: str) -> bool:
     def ct(a):
         return (getattr(a, "content_type", None) or "").lower()
 
+    comps = getattr(m, "components", []) or []
     if kind == "image":
         return (any(ct(a).startswith("image") for a in atts)
                 or any(getattr(getattr(e, "image", None), "url", None)
-                       or getattr(getattr(e, "thumbnail", None), "url", None) for e in embeds))
+                       or getattr(getattr(e, "thumbnail", None), "url", None) for e in embeds)
+                or any(_ctype(c) in ("thumbnail", "media_gallery") for c in walk_components(comps)))
     if kind == "video":
         return (any(ct(a).startswith("video") for a in atts)
                 or any(getattr(e, "type", "") == "gifv" or getattr(getattr(e, "video", None), "url", None)
@@ -286,9 +312,9 @@ def _msg_has(m, kind: str) -> bool:
     if kind == "audio":
         return any(ct(a).startswith("audio") for a in atts)
     if kind == "file":
-        return bool(atts)
+        return bool(atts) or any(_ctype(c) == "file" for c in walk_components(comps))
     if kind == "embed":
-        return bool(embeds)
+        return bool(embeds) or any(_ctype(c) == "container" for c in comps)
     if kind == "sticker":
         return bool(getattr(m, "stickers", []) or [])
     if kind in ("link", "url"):
@@ -307,11 +333,35 @@ def author_matches(aid: int, name: str, f: SearchFilters) -> bool:
     return any(fn in low for fn in f.from_names)
 
 
+def _ctype(c) -> str | None:
+    t = getattr(c, "type", None)
+    return getattr(t, "name", None) or (t if isinstance(t, str) else None)
+
+
+def walk_components(components):
+    """Yield every component in a Components-V2 tree (sections, containers, rows, accessories)."""
+    for c in components or []:
+        yield c
+        yield from walk_components(getattr(c, "children", None) or [])
+        acc = getattr(c, "accessory", None)
+        if acc is not None:
+            yield acc
+
+
 def message_matches(m, f: SearchFilters) -> bool:
     """Does a (real or fake) message satisfy every filter in `f`?"""
     if f.has_from:
         name = getattr(m.author, "display_name", None) or getattr(m.author, "name", "")
         if not author_matches(getattr(m.author, "id", 0), name, f):
+            return False
+    if f.mention_ids or f.mention_names:
+        hit = False
+        for u in getattr(m, "mentions", []) or []:
+            nm = (getattr(u, "display_name", None) or getattr(u, "name", "") or "").lower()
+            if u.id in f.mention_ids or any(mn in nm for mn in f.mention_names):
+                hit = True
+                break
+        if not hit:
             return False
     for kind in f.has:
         if not _msg_has(m, kind):
@@ -463,6 +513,17 @@ border-radius:8px;padding:10px 12px;max-width:400px;color:var(--text);}
 .emb .eft{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);margin-top:8px;}
 .emb .ef-ic{width:16px;height:16px;border-radius:50%;}
 .emb .eth{width:72px;height:72px;border-radius:6px;object-fit:cover;flex:none;}
+.cv-box{border-left:4px solid var(--brand);background:#2b2d31;border-radius:6px;padding:8px 12px;margin-top:4px;max-width:520px;}
+.cv-text{color:#dbdee1;font-size:14px;white-space:pre-wrap;word-break:break-word;margin:2px 0;}
+.cv-section{display:flex;gap:10px;align-items:flex-start;}
+.cv-section .cv-main{flex:1;min-width:0;}
+.cv-thumb img{width:80px;height:80px;border-radius:6px;object-fit:cover;}
+.cv-gallery{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;}
+.cv-gallery img{max-width:160px;max-height:160px;border-radius:6px;}
+.cv-sep{border:none;border-top:1px solid var(--line);margin:6px 0;}
+.cv-btn{display:inline-block;margin:4px 4px 0 0;font-size:12px;background:#3a3c43;border:1px solid var(--line);border-radius:6px;padding:3px 10px;color:#dbdee1;}
+.cv-btn:hover{border-color:var(--brand);text-decoration:none;}
+.sr-ch{font-size:12px;color:var(--muted);margin-left:8px;}
 .rx{display:inline-flex;gap:5px;align-items:center;background:#2b2d31;border:1px solid var(--line);border-radius:8px;padding:1px 7px;font-size:12px;margin:5px 4px 0 0;color:#b9bbbe;}
 button.rx.rxc{cursor:pointer;font-family:inherit;}
 button.rx.rxc:hover{border-color:var(--brand);color:#fff;}
@@ -934,9 +995,9 @@ class WebDashboard:
         base = f"/g/{guild.id}/c/{channel.id}"
         search = (f"<form class='ch-search' method='get' action='{base}'>"
                   f"<input name='q' value='{esc(query)}' autocomplete='off' "
-                  f"placeholder='Search — try from:@user has:image after:2025-01-01' "
-                  f"title='Operators: from:@user or from:name · has:image|video|audio|file|link|embed|sticker|gif · "
-                  f"before:YYYY-MM-DD · after:YYYY-MM-DD'></form>")
+                  f"placeholder='Search — try from:@user has:image in:#channel after:2025-01-01' "
+                  f"title='Operators: from:@user or from:name · mentions:@user · in:#channel · "
+                  f"has:image|video|audio|file|link|embed|sticker|gif · before:YYYY-MM-DD · after:YYYY-MM-DD'></form>")
         tabs = (f"<div class='ch-tabs'>"
                 f"<a class='{'on' if active == 'chat' else ''}' href='{base}'>Chat</a>"
                 f"<a class='{'on' if active == 'media' else ''}' href='{base}/media'>Media</a></div>")
@@ -965,57 +1026,82 @@ class WebDashboard:
             return "[sticker]"
         for e in getattr(m, "embeds", []) or []:
             return f"[embed] {esc(getattr(e, 'title', '') or '')}".strip()
+        for c in walk_components(getattr(m, "components", []) or []):
+            if _ctype(c) == "text_display":
+                t = (getattr(c, "content", "") or "").strip()
+                if t:
+                    return t
+        if getattr(m, "components", []):
+            return "[card]"
         return "(no text)"
+
+    def _search_targets(self, guild: discord.Guild, channel, f: SearchFilters) -> list:
+        """Which channels to search: the current one, or those named by in:#channel."""
+        if not f.has_in:
+            return [channel]
+        hits = [c for c in guild.text_channels
+                if c.id in f.in_ids or any(n in c.name.lower() for n in f.in_names)]
+        return hits or [channel]
+
+    async def _search_channel(self, guild: discord.Guild, channel, f: SearchFilters) -> tuple[list, bool]:
+        """Search one channel; returns (rows, scanned_live). Each row: (mid, name, content, created, channel)."""
+        can = channel.permissions_for(guild.me).read_message_history
+        live = can and (f.structural or (f.has_from and not f.text))
+        rows = []
+        if live:
+            with contextlib.suppress(discord.HTTPException):
+                async for m in channel.history(limit=SEARCH_SCAN):
+                    if message_matches(m, f):
+                        rows.append((m.id, m.author.display_name, self._result_text(m),
+                                     m.created_at.timestamp(), channel))
+                        if len(rows) >= 80:
+                            break
+            return rows, True
+        stored = await asyncio.to_thread(self.bot.storage.search_channel, guild.id, channel.id,
+                                         f.text, 400 if f.has_from else 80)
+        for mid, aid, aname, content, created in stored:
+            if f.has_from and not author_matches(aid, aname, f):
+                continue
+            rows.append((mid, aname or f"user {aid}", content, created, channel))
+            if len(rows) >= 80:
+                break
+        if not rows and can:
+            with contextlib.suppress(discord.HTTPException):
+                async for m in channel.history(limit=MEDIA_SCAN):
+                    if message_matches(m, f):
+                        rows.append((m.id, m.author.display_name, self._result_text(m),
+                                     m.created_at.timestamp(), channel))
+                        if len(rows) >= 80:
+                            break
+            return rows, True
+        return rows, False
 
     async def _search_html(self, guild: discord.Guild, channel, query: str) -> str:
         f = parse_search(query)
-        can = channel.permissions_for(guild.me).read_message_history
-        results = []  # (message_id, author name, content, created_ts)
-        note = ""
-        # has:/date: and from-only (no text) filters need message metadata → scan live history.
-        live = can and (f.structural or (f.has_from and not f.text))
-        if live:
-            note = "<div class='note'>Scanning recent history for matches.</div>"
-            try:
-                async for m in channel.history(limit=SEARCH_SCAN):
-                    if message_matches(m, f):
-                        results.append((m.id, m.author.display_name, self._result_text(m),
-                                        m.created_at.timestamp()))
-                        if len(results) >= 80:
-                            break
-            except discord.HTTPException:
-                pass
-        else:
-            rows = await asyncio.to_thread(self.bot.storage.search_channel, guild.id, channel.id,
-                                           f.text, 400 if f.has_from else 80)
-            for mid, aid, aname, content, created in rows:
-                if f.has_from and not author_matches(aid, aname, f):
-                    continue
-                results.append((mid, aname or f"user {aid}", content, created))
-                if len(results) >= 80:
-                    break
-            if not results and can:
-                note = "<div class='note'>Searching recent messages (this channel isn't fully stored).</div>"
-                try:
-                    async for m in channel.history(limit=MEDIA_SCAN):
-                        if message_matches(m, f):
-                            results.append((m.id, m.author.display_name, self._result_text(m),
-                                            m.created_at.timestamp()))
-                            if len(results) >= 80:
-                                break
-                except discord.HTTPException:
-                    pass
+        targets = self._search_targets(guild, channel, f)
+        results, scanned = [], False
+        for ch in targets[:8]:
+            rows, live = await self._search_channel(guild, ch, f)
+            results.extend(rows)
+            scanned = scanned or live
+        results.sort(key=lambda r: r[3] or 0, reverse=True)
+        results = results[:80]
+        multi = len(targets) > 1
         clear = f"<a href='/g/{guild.id}/c/{channel.id}'>Clear</a>"
+        scope = f" across {len(targets)} channels" if multi else ""
         head = (f"<div class='sr-head'><span>{len(results)} result(s) for "
-                f"<strong>{esc(query)}</strong></span>{clear}</div>")
+                f"<strong>{esc(query)}</strong>{scope}</span>{clear}</div>")
+        note = "<div class='note'>Scanning recent history for matches.</div>" if scanned else ""
         if not results:
             return head + "<div class='dc-empty'>No messages matched.</div>"
         items = []
-        for mid, name, content, created in results:
+        for mid, name, content, created, ch in results:
             ts = f"<time class='ts' data-ts='{int(created)}'></time>" if created else ""
-            jump = (f"<a class='jump' href='https://discord.com/channels/{guild.id}/{channel.id}/{mid}' "
+            where = f"<a class='sr-ch' href='/g/{guild.id}/c/{ch.id}'>#{esc(ch.name)}</a>" if multi else ""
+            jump = (f"<a class='jump' href='https://discord.com/channels/{guild.id}/{ch.id}/{mid}' "
                     f"target='_blank' rel='noreferrer'>Jump ↗</a>") if mid else ""
-            items.append(f"<div class='sr'><div class='head'><span class='name'>{esc(name)}</span>{ts}{jump}</div>"
+            items.append(f"<div class='sr'><div class='head'><span class='name'>{esc(name)}</span>"
+                         f"{where}{ts}{jump}</div>"
                          f"<div class='text'>{self._highlight(content, f.text)}</div></div>")
         return head + note + "".join(items)
 
@@ -1102,6 +1188,7 @@ class WebDashboard:
                             f"<br><span class='muted'>{kb}</span></span></a>")
         embeds = [self._embed_html(e, guild, names) for e in m.embeds]
         embeds = [h for h in embeds if h]
+        components_html = self._components_html(getattr(m, "components", []) or [], guild, names)
         rx = []
         for r in getattr(m, "reactions", []):
             e = r.emoji
@@ -1112,7 +1199,7 @@ class WebDashboard:
             rx.append(f"<button type='button' class='rx rxc' title='See who reacted'>{glyph} {r.count}</button>")
         reactions = f"<div class='rxs'>{''.join(rx)}</div>" if rx else ""
         body = text
-        if not text and not stickers and not m.attachments and not m.embeds:
+        if not text and not stickers and not m.attachments and not m.embeds and not components_html:
             body = "<div class='text empty'>(no text content)</div>"
         profile = f"/g/{getattr(guild, 'id', 0)}/u/{author.id}"
         head = ("" if same else
@@ -1121,7 +1208,7 @@ class WebDashboard:
         av = f"<a class='av' href='{profile}'><img src='{esc(avatar)}' alt='' loading='lazy'></a>"
         return (f"<div class='m{' grouped' if same else ''}' data-mid='{m.id}'>{av}"
                 f"<div class='content'>{reply}{head}{body}{''.join(stickers)}"
-                f"{''.join(atts)}{''.join(embeds)}{reactions}</div></div>")
+                f"{''.join(atts)}{''.join(embeds)}{components_html}{reactions}</div></div>")
 
     async def _messages_html(self, channel, before: int | None = None) -> str:
         if not channel.permissions_for(channel.guild.me).read_message_history:
@@ -1692,6 +1779,61 @@ class WebDashboard:
         bar = f" style='border-left-color:#{accent:06x}'" if accent else ""
         inner = f"<div class='emb-main'>{''.join(parts)}</div>{thumb}" if thumb else "".join(parts)
         return f"<div class='emb'{bar}>{inner}</div>"
+
+    def _components_html(self, components, guild, names) -> str:
+        """Render a Components-V2 message (what many modern bots like .fmbot now send)."""
+        return "".join(self._component_html(c, guild, names) for c in (components or []))
+
+    def _component_html(self, c, guild, names) -> str:
+        kind = _ctype(c)
+
+        def media_url(media):
+            return getattr(media, "url", None) or getattr(media, "proxy_url", None)
+
+        if kind == "text_display":
+            txt = getattr(c, "content", "") or ""
+            return f"<div class='cv-text'>{render_content(txt[:2000], guild, names)}</div>" if txt.strip() else ""
+        if kind == "thumbnail":
+            u = media_url(getattr(c, "media", None))
+            return (f"<a class='att cv-thumb' href='{esc(u)}' target='_blank' rel='noreferrer'>"
+                    f"<img src='{esc(u)}' loading='lazy' alt=''></a>") if u else ""
+        if kind == "media_gallery":
+            imgs = []
+            for it in getattr(c, "items", []) or []:
+                u = media_url(getattr(it, "media", None))
+                if u:
+                    imgs.append(f"<a class='att' href='{esc(u)}' target='_blank' rel='noreferrer'>"
+                                f"<img src='{esc(u)}' loading='lazy' alt=''></a>")
+            return f"<div class='cv-gallery'>{''.join(imgs)}</div>" if imgs else ""
+        if kind == "section":
+            kids = "".join(self._component_html(k, guild, names) for k in getattr(c, "children", []) or [])
+            acc = getattr(c, "accessory", None)
+            acch = self._component_html(acc, guild, names) if acc is not None else ""
+            return f"<div class='cv-section'><div class='cv-main'>{kids}</div>{acch}</div>"
+        if kind == "container":
+            kids = "".join(self._component_html(k, guild, names) for k in getattr(c, "children", []) or [])
+            col = getattr(c, "accent_colour", None) or getattr(c, "accent_color", None)
+            val = getattr(col, "value", None)
+            bar = f" style='border-left-color:#{val:06x}'" if val else ""
+            return f"<div class='cv-box'{bar}>{kids}</div>" if kids else ""
+        if kind == "file":
+            u = media_url(getattr(c, "media", None))
+            name = getattr(c, "name", None) or "file"
+            return (f"<a class='att att-file' href='{esc(u)}' target='_blank' rel='noreferrer'>"
+                    f"<span class='fi'>📎</span><span class='fn'>{esc(name)}</span></a>") if u else ""
+        if kind == "separator":
+            return "<hr class='cv-sep'>"
+        if kind == "action_row":
+            return "".join(self._component_html(k, guild, names) for k in getattr(c, "children", []) or [])
+        if kind == "button":
+            label = getattr(c, "label", None) or ""
+            url = getattr(c, "url", None)
+            if not label and not url:
+                return ""
+            inner = esc(label or "link")
+            return (f"<a class='cv-btn' href='{esc(url)}' target='_blank' rel='noreferrer'>{inner}</a>"
+                    if url else f"<span class='cv-btn'>{inner}</span>")
+        return ""
 
     async def _reactions_html(self, guild: discord.Guild, message: discord.Message) -> str:
         groups = []

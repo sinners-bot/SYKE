@@ -302,6 +302,52 @@ async def test_history_paging_with_before(dash):
         assert "?before='+f.dataset.mid" in page and "addEventListener('scroll'" in page
 
 
+def _comp(kind, **kw):
+    return types.SimpleNamespace(type=types.SimpleNamespace(name=kind), **kw)
+
+
+def _media(url):
+    return types.SimpleNamespace(url=url, proxy_url=None)
+
+
+def _fmbot_card():
+    text = _comp("text_display", content="**Now playing** Song — Artist")
+    thumb = _comp("thumbnail", media=_media("https://cdn/art.png"))
+    section = _comp("section", children=[text], accessory=thumb)
+    gallery = _comp("media_gallery", items=[types.SimpleNamespace(media=_media("https://cdn/g1.png"))])
+    button = _comp("button", label="Open in Spotify", url="https://open.spotify.com/x")
+    row = _comp("action_row", children=[button])
+    return _comp("container", children=[section, gallery, row],
+                 accent_colour=types.SimpleNamespace(value=0x1DB954))
+
+
+def test_components_v2_render(dash):
+    web, bot, guild = dash
+    html = web._components_html([_fmbot_card()], guild, {})
+    assert "Now playing" in html                 # text display
+    assert "https://cdn/art.png" in html         # section thumbnail (the album art)
+    assert "https://cdn/g1.png" in html          # media gallery
+    assert "Open in Spotify" in html             # button label
+    assert "border-left-color:#1db954" in html   # container accent
+
+
+def test_one_message_shows_component_card_not_empty(dash):
+    web, bot, guild = dash
+    m = _fake_message(301, 7, "fmbot", "", 1_700_000_000)
+    m.guild = guild
+    m.components = [_fmbot_card()]
+    html = web._one_message(m, None)
+    assert "(no text content)" not in html
+    assert "Now playing" in html and "https://cdn/art.png" in html
+
+
+def test_result_text_uses_component_text(dash):
+    web, bot, guild = dash
+    m = _fake_message(1, 7, "b", "", 1)
+    m.components = [_comp("container", children=[_comp("text_display", content="Now playing X")])]
+    assert web._result_text(m) == "Now playing X"
+
+
 def test_parse_search_operators():
     from syke.web import parse_search
     f = parse_search("from:<@111111111111111111> has:image has:video before:2025-06-01 hello world")
@@ -314,6 +360,9 @@ def test_parse_search_operators():
     assert g.from_names == ["ada"] and g.text == "just text" and not g.structural
     assert parse_search("plain words").text == "plain words"
     assert parse_search("<@!999> hi") .text == "<@!999> hi"   # bare mention (no from:) is text
+    h = parse_search("mentions:<@222222222222222222> in:#general hi")
+    assert 222222222222222222 in h.mention_ids and h.in_names == ["general"] and h.has_in and h.text == "hi"
+    assert 333333333333333333 in parse_search("in:<#333333333333333333>").in_ids
 
 
 def _smsg(uid=7, name="Ada", content="", atts=(), embeds=(), stickers=(), ts=1_700_000_000):
@@ -345,6 +394,17 @@ def test_message_matches_filters():
     early = _smsg(ts=1_600_000_000)
     assert message_matches(early, parse_search("before:2021-01-01"))
     assert not message_matches(early, parse_search("after:2021-01-01"))
+    # mentions:
+    pinged = _smsg(content="hey")
+    pinged.mentions = [types.SimpleNamespace(id=222222222222222222, display_name="Bob", name="Bob")]
+    assert message_matches(pinged, parse_search("mentions:222222222222222222"))
+    assert message_matches(pinged, parse_search("mentions:bob"))
+    assert not message_matches(pinged, parse_search("mentions:alice"))
+    # has:image from a component media gallery (fmbot-style card)
+    carded = _smsg()
+    carded.components = [_comp("container", children=[_comp("media_gallery",
+                        items=[types.SimpleNamespace(media=_media("https://cdn/x.png"))])])]
+    assert message_matches(carded, parse_search("has:image"))
 
 
 def _embed(**kw):
