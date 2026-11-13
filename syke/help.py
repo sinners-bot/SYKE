@@ -194,33 +194,32 @@ def _short(cmd: commands.Command, cat: Category) -> str:
 
 
 def _line(cmd: commands.Command, cat: Category, prefix: str) -> str:
+    # One tight line per command: `!name <args>` — short description.
     sig = _sig(cmd)
     head = f"`{prefix}{cmd.qualified_name}{(' ' + sig) if sig else ''}`"
-    return f"{head}\n╰ {_short(cmd, cat)}"
+    return f"{head} — {_short(cmd, cat)}"
 
 
 def category_embed(bot, cat: Category, prefix: str) -> discord.Embed:
-    e = embed(f"{cat.emoji} {cat.title}", cat.blurb)
     lines = []
     for name in cat.commands:
         cmd = bot.get_command(name)
         if cmd is None or getattr(cmd, "hidden", False):
             continue
         lines.append(_line(cmd, cat, prefix))
-    e.description = f"{cat.blurb}\n\n" + "\n".join(lines)
+    e = embed(f"{cat.emoji} {cat.title}", f"{cat.blurb}\n\n" + "\n".join(lines))
     e.set_footer(text=f"{cat.access}  •  {prefix}help <command> for full details")
     return e
 
 
 def overview_embed(bot, prefix: str, version: str) -> discord.Embed:
-    e = embed("🧠 SYKE — Command Menu",
-              f"Pick a category below, or run `{prefix}help <command>` for details on any one command.\n"
-              f"Prefix here is `{prefix}` — slash commands work too.")
-    for cat in CATALOG:
-        names = ", ".join(f"`{n}`" for n in cat.commands)
-        e.add_field(name=f"{cat.emoji} {cat.title}", value=f"{cat.blurb}\n{names}", inline=False)
+    # Compact: one short line per category. The dropdown drills into each.
+    lines = [f"{c.emoji} **{c.title}** — {c.blurb}" for c in CATALOG]
+    body = (f"Pick a category below, or `{prefix}help <command>` for one command's details. "
+            f"Prefix: `{prefix}` (slash works too).\n\n" + "\n".join(lines))
+    e = embed("🧠 SYKE — Command Menu", body)
     total = sum(len(c.commands) for c in CATALOG)
-    e.set_footer(text=f"SYKE {version}  •  {total} commands across {len(CATALOG)} categories")
+    e.set_footer(text=f"SYKE {version}  •  {total} commands in {len(CATALOG)} categories")
     return e
 
 

@@ -57,8 +57,7 @@ def test_mention_only_prefix(cog):
     run(cog.help.callback(cog, ctx))
     help_text = ctx.replies[-1].description
     assert "@SYKE help <command>" in help_text        # mention prefix flows into the menu
-    fields = " ".join(f.value for f in ctx.replies[-1].fields)
-    assert "yaps back" in fields
+    assert "yaps back" in help_text                   # AI category blurb is in the compact overview
 
     run(cog.prefix.callback(cog, ctx, None))
     assert "mentions only" in ctx.replies[-1].description
@@ -157,9 +156,8 @@ def test_help_uses_server_prefix(cog):
     run(cog.help.callback(cog, ctx))
     reply = ctx.replies[-1]
     assert "s.help <command>" in reply.description        # custom prefix flows through
-    fields = " ".join(f"{f.name} {f.value}" for f in reply.fields)
-    for name in ("profile", "ship", "inviter", "steal", "emoji", "verify"):
-        assert name in fields
+    for title in ("Profile & Vibes", "Moderation", "Server Security"):
+        assert title in reply.description                 # compact overview lists categories
     assert len(reply.description) <= 4096
 
 

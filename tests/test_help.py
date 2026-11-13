@@ -63,10 +63,13 @@ def test_each_command_lives_in_exactly_one_category():
 
 
 def test_embeds_build_for_every_category(bot):
-    assert overview_embed(bot, "!", "v1").fields
+    ov = overview_embed(bot, "!", "v1")
+    assert ov.description and all(c.title in ov.description for c in CATALOG)
     for cat in CATALOG:
         e = category_embed(bot, cat, "!")
         assert e.description and cat.title in e.title
+        # Commands render as compact one-liners (name — description), not two lines.
+        assert "╰" not in e.description
 
 
 def test_command_detail_includes_subcommands(bot):
