@@ -178,6 +178,20 @@ h1{font-size:22px;margin:0 0 4px;}h2{font-size:17px;margin:22px 0 10px;}
 .dc-ch.on{background:#2d2d3a;color:#fff;}
 .dc-ch.voice{color:#5c5f70;cursor:default;}
 .dc-ch.voice:hover{background:none;color:#5c5f70;}
+.dc-ch.vc{white-space:normal;overflow:visible;padding:5px 8px 2px;}
+.vc-head{color:#9aa0b3;display:flex;align-items:center;gap:4px;}
+.vc-count{margin-left:auto;font-size:11px;background:#2d2d3a;color:#b9bbbe;border-radius:8px;padding:0 6px;}
+.vc-members{margin:2px 0 4px 14px;display:flex;flex-direction:column;gap:1px;}
+.vc-m{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:6px;color:#c4c7d0;font-size:13px;}
+.vc-m:hover{background:#22222c;color:#fff;text-decoration:none;}
+.vc-m.dim{color:#72757e;}
+.vc-av{width:20px;height:20px;border-radius:50%;flex:none;}
+.vc-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.vb{flex:none;margin-left:auto;font-size:11px;line-height:1;}
+.vb+.vb{margin-left:4px;}
+.vb.mut,.vb.deaf{filter:grayscale(1);opacity:.85;}
+.vb.live{background:#EF4444;color:#fff;font-weight:700;border-radius:4px;padding:1px 4px;font-size:9px;letter-spacing:.03em;}
+.vb.cam{opacity:.9;}
 .dc-main{flex:1;display:flex;flex-direction:column;min-width:0;}
 .dc-head{padding:12px 16px;border-bottom:1px solid var(--line);font-weight:700;display:flex;gap:10px;align-items:center;background:#1a1a22;}
 .dc-head .hash{color:var(--muted);}
@@ -626,8 +640,8 @@ class WebDashboard:
             if category is not None:
                 rows.append(f"<div class='dc-cat'>{esc(category.name)}</div>")
             for ch in visible:
-                if isinstance(ch, discord.VoiceChannel):
-                    rows.append(f"<div class='dc-ch voice'>🔊 {esc(ch.name)}</div>")
+                if isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
+                    rows.append(self._voice_block(guild, ch))
                     continue
                 can = ch.permissions_for(guild.me).read_message_history
                 on = " on" if ch.id == active_id else ""
@@ -638,6 +652,39 @@ class WebDashboard:
                     rows.append(f"<div class='dc-ch voice' title='SYKE has no access'>🔒 {esc(ch.name)}</div>")
         rows.append("</div>")
         return f"<div class='dc-side'>{''.join(rows)}</div>"
+
+    def _voice_block(self, guild: discord.Guild, ch) -> str:
+        """A voice/stage channel plus whoever's connected, with their mute/deafen state."""
+        members = list(getattr(ch, "members", []) or [])
+        icon = "🎙️" if isinstance(ch, discord.StageChannel) else "🔊"
+        count = f"<span class='vc-count'>{len(members)}</span>" if members else ""
+        head = f"<div class='vc-head'>{icon} {esc(ch.name)}{count}</div>"
+        rows = []
+        for m in members:
+            vs = getattr(m, "voice", None)
+            badges = []
+            if vs is not None:
+                deaf = getattr(vs, "deaf", False) or getattr(vs, "self_deaf", False)
+                mute = getattr(vs, "mute", False) or getattr(vs, "self_mute", False)
+                srv = " (server)" if getattr(vs, "deaf", False) or getattr(vs, "mute", False) else ""
+                if deaf:
+                    badges.append(f"<span class='vb deaf' title='Deafened{srv}'>🔇</span>")
+                elif mute:
+                    badges.append(f"<span class='vb mut' title='Muted{srv}'>🎙️</span>")
+                if getattr(vs, "self_stream", False):
+                    badges.append("<span class='vb live' title='Streaming'>LIVE</span>")
+                if getattr(vs, "self_video", False):
+                    badges.append("<span class='vb cam' title='Camera on'>📹</span>")
+            av = getattr(getattr(m, "display_avatar", None), "url", "")
+            name = esc(getattr(m, "display_name", "member"))
+            dim = " dim" if (vs is not None and (getattr(vs, "deaf", False) or getattr(vs, "self_deaf", False)
+                                                  or getattr(vs, "mute", False) or getattr(vs, "self_mute", False))) else ""
+            rows.append(
+                f"<a class='vc-m{dim}' href='/g/{guild.id}/u/{m.id}'>"
+                f"<img class='vc-av' src='{esc(av)}' alt='' loading='lazy'>"
+                f"<span class='vc-name'>{name}</span>{''.join(badges)}</a>")
+        body = f"<div class='vc-members'>{''.join(rows)}</div>" if rows else ""
+        return f"<div class='dc-ch voice vc'>{head}{body}</div>"
 
     def _channel_header(self, guild: discord.Guild, channel, active: str, query: str = "") -> str:
         topic = getattr(channel, "topic", None)

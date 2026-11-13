@@ -302,6 +302,39 @@ async def test_history_paging_with_before(dash):
         assert "?before='+f.dataset.mid" in page and "addEventListener('scroll'" in page
 
 
+def _voice_member(uid, name, **vstate):
+    voice = types.SimpleNamespace(mute=False, self_mute=False, deaf=False, self_deaf=False,
+                                  self_stream=False, self_video=False)
+    for k, v in vstate.items():
+        setattr(voice, k, v)
+    return types.SimpleNamespace(
+        id=uid, display_name=name, voice=voice,
+        display_avatar=types.SimpleNamespace(url=f"https://cdn/{uid}.png"))
+
+
+def test_voice_block_lists_members_with_mute_state(dash):
+    web, bot, guild = dash
+    vc = types.SimpleNamespace(id=55, name="General Voice", members=[
+        _voice_member(1, "Ada", self_mute=True),
+        _voice_member(2, "Bo", self_deaf=True),
+        _voice_member(3, "Cy", self_stream=True),
+        _voice_member(4, "Di"),  # connected, unmuted
+    ])
+    html = web._voice_block(guild, vc)
+    assert "General Voice" in html and ">4<" in html            # name + member count
+    assert "Ada" in html and "Bo" in html and "Di" in html      # everyone shown
+    assert "Muted" in html and "Deafened" in html and "LIVE" in html
+    assert "/g/42/u/1" in html                                   # clickable to profile
+    assert html.count("vc-m") >= 4                               # a row each
+
+
+def test_voice_block_empty_channel_has_no_member_list(dash):
+    web, bot, guild = dash
+    vc = types.SimpleNamespace(id=56, name="AFK", members=[])
+    html = web._voice_block(guild, vc)
+    assert "AFK" in html and "vc-members" not in html
+
+
 def _reply_to(msg, target_id, resolved=None):
     msg.reference = types.SimpleNamespace(message_id=target_id, resolved=resolved)
     return msg
