@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import types
 from dataclasses import replace
@@ -265,7 +266,7 @@ async def test_channel_view_renders_discord_style(dash):
         assert "dc-side" in body and "dc-msgs" in body          # sidebar + message pane
         assert "# general" in body or "#</span> general" in body  # channel header
         assert "Message #general as SYKE" in body                 # input bar
-        assert "setInterval(poll" in body                         # live refresh
+        assert "new WebSocket(" in body and "/ws'" in body        # live websocket
 
 
 def _fake_message(mid, uid, name, content, ts):
@@ -444,6 +445,37 @@ def test_inline_emoji_mentions_and_stickers(dash):
     assert "class='mention'>#general" in html              # channel mention chip
     assert "class='sticker'" in html and "https://cdn/s.png" in html  # sticker image
     assert "class='ie' src='https://cdn/r.png'" in html    # custom-emoji reaction as image
+
+
+async def test_live_websocket_pushes_messages(dash):
+    import types
+    from datetime import datetime, timezone
+    async with serving(dash) as (cl, web, bot, guild):
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        ws = await cl.ws_connect(f"/g/{guild.id}/c/10/ws")
+        ch = guild.get_channel(10)
+        author = types.SimpleNamespace(id=7, display_name="Ada", bot=False,
+            display_avatar=types.SimpleNamespace(url="a"), colour=types.SimpleNamespace(value=0))
+        msg = types.SimpleNamespace(id=777, guild=guild, channel=ch, author=author, content="live now",
+            clean_content="live now", created_at=datetime(2026, 11, 13, tzinfo=timezone.utc),
+            reference=None, attachments=[], embeds=[], stickers=[], reactions=[])
+        await web._on_new_message(msg)
+        data = await asyncio.wait_for(ws.receive_json(), timeout=2)
+        assert data["t"] == "new" and data["mid"] == "777" and "live now" in data["html"]
+        await web._on_delete_message(msg)
+        gone = await asyncio.wait_for(ws.receive_json(), timeout=2)
+        assert gone["t"] == "del" and gone["mid"] == "777"
+        await ws.close()
+
+
+async def test_websocket_requires_login(dash):
+    async with serving(dash) as (cl, web, bot, guild):
+        try:
+            ws = await cl.ws_connect(f"/g/{guild.id}/c/10/ws")
+            await ws.close()
+            assert False, "should have refused"
+        except Exception:
+            pass
 
 
 def test_html_escaping_blocks_injection():

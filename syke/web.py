@@ -8,10 +8,12 @@ touch discord.py objects directly. Turned on only when a client id, secret and s
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import logging
 import re
 import time
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from urllib.parse import quote
@@ -299,7 +301,12 @@ class WebDashboard:
         self.settings = bot.settings
         self.app = web.Application()
         self.runner: web.AppRunner | None = None
+        # channel_id -> set of live WebSocket connections watching that channel
+        self._subs: dict[int, set] = defaultdict(set)
         self._add_routes()
+        bot.add_listener(self._on_new_message, "on_message")
+        bot.add_listener(self._on_edit_message, "on_message_edit")
+        bot.add_listener(self._on_delete_message, "on_message_delete")
 
     # Lifecycle
 
@@ -327,6 +334,7 @@ class WebDashboard:
         a("/g/{gid}/c/{cid}", self.channel)
         a("/g/{gid}/c/{cid}/messages", self.channel_messages)
         a("/g/{gid}/c/{cid}/media", self.channel_media)
+        a("/g/{gid}/c/{cid}/ws", self.channel_ws)
         p("/g/{gid}/c/{cid}/say", self.say)
         p("/g/{gid}/mod", self.moderate)
         p("/g/{gid}/settings", self.change_setting)
@@ -816,10 +824,27 @@ class WebDashboard:
             "stamp(document);"
             + ("" if searching else
                "pane.scrollTop=pane.scrollHeight;"
-               # Live refresh, but only while you're already at the bottom — never yanks you up.
-               "async function poll(){if(!bot())return;try{var r=await fetch(location.pathname+'/messages');"
-               "if(!r.ok)return;var h=await r.text();pane.innerHTML=h;stamp(pane);pane.scrollTop=pane.scrollHeight;}"
-               "catch(e){}}setInterval(poll,8000);"
+               # Live updates over a WebSocket — instant, no flicker, like a real client.
+               "function nodeOf(h){var t=document.createElement('div');t.innerHTML=h;return t.firstElementChild;}"
+               "function append(h){var b=bot(),n=nodeOf(h);if(!n)return;"
+               "if(pane.querySelector(\".m[data-mid='\"+n.dataset.mid+\"']\"))return;"
+               "pane.appendChild(n);stamp(n);if(b)pane.scrollTop=pane.scrollHeight;}"
+               "function editM(id,h){var e=pane.querySelector(\".m[data-mid='\"+id+\"']\"),n=nodeOf(h);"
+               "if(e&&n){e.replaceWith(n);stamp(n);}}"
+               "function delM(id){var e=pane.querySelector(\".m[data-mid='\"+id+\"']\");if(e)e.remove();}"
+               "var ws,pt;"
+               "function poll(){if(pt)return;pt=setInterval(async function(){if(!bot())return;try{"
+               "var r=await fetch(location.pathname+'/messages');if(!r.ok)return;var h=await r.text();"
+               "pane.innerHTML=h;stamp(pane);pane.scrollTop=pane.scrollHeight;}catch(e){}},5000);}"
+               "function nopoll(){if(pt){clearInterval(pt);pt=null;}}"
+               "function connect(){try{ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')"
+               "+location.host+location.pathname+'/ws');}catch(e){poll();return;}"
+               "ws.onopen=function(){nopoll();};"
+               "ws.onmessage=function(ev){var d;try{d=JSON.parse(ev.data);}catch(e){return;}"
+               "if(d.t==='new')append(d.html);else if(d.t==='edit')editM(d.mid,d.html);else if(d.t==='del')delM(d.mid);};"
+               "ws.onclose=function(){poll();setTimeout(connect,4000);};"
+               "ws.onerror=function(){try{ws.close();}catch(e){}};}"
+               "connect();"
                # Scroll up to load older history, Discord-style, keeping your place.
                "var loading=false,noMore=false;"
                "async function older(){if(loading||noMore)return;var f=pane.querySelector('.m[data-mid]');if(!f)return;"
@@ -1038,6 +1063,52 @@ class WebDashboard:
         before_raw = request.query.get("before")
         before = int(before_raw) if before_raw and before_raw.isdigit() else None
         return web.Response(text=await self._messages_html(channel, before), content_type="text/html")
+
+    # Live updates (WebSocket)
+
+    async def channel_ws(self, request: web.Request) -> web.WebSocketResponse:
+        if self._user(request) is None:
+            raise web.HTTPUnauthorized(text="login required")
+        guild = self._guild_or_404(request)
+        channel = self._channel_or_404(request, guild)
+        ws = web.WebSocketResponse(heartbeat=30)
+        await ws.prepare(request)
+        self._subs[channel.id].add(ws)
+        try:
+            async for _ in ws:  # Keep the socket open; we only push, never read.
+                pass
+        finally:
+            self._subs[channel.id].discard(ws)
+        return ws
+
+    async def _broadcast(self, channel_id: int, payload: dict) -> None:
+        subs = self._subs.get(channel_id)
+        if not subs:
+            return
+        for ws in list(subs):
+            try:
+                await ws.send_json(payload)
+            except Exception:
+                subs.discard(ws)
+
+    async def _on_new_message(self, message: discord.Message) -> None:
+        if message.guild is None or message.channel.id not in self._subs:
+            return
+        with contextlib.suppress(Exception):
+            await self._broadcast(message.channel.id,
+                                  {"t": "new", "mid": str(message.id), "html": self._one_message(message, None)})
+
+    async def _on_edit_message(self, before: discord.Message, after: discord.Message) -> None:
+        if after.guild is None or after.channel.id not in self._subs:
+            return
+        with contextlib.suppress(Exception):
+            await self._broadcast(after.channel.id,
+                                  {"t": "edit", "mid": str(after.id), "html": self._one_message(after, None)})
+
+    async def _on_delete_message(self, message: discord.Message) -> None:
+        if message.guild is None or message.channel.id not in self._subs:
+            return
+        await self._broadcast(message.channel.id, {"t": "del", "mid": str(message.id)})
 
     # Actions
 
