@@ -734,6 +734,26 @@ class Storage:
             (guild_id, channel_id, like, limit),
         )
 
+    def member_stats(self, guild_id: int, user_id: int) -> tuple[int, float | None, float | None, str]:
+        """`(stored message count, first seen, last seen, latest name)` for one member."""
+        rows = self._read(
+            "SELECT COUNT(*), MIN(created_at), MAX(created_at), "
+            "(SELECT author_name FROM corpus WHERE guild_id = ? AND author_id = ? AND author_name != '' "
+            " ORDER BY created_at DESC LIMIT 1) "
+            "FROM corpus WHERE guild_id = ? AND author_id = ?",
+            (guild_id, user_id, guild_id, user_id),
+        )
+        count, first, last, name = rows[0]
+        return int(count or 0), first, last, name or ""
+
+    def member_top_channels(self, guild_id: int, user_id: int, limit: int = 5) -> list[tuple[int, int]]:
+        """`(channel_id, message count)` where this member talks most."""
+        return self._read(
+            "SELECT channel_id, COUNT(*) FROM corpus WHERE guild_id = ? AND author_id = ? "
+            "GROUP BY channel_id ORDER BY COUNT(*) DESC LIMIT ?",
+            (guild_id, user_id, limit),
+        )
+
     def top_authors(self, guild_id: int, limit: int = 40) -> list[tuple[int, str, int]]:
         """`(author_id, latest name, stored messages)` for the most active members."""
         return self._read(

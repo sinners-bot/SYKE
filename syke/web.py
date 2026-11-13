@@ -12,7 +12,7 @@ import html
 import logging
 import re
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from urllib.parse import quote
 from typing import Awaitable, Callable, Optional
@@ -46,6 +46,10 @@ SIDEBAR_JS = (
 
 def esc(value: object) -> str:
     return html.escape(str(value if value is not None else ""))
+
+
+def _role_pos(member) -> int:
+    return getattr(getattr(member, "top_role", None), "position", 0) or 0
 
 
 def base_url(request: web.Request, settings) -> str:
@@ -176,6 +180,35 @@ display:flex;justify-content:space-between;align-items:center;}
 .sr .jump{margin-left:auto;font-size:12px;}
 .sr .text{white-space:pre-wrap;word-break:break-word;color:#dbdee1;margin-top:2px;}
 mark{background:#f5b30155;color:#ffe08a;border-radius:2px;padding:0 1px;}
+.m .name{text-decoration:none;}
+.m .name:hover{text-decoration:underline;}
+.m .av img{cursor:pointer;}
+/* Member list (right column) */
+.dc-members{width:240px;flex:0 0 240px;background:#17171d;border-left:1px solid var(--line);overflow-y:auto;padding:12px 8px;}
+.dc-members .mcat{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:700;margin:12px 8px 4px;}
+.mrow{display:flex;gap:10px;align-items:center;padding:4px 8px;border-radius:6px;color:#c6c9d2;}
+.mrow:hover{background:#22222c;text-decoration:none;color:#fff;}
+.mrow img{width:28px;height:28px;border-radius:50%;}
+.mrow .mn{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px;}
+.mrow .mbot{font-size:8px;background:var(--brand);color:#fff;border-radius:3px;padding:0 3px;margin-left:4px;}
+@media(max-width:900px){.dc-members{display:none;}}
+/* Profile page */
+.prof{max-width:720px;margin:0 auto;padding:24px 20px;}
+.prof-top{display:flex;gap:18px;align-items:center;}
+.prof-top img{width:96px;height:96px;border-radius:50%;}
+.prof-name{font-size:24px;font-weight:700;}
+.prof-user{color:var(--muted);}
+.prof-roles{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+.prof-role{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:2px 10px;display:flex;align-items:center;gap:5px;}
+.prof-role .dot{width:8px;height:8px;border-radius:50%;}
+.prof-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:18px;}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;}
+.stat .k{color:var(--muted);font-size:12px;}
+.stat .v{font-size:20px;font-weight:700;margin-top:2px;}
+.prof-sec{margin-top:22px;}
+.prof-sec h3{font-size:15px;margin:0 0 8px;}
+.bar{height:8px;border-radius:6px;background:var(--panel2);overflow:hidden;margin:4px 0 8px;}
+.bar > i{display:block;height:100%;background:var(--brand);}
 """
 
 
@@ -235,6 +268,7 @@ class WebDashboard:
         a("/callback", self.callback)
         a("/logout", self.logout)
         a("/g/{gid}", self.server)
+        a("/g/{gid}/u/{uid}", self.member_profile)
         a("/g/{gid}/c/{cid}", self.channel)
         a("/g/{gid}/c/{cid}/messages", self.channel_messages)
         a("/g/{gid}/c/{cid}/media", self.channel_media)
@@ -599,10 +633,11 @@ class WebDashboard:
         reactions = "".join(
             f"<span class='rx'>{esc(str(r.emoji))} {r.count}</span>" for r in getattr(m, "reactions", [])
         )
+        profile = f"/g/{getattr(getattr(m, 'guild', None), 'id', 0)}/u/{author.id}"
         head = ("" if same else
-                f"<div class='head'><span class='name'{name_style}>{esc(author.display_name)}{app}</span>"
+                f"<div class='head'><a class='name' href='{profile}'{name_style}>{esc(author.display_name)}{app}</a>"
                 f"<time class='ts' data-ts='{ts}'></time></div>")
-        av = f"<div class='av'><img src='{esc(avatar)}' alt='' loading='lazy'></div>"
+        av = f"<a class='av' href='{profile}'><img src='{esc(avatar)}' alt='' loading='lazy'></a>"
         return (f"<div class='m{' grouped' if same else ''}' data-mid='{m.id}'>{av}"
                 f"<div class='content'>{reply}{head}{body}{''.join(atts)}{''.join(embeds)}{reactions}</div></div>")
 
@@ -659,9 +694,10 @@ class WebDashboard:
         else:
             inp = "<div class='dc-input'><div class='note'>SYKE can't send messages in this channel.</div></div>"
         flash_html = flash(request)
+        members = self._member_list(guild)
         body = (
             f"<div class='dc'>{sidebar}<div class='dc-main'>{head}"
-            f"<div class='dc-msgs' id='messages'>{flash_html}{messages}</div>{inp}</div></div>"
+            f"<div class='dc-msgs' id='messages'>{flash_html}{messages}</div>{inp}</div>{members}</div>"
             "<script>"
             "function fmt(s){var d=new Date(s*1000),n=new Date(),"
             "t=d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),"
@@ -691,6 +727,147 @@ class WebDashboard:
             "</script>"
         )
         return layout(f"#{channel.name}", body, user=user, wide=True)
+
+    def _member_list(self, guild: discord.Guild, limit: int = 200) -> str:
+        """Right-hand member column, grouped by top role, Discord-style. Best-effort from cache."""
+        raw = getattr(guild, "members", [])
+        members = [m for m in (raw.values() if isinstance(raw, dict) else raw) if m is not None]
+        if not members:
+            return "<div class='dc-members'><div class='mcat'>Members</div>" \
+                   "<div class='muted' style='padding:6px 8px'>Member list needs the Server Members intent.</div></div>"
+        members = sorted(members, key=lambda m: (-_role_pos(m), (m.display_name or "").lower()))[:limit]
+        groups: dict[str, list] = {}
+        order: list[str] = []
+        for m in members:
+            role = getattr(m, "top_role", None)
+            label = role.name if role is not None and not role.is_default() else "Members"
+            if label not in groups:
+                groups[label] = []
+                order.append(label)
+            groups[label].append(m)
+        rows = [f"<div class='dc-members'><div class='mcat'>Members — {len(members)}</div>"]
+        for label in order:
+            rows.append(f"<div class='mcat'>{esc(label)} — {len(groups[label])}</div>")
+            for m in groups[label]:
+                avatar = getattr(getattr(m, "display_avatar", None), "url", "")
+                colour = getattr(getattr(m, "colour", None), "value", 0)
+                style = f" style='color:#{colour:06x}'" if colour else ""
+                bot = "<span class='mbot'>APP</span>" if getattr(m, "bot", False) else ""
+                rows.append(f"<a class='mrow' href='/g/{guild.id}/u/{m.id}'>"
+                            f"<img src='{esc(avatar)}' alt='' loading='lazy'>"
+                            f"<span class='mn'{style}>{esc(m.display_name)}{bot}</span></a>")
+        rows.append("</div>")
+        return "".join(rows)
+
+    async def member_profile(self, request: web.Request) -> web.Response:
+        user = self._user(request)
+        if user is None:
+            raise web.HTTPFound("/login")
+        guild = self._guild_or_404(request)
+        try:
+            uid = int(request.match_info["uid"])
+        except ValueError:
+            raise web.HTTPNotFound(text="bad user id")
+        member = guild.get_member(uid)
+        if member is None:
+            with contextlib.suppress(discord.HTTPException):
+                member = await guild.fetch_member(uid)
+        body = self._profile_body(guild, uid, member, user[0])
+        name = getattr(member, "display_name", None) or f"User {uid}"
+        return layout(name, body, user=user)
+
+    def _profile_body(self, guild: discord.Guild, uid: int, member, owner_id: int) -> str:
+        storage = self.bot.storage
+        count, first, last, stored_name = storage.member_stats(guild.id, uid)
+        cases = storage.cases(guild.id, uid)
+        now = time.time()
+        restrictions = [r for r in storage.restrictions(guild.id, uid) if r[2] is None or r[2] > now]
+        name = getattr(member, "display_name", None) or stored_name or f"User {uid}"
+        username = getattr(member, "name", None)
+        avatar = getattr(getattr(member, "display_avatar", None), "url", "")
+        header_img = f"<img src='{esc(avatar)}' alt=''>" if avatar else ""
+        roles_html = ""
+        if member is not None and hasattr(member, "roles"):
+            chips = []
+            for r in sorted([r for r in member.roles if not r.is_default()],
+                            key=lambda r: r.position, reverse=True):
+                colour = r.colour.value or 0x99AAB5
+                chips.append(f"<span class='prof-role'><span class='dot' style='background:#{colour:06x}'></span>"
+                             f"{esc(r.name)}</span>")
+            roles_html = f"<div class='prof-roles'>{''.join(chips)}</div>" if chips else ""
+        created = getattr(member, "created_at", None)
+        joined = getattr(member, "joined_at", None)
+
+        def when(dt):
+            return f"<time data-ts='{int(dt.timestamp())}'></time>" if dt else "—"
+
+        stats = [
+            ("Stored messages", f"{count:,}"),
+            ("First seen", when(datetime.fromtimestamp(first, timezone.utc)) if first else "—"),
+            ("Last seen", when(datetime.fromtimestamp(last, timezone.utc)) if last else "—"),
+            ("Joined server", when(joined)),
+            ("Account made", when(created)),
+            ("Mod cases", str(len(cases))),
+        ]
+        stat_html = "".join(f"<div class='stat'><div class='k'>{k}</div><div class='v'>{v}</div></div>"
+                            for k, v in stats)
+        top = storage.member_top_channels(guild.id, uid)
+        chan_html = ""
+        if top:
+            items = []
+            for cid, n in top:
+                ch = guild.get_channel(cid)
+                where = f"<a href='/g/{guild.id}/c/{cid}'>#{esc(ch.name)}</a>" if ch else f"channel {cid}"
+                items.append(f"<li>{where} — {n:,} messages</li>")
+            chan_html = f"<div class='prof-sec'><h3>Most active in</h3><ul>{''.join(items)}</ul></div>"
+        restr_html = ""
+        if restrictions:
+            parts = []
+            for _, kind, ends, *_ in restrictions:
+                parts.append(f"{esc(kind)}" + (f" (ends <time data-ts='{int(ends)}'></time>)" if ends else " (permanent)"))
+            restr_html = f"<div class='prof-sec'><h3>Active restrictions</h3><p>{', '.join(parts)}</p></div>"
+        hist_html = "<div class='prof-sec'><h3>Moderation history</h3>"
+        if cases:
+            lines = []
+            for number, mod_id, action, reason, duration, created_at in cases[:20]:
+                dur = f" · {human_duration(duration)}" if duration else ""
+                lines.append(f"<li><code>#{number}</code> <strong>{esc(action)}</strong>{dur} · "
+                             f"<time data-ts='{int(created_at)}'></time> by &lt;@{mod_id}&gt; — "
+                             f"{esc(reason or 'no reason')}</li>")
+            hist_html += f"<ul>{''.join(lines)}</ul>"
+            if len(cases) > 20:
+                hist_html += f"<p class='muted'>…and {len(cases) - 20} older</p>"
+        else:
+            hist_html += "<p class='muted'>Clean record.</p>"
+        hist_html += "</div>"
+        actions = ""
+        if member is not None:
+            csrf = self._hidden_csrf(owner_id)
+            actions = (
+                f"<div class='prof-sec'><h3>Actions</h3>"
+                f"<form method='post' action='/g/{guild.id}/mod' class='card'>{csrf}"
+                f"<input type='hidden' name='user_id' value='{uid}'>"
+                f"<div class='row'><select name='action'>"
+                f"<option value='timeout'>Timeout</option><option value='warn'>Warn</option>"
+                f"<option value='restrict'>Restrict</option><option value='kick'>Kick</option>"
+                f"<option value='ban'>Ban</option><option value='untimeout'>Untimeout</option>"
+                f"<option value='unrestrict'>Unrestrict</option></select>"
+                f"<input name='duration' placeholder='10m (timeout/restrict)' style='max-width:180px'>"
+                f"<input name='reason' placeholder='Reason'>"
+                f"<button class='btn brand'>Apply</button></div></form></div>"
+            )
+        gone = "" if member is not None else "<div class='note'>Not in the server right now — showing stored data.</div>"
+        handle = f"<div class='prof-user'>@{esc(username)}</div>" if username else ""
+        back = f"<div class='muted'><a href='/g/{guild.id}'>← {esc(guild.name)}</a></div>"
+        return (
+            f"<div class='prof'>{back}{gone}"
+            f"<div class='prof-top'>{header_img}<div><div class='prof-name'>{esc(name)}</div>{handle}"
+            f"<div class='muted'>ID {uid}</div>{roles_html}</div></div>"
+            f"<div class='prof-grid'>{stat_html}</div>{chan_html}{restr_html}{hist_html}{actions}</div>"
+            "<script>document.querySelectorAll('time[data-ts]').forEach(function(e){"
+            "var d=new Date(+e.dataset.ts*1000);e.textContent=d.toLocaleDateString()+' '+"
+            "d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});});</script>"
+        )
 
     async def channel_media(self, request: web.Request) -> web.Response:
         user = self._user(request)

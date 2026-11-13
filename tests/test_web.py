@@ -382,6 +382,30 @@ def test_attachment_previews_render_inline(dash):
     assert "autoplay loop muted" in html and "https://cdn/g.mp4" in html  # gif as video
 
 
+async def test_member_profile_page(dash):
+    async with serving(dash) as (cl, web, bot, guild):
+        bot.storage.add_corpus(guild.id, [
+            (1, 10, 7, "hello world one", 1_700_000_000.0, "user7", 0, 0),
+            (2, 10, 7, "hello world two", 1_700_000_100.0, "user7", 0, 0),
+        ])
+        bot.storage.add_case(guild.id, 7, 2, "warn", "being rude")
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        body = await (await cl.get(f"/g/{guild.id}/u/7")).text()
+        assert "prof-top" in body                    # profile header
+        assert "Stored messages" in body and "2" in body
+        assert "Moderation history" in body and "being rude" in body
+        assert f"action='/g/{guild.id}/mod'" in body  # quick actions prefilled
+        assert "value='7'" in body
+
+
+async def test_chat_has_member_list_and_clickable_authors(dash):
+    async with serving(dash) as (cl, web, bot, guild):
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        body = await (await cl.get(f"/g/{guild.id}/c/10")).text()
+        assert "dc-members" in body                   # right-hand member column
+        assert f"/g/{guild.id}/u/7" in body           # member row links to profile
+
+
 def test_html_escaping_blocks_injection():
     assert esc("<script>alert(1)</script>") == "&lt;script&gt;alert(1)&lt;/script&gt;"
 
