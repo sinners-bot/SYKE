@@ -302,6 +302,69 @@ async def test_history_paging_with_before(dash):
         assert "?before='+f.dataset.mid" in page and "addEventListener('scroll'" in page
 
 
+def test_hour_histogram_and_peak_window():
+    from datetime import datetime, timezone
+
+    from syke.web import hour_histogram, peak_window
+    tz = timezone.utc
+    t14 = datetime(2026, 1, 1, 14, 0, tzinfo=tz).timestamp()
+    t15 = datetime(2026, 1, 1, 15, 0, tzinfo=tz).timestamp()
+    h = hour_histogram([t14, t14, t15], tz)
+    assert h[14] == 2 and h[15] == 1 and sum(h) == 3
+    assert peak_window([0] * 24) is None
+    pk = peak_window(h)
+    assert pk is not None and pk[0] in (13, 14)
+
+
+def test_join_clusters_groups_bursts():
+    from syke.web import join_clusters
+    joins = [
+        (1, None, "", "", "", 100.0), (2, None, "", "", "", 110.0), (3, None, "", "", "", 150.0),
+        (9, None, "", "", "", 5000.0),   # lone, far apart
+    ]
+    assert join_clusters(joins, window=60, min_size=3) == [[1, 2, 3]]
+    assert join_clusters(joins, window=5, min_size=3) == []   # too strict a window
+
+
+def test_activity_html_renders_heatmap(dash):
+    web, bot, guild = dash
+    from datetime import datetime, timezone
+    base = datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc).timestamp()
+    bot.storage.member_post_times = lambda gid, uid, limit=5000: [base] * 6
+    html = web._activity_html(guild, 7)
+    assert "Activity by hour" in html and "hbf" in html and "Most active" in html
+
+
+def test_activity_html_empty_when_no_data(dash):
+    web, bot, guild = dash
+    bot.storage.member_post_times = lambda gid, uid, limit=5000: []
+    assert web._activity_html(guild, 7) == ""
+
+
+def test_alts_body_flags_new_accounts_bursts_and_inviters(dash):
+    web, bot, _ = dash
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+
+    def mem(uid, days, avatar=True):
+        return types.SimpleNamespace(id=uid, bot=False, display_name=f"u{uid}",
+                                     created_at=now - timedelta(days=days),
+                                     avatar=(object() if avatar else None),
+                                     display_avatar=types.SimpleNamespace(url=f"https://cdn/{uid}.png"))
+
+    members = [mem(1, 2, avatar=False), mem(2, 5), mem(3, 1000)]
+    g = types.SimpleNamespace(id=42, name="G", members=members,
+                              get_member=lambda uid: next((m for m in members if m.id == uid), None))
+    joins = [(10, 99, "Inv", "abc", "normal", 1000.0), (11, 99, "Inv", "abc", "normal", 1010.0),
+             (12, 99, "Inv", "abc", "normal", 1020.0)]
+    bot.storage.joins_all = lambda gid: joins
+    html = web._alts_body(g)
+    assert "Newest accounts" in html and "no avatar" in html       # u1 (2d, no avatar)
+    assert "u2" in html and "u3" not in html                       # young flagged, 1000d-old account isn't
+    assert "Join bursts" in html and "3 joined together" in html
+    assert "Top inviters" in html and "Inv" in html
+
+
 def _reaction(emoji, who, count=None):
     async def users_fn(limit=100):
         for u in who:

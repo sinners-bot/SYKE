@@ -754,6 +754,22 @@ class Storage:
             (guild_id, user_id, limit),
         )
 
+    def member_post_times(self, guild_id: int, user_id: int, limit: int = 5000) -> list[float]:
+        """Created-at timestamps of a member's stored messages, newest first — for activity patterns."""
+        rows = self._read(
+            "SELECT created_at FROM corpus WHERE guild_id = ? AND author_id = ? AND created_at IS NOT NULL "
+            "ORDER BY created_at DESC LIMIT ?",
+            (guild_id, user_id, limit),
+        )
+        return [r[0] for r in rows]
+
+    def joins_all(self, guild_id: int) -> list[tuple]:
+        """Every recorded join: `(user_id, inviter_id, inviter_name, code, kind, joined_at)`."""
+        return self._read(
+            "SELECT user_id, inviter_id, inviter_name, code, kind, joined_at FROM joins WHERE guild_id = ?",
+            (guild_id,),
+        )
+
     def top_authors(self, guild_id: int, limit: int = 40) -> list[tuple[int, str, int]]:
         """`(author_id, latest name, stored messages)` for the most active members."""
         return self._read(

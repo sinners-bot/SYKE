@@ -163,6 +163,48 @@ def rough_age(dt, now: datetime | None = None) -> str:
     return f"{yrs}y" + (f" {rem}mo" if rem else "")
 
 
+def hour_histogram(times, tz) -> list[int]:
+    """Count a member's messages into 24 local-hour buckets."""
+    hours = [0] * 24
+    for t in times:
+        try:
+            hours[datetime.fromtimestamp(t, tz).hour] += 1
+        except (ValueError, OSError, OverflowError):
+            continue
+    return hours
+
+
+def peak_window(hours: list[int]) -> tuple[int, int] | None:
+    """The busiest 3-hour window (start, end) given an hourly histogram, or None if silent."""
+    if not any(hours):
+        return None
+    best_start, best_sum = 0, -1
+    for start in range(24):
+        total = sum(hours[(start + i) % 24] for i in range(3))
+        if total > best_sum:
+            best_start, best_sum = start, total
+    return best_start, (best_start + 3) % 24
+
+
+def join_clusters(joins, window: float = 60, min_size: int = 3) -> list[list[int]]:
+    """Group user ids whose joins fall within `window` seconds of each other (raid-join bursts)."""
+    timed = sorted(((j[5], j[0]) for j in joins if j[5] is not None), key=lambda x: x[0])
+    clusters: list[list[int]] = []
+    current: list[int] = []
+    last = None
+    for ts, uid in timed:
+        if last is not None and ts - last <= window:
+            current.append(uid)
+        else:
+            if len(current) >= min_size:
+                clusters.append(current)
+            current = [uid]
+        last = ts
+    if len(current) >= min_size:
+        clusters.append(current)
+    return clusters
+
+
 # HTML
 
 STYLE = """
@@ -186,6 +228,15 @@ padding:2px 10px;font-size:12px;color:var(--muted);}
 .chips{display:flex;flex-wrap:wrap;gap:6px;}
 .chip.perm{color:#dbdee1;border-color:var(--brand);}
 .note.warn{border-left-color:var(--warn);color:#f3c780;}
+.heat{display:flex;align-items:flex-end;gap:3px;height:90px;margin-top:6px;}
+.hb{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;gap:3px;}
+.hb .hbf{width:100%;background:var(--brand);border-radius:3px 3px 0 0;min-height:3px;}
+.hb span{font-size:9px;color:var(--muted);}
+.altgrid{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;}
+.altu{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:2px 10px 2px 2px;font-size:13px;color:#c4c7d0;}
+.altu:hover{color:#fff;text-decoration:none;border-color:var(--brand);}
+.altu img{width:22px;height:22px;border-radius:50%;}
+.altburst{margin:8px 0;padding:8px 10px;background:#17171d;border:1px solid var(--line);border-radius:8px;}
 .btn{display:inline-block;background:var(--panel2);border:1px solid var(--line);color:var(--text);
 border-radius:8px;padding:7px 12px;font-size:14px;cursor:pointer;}
 .btn:hover{border-color:var(--brand);text-decoration:none;}
@@ -426,6 +477,7 @@ class WebDashboard:
         a("/g/{gid}", self.server)
         a("/g/{gid}/emojis", self.server_emojis)
         a("/g/{gid}/u/{uid}", self.member_profile)
+        a("/g/{gid}/alts", self.alt_scan)
         a("/g/{gid}/c/{cid}", self.channel)
         a("/g/{gid}/c/{cid}/messages", self.channel_messages)
         a("/g/{gid}/c/{cid}/m/{mid}/reactions", self.message_reactions)
@@ -615,7 +667,8 @@ class WebDashboard:
             f"{flash(request)}<h1>{esc(guild.name)}</h1>"
             f"<div class='muted'>{guild.member_count or 0} members · owner "
             f"{esc(getattr(guild.owner, 'display_name', guild.owner_id))} · "
-            f"<a href='/g/{guild.id}/emojis'>{emoji_count} emojis</a></div>"
+            f"<a href='/g/{guild.id}/emojis'>{emoji_count} emojis</a> · "
+            f"<a href='/g/{guild.id}/alts'>🔎 Alt &amp; raid scan</a></div>"
             f"<div class='grid' style='margin-top:14px'>{settings_form}{mod}{danger}</div>"
             f"<h2>Channels</h2><table>{''.join(rows) or '<tr><td>No text channels</td></tr>'}</table>"
         )
@@ -1118,6 +1171,68 @@ class WebDashboard:
         name = getattr(member, "display_name", None) or f"User {uid}"
         return layout(name, body, user=user)
 
+    async def alt_scan(self, request: web.Request) -> web.Response:
+        user = self._user(request)
+        if user is None:
+            raise web.HTTPFound("/login")
+        guild = self._guild_or_404(request)
+        return layout(f"Alt scan · {guild.name}", self._alts_body(guild), user=user)
+
+    def _alts_body(self, guild: discord.Guild) -> str:
+        now = datetime.now(timezone.utc)
+        members = [m for m in getattr(guild, "members", []) or [] if not getattr(m, "bot", False)]
+
+        def card(uid, extra=""):
+            m = guild.get_member(uid)
+            name = getattr(m, "display_name", None) or f"user {uid}"
+            av = getattr(getattr(m, "display_avatar", None), "url", "")
+            return (f"<a class='altu' href='/g/{guild.id}/u/{uid}'>"
+                    f"<img src='{esc(av)}' alt='' loading='lazy'><span>{esc(name)}</span>"
+                    f"{(' <span class=muted>' + extra + '</span>') if extra else ''}</a>")
+
+        secs = [f"<div class='muted'><a href='/g/{guild.id}'>← {esc(guild.name)}</a></div>"
+                "<h1>🔎 Alt &amp; raid scan</h1>"
+                "<p class='muted'>Heuristics over this server's own member and join data — signals, not proof.</p>"]
+
+        # Youngest accounts (and whether they've set an avatar).
+        aged = sorted((m for m in members if getattr(m, "created_at", None)),
+                      key=lambda m: m.created_at, reverse=True)[:20]
+        young = [m for m in aged if (now - m.created_at).days < 30]
+        if young:
+            rows = "".join(card(m.id, f"{rough_age(m.created_at, now)} old"
+                                 + ("  · no avatar" if getattr(m, "avatar", True) is None else ""))
+                           for m in young)
+            secs.append(f"<div class='prof-sec'><h3>Newest accounts ({len(young)} under 30 days)</h3>"
+                        f"<div class='altgrid'>{rows}</div></div>")
+
+        # Join bursts — many members arriving within a minute of each other.
+        joins = self.bot.storage.joins_all(guild.id)
+        clusters = join_clusters(joins, window=60, min_size=3)
+        if clusters:
+            blocks = []
+            for cl in clusters[:10]:
+                blocks.append(f"<div class='altburst'><div class='muted'>{len(cl)} joined together</div>"
+                              f"<div class='altgrid'>{''.join(card(uid) for uid in cl)}</div></div>")
+            secs.append(f"<div class='prof-sec'><h3>Join bursts ({len(clusters)})</h3>{''.join(blocks)}</div>")
+
+        # Who's inviting the most members.
+        by_inviter: dict[int, list[int]] = defaultdict(list)
+        names: dict[int, str] = {}
+        for uid, inviter_id, inviter_name, code, kind, _ in joins:
+            if inviter_id:
+                by_inviter[inviter_id].append(uid)
+                names[inviter_id] = inviter_name or f"user {inviter_id}"
+        ranked = sorted(by_inviter.items(), key=lambda kv: len(kv[1]), reverse=True)[:12]
+        if ranked:
+            items = "".join(
+                f"<li><a href='/g/{guild.id}/u/{iid}'>{esc(names[iid])}</a> — {len(uids)} member(s)</li>"
+                for iid, uids in ranked)
+            secs.append(f"<div class='prof-sec'><h3>Top inviters</h3><ul>{items}</ul></div>")
+
+        if len(secs) == 2:  # only the header + intro
+            secs.append("<div class='note'>Nothing flagged — no very new accounts, join bursts or invite data yet.</div>")
+        return "<div class='prof'>" + "".join(secs) + "</div>"
+
     def _profile_body(self, guild: discord.Guild, uid: int, member, owner_id: int) -> str:
         storage = self.bot.storage
         count, first, last, stored_name = storage.member_stats(guild.id, uid)
@@ -1157,6 +1272,7 @@ class WebDashboard:
         stat_html = "".join(f"<div class='stat'><div class='k'>{k}</div><div class='v'>{v}</div></div>"
                             for k, v in stats)
         intel_html = self._intel_html(guild, uid, member, created, now_dt)
+        activity_html = self._activity_html(guild, uid)
         top = storage.member_top_channels(guild.id, uid)
         chan_html = ""
         if top:
@@ -1209,7 +1325,7 @@ class WebDashboard:
             f"<div class='prof'>{back}{gone}"
             f"<div class='prof-top'>{header_img}<div><div class='prof-name'>{esc(name)}</div>{handle}"
             f"<div class='muted'>ID {uid}</div>{roles_html}</div></div>"
-            f"<div class='prof-grid'>{stat_html}</div>{intel_html}{chan_html}{restr_html}{hist_html}{actions}</div>"
+            f"<div class='prof-grid'>{stat_html}</div>{intel_html}{activity_html}{chan_html}{restr_html}{hist_html}{actions}</div>"
             "<script>document.querySelectorAll('time[data-ts]').forEach(function(e){"
             "var d=new Date(+e.dataset.ts*1000);e.textContent=d.toLocaleDateString()+' '+"
             "d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});});</script>"
@@ -1265,6 +1381,25 @@ class WebDashboard:
             more = f" +{len(mutual) - 15} more" if len(mutual) > 15 else ""
             secs.append(f"<div class='prof-sec'><h3>Also in ({len(mutual)})</h3><p>{links}{more}</p></div>")
         return "".join(secs)
+
+    def _activity_html(self, guild: discord.Guild, uid: int) -> str:
+        """A 24-hour activity heatmap (in the server's timezone) from stored message times."""
+        tz = self.bot.tz_for(guild.id)
+        hours = hour_histogram(self.bot.storage.member_post_times(guild.id, uid), tz)
+        if not any(hours):
+            return ""
+        peak = peak_window(hours)
+        top = max(hours) or 1
+        bars = []
+        for h in range(24):
+            pct = int(round(hours[h] / top * 100))
+            bars.append(f"<div class='hb' title='{hours[h]} msgs around {h:02d}:00'>"
+                        f"<div class='hbf' style='height:{max(pct, 3)}%'></div><span>{h:02d}</span></div>")
+        tzname = getattr(tz, "key", str(tz))
+        note = (f"<p class='muted'>Most active around <strong>{peak[0]:02d}:00–{peak[1]:02d}:00</strong> "
+                f"({esc(tzname)}).</p>" if peak else "")
+        return (f"<div class='prof-sec'><h3>Activity by hour</h3>{note}"
+                f"<div class='heat'>{''.join(bars)}</div></div>")
 
     async def channel_media(self, request: web.Request) -> web.Response:
         user = self._user(request)
