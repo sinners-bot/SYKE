@@ -524,6 +524,8 @@ border-radius:8px;padding:10px 12px;max-width:400px;color:var(--text);}
 .cv-btn{display:inline-block;margin:4px 4px 0 0;font-size:12px;background:#3a3c43;border:1px solid var(--line);border-radius:6px;padding:3px 10px;color:#dbdee1;}
 .cv-btn:hover{border-color:var(--brand);text-decoration:none;}
 .sr-ch{font-size:12px;color:var(--muted);margin-left:8px;}
+.fwd{border-left:3px solid #4e5058;background:#2b2d3155;border-radius:4px;padding:4px 10px;margin-top:4px;max-width:520px;}
+.fwd-tag{font-size:11px;color:var(--muted);font-style:italic;margin-bottom:2px;}
 .rx{display:inline-flex;gap:5px;align-items:center;background:#2b2d31;border:1px solid var(--line);border-radius:8px;padding:1px 7px;font-size:12px;margin:5px 4px 0 0;color:#b9bbbe;}
 button.rx.rxc{cursor:pointer;font-family:inherit;}
 button.rx.rxc:hover{border-color:var(--brand);color:#fff;}
@@ -1115,8 +1117,47 @@ class WebDashboard:
         colour = getattr(getattr(member, "colour", None), "value", 0)
         return f" style='color:#{colour:06x}'" if colour else ""
 
+    @staticmethod
+    def _attachment_html(a) -> str:
+        ct = (getattr(a, "content_type", None) or "").lower()
+        url = esc(a.url)
+        fn = esc(getattr(a, "filename", "file"))
+        if ct.startswith("image"):
+            return (f"<a class='att' href='{url}' target='_blank' rel='noreferrer'>"
+                    f"<img src='{url}' alt='{fn}' loading='lazy'></a>")
+        if ct.startswith("video"):
+            return (f"<div class='att'><video class='att-media' src='{url}' controls "
+                    f"preload='metadata'></video></div>")
+        if ct.startswith("audio"):
+            return (f"<div class='att att-audio'><div class='fn'>🎵 {fn}</div>"
+                    f"<audio src='{url}' controls preload='none'></audio></div>")
+        kb = f"{a.size // 1024} KB" if getattr(a, "size", 0) else "file"
+        return (f"<a class='att att-file' href='{url}' target='_blank' rel='noreferrer'>"
+                f"<span class='fi'>📎</span><span class='fn'>{fn}<br><span class='muted'>{kb}</span></span></a>")
+
+    def _forward_html(self, m, guild) -> str:
+        """Render forwarded message snapshots (Discord 'Forward') as a quoted block."""
+        snaps = getattr(m, "message_snapshots", None) or []
+        blocks = []
+        for s in snaps:
+            names = _mention_names(s)
+            inner = []
+            content = getattr(s, "content", "") or ""
+            if content.strip():
+                inner.append(f"<div class='text'>{render_content(content, guild, names)}</div>")
+            for st in getattr(s, "stickers", []) or []:
+                url = getattr(st, "url", None)
+                if url:
+                    inner.append(f"<img class='sticker' src='{esc(url)}' alt='' loading='lazy'>")
+            inner.extend(self._attachment_html(a) for a in getattr(s, "attachments", []) or [])
+            inner.extend(self._embed_html(e, guild, names) for e in getattr(s, "embeds", []) or [])
+            inner.append(self._components_html(getattr(s, "components", []) or [], guild, names))
+            body = "".join(x for x in inner if x) or "<div class='text empty'>(no content)</div>"
+            blocks.append(f"<div class='fwd'><div class='fwd-tag'>↪ Forwarded</div>{body}</div>")
+        return "".join(blocks)
+
     def _one_message(self, m: discord.Message, prev: discord.Message | None,
-                     refs: dict | None = None) -> str:
+                     refs: dict | None = None, deleted: set | None = None) -> str:
         author = m.author
         same = (prev is not None and prev.author.id == author.id
                 and (m.created_at - prev.created_at).total_seconds() < 420
@@ -1128,7 +1169,9 @@ class WebDashboard:
         ts = int(m.created_at.timestamp())
         guild = getattr(m, "guild", None)
         reply = ""
-        if m.reference is not None:
+        reftype = getattr(getattr(m.reference, "type", None), "name", "default") if m.reference else None
+        # A forward's reference points at the source, not a reply — don't render a reply stub for it.
+        if m.reference is not None and reftype != "forward":
             ref = m.reference.resolved
             if not self._is_message(ref) and refs:
                 ref = refs.get(getattr(m.reference, "message_id", None)) or ref
@@ -1151,11 +1194,16 @@ class WebDashboard:
                          f"<span class='ra'>↳</span><img class='rav' src='{esc(ref_av)}' alt=''>"
                          f"<span class='rn'{self._name_colour(ref.author)}>{esc(ref_name)}</span>"
                          f"<span class='rt'>{snippet}</span></div>")
+            elif ref_mid and deleted and ref_mid in deleted:
+                reply = ("<div class='reply'><span class='ra'>↳</span>"
+                         "<span class='rt rmeta'>Original message was deleted</span></div>")
             else:
-                # Referenced message couldn't be resolved (deleted, or beyond fetch budget).
-                data = f" data-jump='{ref_mid}'" if ref_mid else ""
-                reply = f"<div class='reply'{data}><span class='ra'>↳</span>" \
-                        "<span class='rt rmeta'>Original message was deleted</span></div>"
+                # Unresolved but not known-deleted — a clickable stub, not a false "deleted".
+                jump = (f"https://discord.com/channels/{getattr(guild, 'id', 0)}/"
+                        f"{getattr(m, 'channel', None) and m.channel.id}/{ref_mid}")
+                data = f" data-jump='{ref_mid}' data-href='{esc(jump)}'" if ref_mid else ""
+                reply = (f"<div class='reply'{data}><span class='ra'>↳</span>"
+                         "<span class='rt rmeta'>replying to a message</span></div>")
         raw = m.content or ""
         names = _mention_names(m)
         text_html = render_content(raw, guild, names)
@@ -1168,27 +1216,11 @@ class WebDashboard:
             if url:
                 stickers.append(f"<img class='sticker' src='{esc(url)}' "
                                 f"alt='{esc(getattr(s, 'name', 'sticker'))}' loading='lazy'>")
-        atts = []
-        for a in m.attachments:
-            ct = (a.content_type or "").lower()
-            url = esc(a.url)
-            if ct.startswith("image"):
-                atts.append(f"<a class='att' href='{url}' target='_blank' rel='noreferrer'>"
-                            f"<img src='{url}' alt='{esc(a.filename)}' loading='lazy'></a>")
-            elif ct.startswith("video"):
-                atts.append(f"<div class='att'><video class='att-media' src='{url}' controls "
-                            f"preload='metadata'></video></div>")
-            elif ct.startswith("audio"):
-                atts.append(f"<div class='att att-audio'><div class='fn'>🎵 {esc(a.filename)}</div>"
-                            f"<audio src='{url}' controls preload='none'></audio></div>")
-            else:
-                kb = f"{a.size // 1024} KB" if getattr(a, "size", 0) else "file"
-                atts.append(f"<a class='att att-file' href='{url}' target='_blank' rel='noreferrer'>"
-                            f"<span class='fi'>📎</span><span class='fn'>{esc(a.filename)}"
-                            f"<br><span class='muted'>{kb}</span></span></a>")
+        atts = [self._attachment_html(a) for a in m.attachments]
         embeds = [self._embed_html(e, guild, names) for e in m.embeds]
         embeds = [h for h in embeds if h]
         components_html = self._components_html(getattr(m, "components", []) or [], guild, names)
+        forward_html = self._forward_html(m, guild)
         rx = []
         for r in getattr(m, "reactions", []):
             e = r.emoji
@@ -1199,7 +1231,8 @@ class WebDashboard:
             rx.append(f"<button type='button' class='rx rxc' title='See who reacted'>{glyph} {r.count}</button>")
         reactions = f"<div class='rxs'>{''.join(rx)}</div>" if rx else ""
         body = text
-        if not text and not stickers and not m.attachments and not m.embeds and not components_html:
+        if (not text and not stickers and not m.attachments and not m.embeds
+                and not components_html and not forward_html):
             body = "<div class='text empty'>(no text content)</div>"
         profile = f"/g/{getattr(guild, 'id', 0)}/u/{author.id}"
         head = ("" if same else
@@ -1208,7 +1241,7 @@ class WebDashboard:
         av = f"<a class='av' href='{profile}'><img src='{esc(avatar)}' alt='' loading='lazy'></a>"
         return (f"<div class='m{' grouped' if same else ''}' data-mid='{m.id}'>{av}"
                 f"<div class='content'>{reply}{head}{body}{''.join(stickers)}"
-                f"{''.join(atts)}{''.join(embeds)}{components_html}{reactions}</div></div>")
+                f"{''.join(atts)}{''.join(embeds)}{components_html}{forward_html}{reactions}</div></div>")
 
     async def _messages_html(self, channel, before: int | None = None) -> str:
         if not channel.permissions_for(channel.guild.me).read_message_history:
@@ -1233,11 +1266,11 @@ class WebDashboard:
         collected.reverse()
         if not collected:
             return "" if before is not None else "<div class='dc-empty'>No messages yet.</div>"
-        refs = await self._resolve_refs(channel, collected)
+        refs, deleted = await self._resolve_refs(channel, collected)
         html = []
         prev = None
         for m in collected:
-            html.append(self._one_message(m, prev, refs))
+            html.append(self._one_message(m, prev, refs, deleted))
             prev = m
         return "".join(html)
 
@@ -1248,11 +1281,13 @@ class WebDashboard:
         reference; fetches anything still missing, capped so a page of replies
         can't spray the API."""
         refs: dict[int, discord.Message] = {}
+        deleted: set[int] = set()
         by_id = {m.id: m for m in messages}
         need: list[int] = []
         for m in messages:
             ref = getattr(m, "reference", None)
-            if ref is None:
+            # Forwards reference their source, not a reply — never resolve them here.
+            if ref is None or getattr(getattr(ref, "type", None), "name", "default") == "forward":
                 continue
             mid = getattr(ref, "message_id", None)
             if mid is None:
@@ -1271,9 +1306,11 @@ class WebDashboard:
             budget -= 1
             try:
                 refs[mid] = await channel.fetch_message(mid)
+            except discord.NotFound:
+                deleted.add(mid)  # confirmed gone
             except discord.HTTPException:
-                pass  # deleted or no access; reply falls back to a notice
-        return refs
+                pass  # couldn't load (no access / budget) — show a neutral stub, not "deleted"
+        return refs, deleted
 
     async def channel(self, request: web.Request) -> web.Response:
         user = self._user(request)
@@ -1888,34 +1925,38 @@ class WebDashboard:
             except Exception:
                 subs.discard(ws)
 
-    async def _live_refs(self, message: discord.Message) -> dict:
+    async def _live_refs(self, message: discord.Message) -> tuple[dict, set]:
         """Resolve a single live message's reply target for the WS render."""
         ref = getattr(message, "reference", None)
-        mid = getattr(ref, "message_id", None) if ref else None
+        if ref is None or getattr(getattr(ref, "type", None), "name", "default") == "forward":
+            return {}, set()
+        mid = getattr(ref, "message_id", None)
         if mid is None or self._is_message(getattr(ref, "resolved", None)):
-            return {}
+            return {}, set()
         try:
-            return {mid: await message.channel.fetch_message(mid)}
+            return {mid: await message.channel.fetch_message(mid)}, set()
+        except discord.NotFound:
+            return {}, {mid}
         except discord.HTTPException:
-            return {}
+            return {}, set()
 
     async def _on_new_message(self, message: discord.Message) -> None:
         if message.guild is None or message.channel.id not in self._subs:
             return
         with contextlib.suppress(Exception):
-            refs = await self._live_refs(message)
+            refs, deleted = await self._live_refs(message)
             await self._broadcast(message.channel.id,
                                   {"t": "new", "mid": str(message.id),
-                                   "html": self._one_message(message, None, refs)})
+                                   "html": self._one_message(message, None, refs, deleted)})
 
     async def _on_edit_message(self, before: discord.Message, after: discord.Message) -> None:
         if after.guild is None or after.channel.id not in self._subs:
             return
         with contextlib.suppress(Exception):
-            refs = await self._live_refs(after)
+            refs, deleted = await self._live_refs(after)
             await self._broadcast(after.channel.id,
                                   {"t": "edit", "mid": str(after.id),
-                                   "html": self._one_message(after, None, refs)})
+                                   "html": self._one_message(after, None, refs, deleted)})
 
     async def _on_delete_message(self, message: discord.Message) -> None:
         if message.guild is None or message.channel.id not in self._subs:

@@ -331,6 +331,40 @@ def test_components_v2_render(dash):
     assert "border-left-color:#1db954" in html   # container accent
 
 
+def _snapshot(content="", atts=(), embeds=(), stickers=(), comps=()):
+    return types.SimpleNamespace(content=content, attachments=list(atts), embeds=list(embeds),
+                                 stickers=list(stickers), components=list(comps))
+
+
+def test_forwarded_message_renders_snapshot(dash):
+    web, bot, guild = dash
+    m = _fake_message(401, 7, "Charlie", "", 1_700_000_000)
+    m.guild = guild
+    # Discord forward: a forward-type reference + the real content in message_snapshots.
+    m.reference = types.SimpleNamespace(type=types.SimpleNamespace(name="forward"),
+                                        message_id=99, resolved=None)
+    m.message_snapshots = [_snapshot(content="the forwarded text")]
+    html = web._one_message(m, None)
+    assert "Forwarded" in html and "the forwarded text" in html
+    assert "(no text content)" not in html
+    assert "Original message was deleted" not in html   # a forward is not a deletion
+
+
+def test_unresolved_reply_is_not_called_deleted(dash):
+    web, bot, guild = dash
+    m = _fake_message(402, 7, "Ada", "hi", 1_700_000_000)
+    m.guild = guild
+    m.channel = types.SimpleNamespace(id=10)
+    m.reference = types.SimpleNamespace(message_id=12345, resolved=None)  # no type -> normal reply
+    # Not in refs and not in the deleted set -> neutral stub, not a false "deleted".
+    html = web._one_message(m, None, refs={}, deleted=set())
+    assert "replying to a message" in html
+    assert "Original message was deleted" not in html
+    # When we *know* it's deleted, say so.
+    html2 = web._one_message(m, None, refs={}, deleted={12345})
+    assert "Original message was deleted" in html2
+
+
 def test_one_message_shows_component_card_not_empty(dash):
     web, bot, guild = dash
     m = _fake_message(301, 7, "fmbot", "", 1_700_000_000)
@@ -642,12 +676,16 @@ async def test_resolve_refs_fetches_offpage_targets(dash):
     orig = _fake_message(300, 7, "Ada", "older message", 1_700_000_000)
     reply = _reply_to(_fake_message(301, 8, "Bob", "reply", 1_700_000_050), 300)
     ch._history = [orig]  # original is fetchable but NOT in the page batch
-    refs = await web._resolve_refs(ch, [reply])
+    refs, deleted = await web._resolve_refs(ch, [reply])
     assert 300 in refs and refs[300].id == 300
     # A resolved payload is used directly without any fetch.
     reply2 = _reply_to(_fake_message(303, 8, "Bob", "r2", 1_700_000_060), 302, resolved=orig)
-    refs2 = await web._resolve_refs(ch, [reply2])
+    refs2, _ = await web._resolve_refs(ch, [reply2])
     assert refs2[302].id == 300
+    # A reply to a truly missing message is reported as deleted, not fetched forever.
+    reply3 = _reply_to(_fake_message(305, 8, "Bob", "r3", 1_700_000_070), 999999)
+    _, gone = await web._resolve_refs(ch, [reply3])
+    assert 999999 in gone
 
 
 async def test_channel_messages_endpoint(dash):
