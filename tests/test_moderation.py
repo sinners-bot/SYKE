@@ -403,8 +403,12 @@ def test_help_lists_moderation(cog):
     ctx = FakeCtx()
     run(cog.help.callback(cog, ctx))
     fields = {f.name: f.value for f in ctx.replies[-1].fields}
-    assert "restrict" in fields["Moderators"] and "tempban" in fields["Moderators"]
-    assert "filter" in fields["Automod"]
+    mod = next(v for k, v in fields.items() if "Moderation" in k)
+    assert "restrict" in mod and "tempban" in mod
+    automod = next(v for k, v in fields.items() if "Automod" in k)
+    assert "filter" in automod and "antispam" in automod
+    security = next(v for k, v in fields.items() if "Security" in k)
+    assert "antinuke" in security and "antiraid" in security
     assert all(len(v) <= 1024 for v in fields.values())
     assert len(help_lines("!")) <= 1024
 

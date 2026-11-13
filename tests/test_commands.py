@@ -56,9 +56,9 @@ def test_mention_only_prefix(cog):
 
     run(cog.help.callback(cog, ctx))
     help_text = ctx.replies[-1].description
-    assert "`@SYKE profile [@member]`" in help_text
-    assert "@mention SYKE" in help_text and "yaps back" in help_text
-    assert "or just @mention it" not in help_text
+    assert "@SYKE help <command>" in help_text        # mention prefix flows into the menu
+    fields = " ".join(f.value for f in ctx.replies[-1].fields)
+    assert "yaps back" in fields
 
     run(cog.prefix.callback(cog, ctx, None))
     assert "mentions only" in ctx.replies[-1].description
@@ -155,16 +155,12 @@ def test_help_uses_server_prefix(cog):
     cog.bot.set_prefix(42, "s.")
     ctx = FakeCtx()
     run(cog.help.callback(cog, ctx))
-    assert "`s.profile [@member]`" in ctx.replies[-1].description
-    assert "`s.ship [@member] [@member]`" in ctx.replies[-1].description
-    assert "`$tldr`" in ctx.replies[-1].description
-    assert "`s.inviter [@member]`" in ctx.replies[-1].description
-    assert "`s.steal`" in ctx.replies[-1].description
-    assert "`s.emoji <name>`" in ctx.replies[-1].description
-    assert "`s.verify`" in ctx.replies[-1].description
-    assert "`s.verify setup`" in ctx.replies[-1].description
-    assert "`s.verify @member [@role]`" in ctx.replies[-1].description
-    assert len(ctx.replies[-1].description) <= 4096
+    reply = ctx.replies[-1]
+    assert "s.help <command>" in reply.description        # custom prefix flows through
+    fields = " ".join(f"{f.name} {f.value}" for f in reply.fields)
+    for name in ("profile", "ship", "inviter", "steal", "emoji", "verify"):
+        assert name in fields
+    assert len(reply.description) <= 4096
 
 
 def test_demo_toggle_and_sample(cog):

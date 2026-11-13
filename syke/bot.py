@@ -24,6 +24,7 @@ from .cards import MESSAGE_VIEW_TIMEOUT, ProfileView, aura_page, build_pages, iq
 from .config import Settings, load_settings
 from .dexify import dexify_text
 from . import expressions
+from . import help as help_menu
 from .demo import PERSONAS, build_demo_server
 from .invites import (
     INVITE_GONE_SECONDS,
@@ -42,6 +43,7 @@ from .dashboard import DashboardCog
 from .moderation import Moderation, help_lines as moderation_help, pretty as pretty_permission
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
 from .scanner import Scanner, to_msg
+from .security import Security
 from .ship import read_ship, ship_embed, voice_sample
 from .showcase import ShowcaseView, tour_page
 from .storage import Storage
@@ -331,6 +333,7 @@ class Syke(commands.Bot):
         await self.add_cog(SykeCommands(self))
         await self.add_cog(Moderation(self))
         await self.add_cog(AutoMod(self))
+        await self.add_cog(Security(self))
         await self.add_cog(Community(self))
         await self.add_cog(DashboardCog(self))
         if self.settings.web_enabled:
@@ -1999,57 +2002,26 @@ class SykeCommands(commands.Cog, name="SYKE"):
         assert ctx.guild is not None
         await ctx.reply(embed=turn_off(self.bot, ctx.guild), ephemeral=True)
 
-    @commands.hybrid_command(name="help", aliases=["commands"], description="How to use SYKE")
+    @commands.hybrid_command(name="help", aliases=["commands", "cmds"], usage="[command]",
+                             description="Browse SYKE's commands, or get details on one")
+    @app_commands.describe(query="A command name to explain in detail (optional)")
     @public()
-    async def help(self, ctx: commands.Context) -> None:
+    async def help(self, ctx: commands.Context, *, query: str = "") -> None:
         p = self.p(ctx)
-        embed = discord.Embed(
-            title="🧠 SYKE — personality judgement, scientifically questionable",
-            colour=BRAND,
-            description=(
-                f"Prefix here: `{p}` • slash commands work too.\n\n"
-                "**Everyone**\n"
-                f"`{p}profile [@member]` — the full personality report\n"
-                f"`{p}ship [@member] [@member]` — how well two people match, from their chats\n"
-                f"`$tldr` — summarise the last {TLDR_TARGET}+ messages here (also `{p}tldr`)\n"
-                f"`{p}ask <question>` — ask SYKE anything, like ChatGPT (DMs too)\n"
-                "**@mention SYKE** — it yaps back in this server's voice\n"
-                f"`{p}iq [@member]` — SYKE's very unscientific IQ estimate\n"
-                f"`{p}aura [@member]` — SYKE's very unscientific aura reading\n"
-                f"`{p}dexify` — reply to a message; SYKE posts it back with ...... pauses\n"
-                f"`{p}steal` — reply to a message to add its custom emojis and stickers here\n"
-                f"`{p}emoji <name>` / `{p}sticker <name>` — add a PNG, JPG or GIF (attach it, paste a link, or reply)\n"
-                f"`{p}emoji list` · `{p}emoji remove <name>` · `{p}emoji rename <old> <new>` (stickers too)\n"
-                f"`{p}top [trait]` — leaderboard: funny, toxic, cringe, freaky, serious, chaotic, active, iq, aura\n"
-                f"`{p}mimic [@member]` — SYKE talks like them (Markov chain)\n"
-                f"`{p}scanme` — dig up your older messages so they count towards your profile\n"
-                f"`{p}optout` / `{p}optin` — control whether you're judged\n"
-                f"`{p}showcase` — a tour of every feature, with examples\n"
-                f"`{p}about` — how many servers use SYKE • `{p}invite` — add it to yours\n"
-                f"`{p}inviter [@member]` — who invited them into this server\n"
-                f"`{p}verify` — get the verified role (slash: `/verify me`)\n"
-                "`/diagnose` — check why prefix commands might not work here\n\n"
-                "**Admins (Manage Server)**\n"
-                f"`{p}verify setup` — verification gate: role, channel, button, wording\n"
-                f"`{p}verify @member [@role]` — take their unverified role and give the verified one, or @role\n"
-                f"`{p}track #channel` / `{p}untrack #channel` — choose what SYKE reads\n"
-                f"`{p}channels` — show settings and watched channels\n"
-                f"`{p}prefix <new|mention|reset>` — custom prefix, @mention only, or back to `{self.bot.settings.default_prefix}`\n"
-                f"`{p}timezone <zone>` — for late-night detection, e.g. `{p}timezone Europe/London`\n"
-                f"`{p}rescan` — re-read channels now\n"
-                f"`{p}collect [#channel] [limit]` — read more history for mimic/yap\n"
-                f"`{p}yap on|off` — SYKE chimes in in the server's voice; @mention it or reply and it answers back\n"
-                f"`{p}demo on|off` — add fake members to test alone\n"
-                f"`{p}sample [name]` — report for a fake member\n\n"
-                "SYKE keeps text from watched channels for mimic/yap; "
-                f"`{p}optout` deletes yours. Reports are for fun only."
-            ),
-        )
-        embed.add_field(name="New", value=community_help(p), inline=False)
-        embed.add_field(name="Moderators", value=moderation_help(p), inline=False)
-        embed.add_field(name="Automod", value=automod_help(p), inline=False)
-        embed.set_footer(text=f"SYKE version {VERSION}")
-        await ctx.reply(embed=embed, ephemeral=True)
+        if query.strip():
+            cmd = help_menu.resolve_command(self.bot, query)
+            if cmd is None:
+                await ctx.reply(
+                    embed=help_menu.embed("Not found 🤔",
+                                          f"No command called `{query}`. Run `{p}help` to see everything."),
+                    ephemeral=True)
+                return
+            await ctx.reply(embed=help_menu.command_embed(self.bot, cmd, p), ephemeral=True)
+            return
+        view = help_menu.HelpView(self.bot, p, VERSION, ctx.author.id)
+        msg = await ctx.reply(embed=help_menu.overview_embed(self.bot, p, VERSION),
+                              view=view, ephemeral=True)
+        view.message = msg if isinstance(msg, discord.Message) else None
 
     # Admins
 
