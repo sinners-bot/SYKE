@@ -52,6 +52,50 @@ def _role_pos(member) -> int:
     return getattr(getattr(member, "top_role", None), "position", 0) or 0
 
 
+_TOKEN = re.compile(r"<a?:\w{2,32}:\d+>|<@!?\d+>|<#\d+>|<@&\d+>|@everyone|@here")
+_EMOJI = re.compile(r"<(a)?:(\w{2,32}):(\d+)>")
+
+
+def _token_html(token: str, guild) -> str:
+    em = _EMOJI.match(token)
+    if em:
+        ext = "gif" if em.group(1) else "png"
+        name = em.group(2)
+        return (f"<img class='ie' src='https://cdn.discordapp.com/emojis/{em.group(3)}.{ext}' "
+                f"alt=':{esc(name)}:' title=':{esc(name)}:' loading='lazy'>")
+    if token in ("@everyone", "@here"):
+        return f"<span class='mention'>{token}</span>"
+    user = re.match(r"<@!?(\d+)>", token)
+    if user:
+        uid = int(user.group(1))
+        member = guild.get_member(uid) if guild is not None and hasattr(guild, "get_member") else None
+        return f"<span class='mention'>@{esc(getattr(member, 'display_name', None) or uid)}</span>"
+    chan = re.match(r"<#(\d+)>", token)
+    if chan:
+        cid = int(chan.group(1))
+        ch = guild.get_channel(cid) if guild is not None and hasattr(guild, "get_channel") else None
+        return f"<span class='mention'>#{esc(getattr(ch, 'name', None) or cid)}</span>"
+    role = re.match(r"<@&(\d+)>", token)
+    if role:
+        rid = int(role.group(1))
+        r = guild.get_role(rid) if guild is not None and hasattr(guild, "get_role") else None
+        return f"<span class='mention'>@{esc(getattr(r, 'name', None) or rid)}</span>"
+    return esc(token)
+
+
+def render_content(content: str, guild) -> str:
+    """Escape message text and render custom emojis as images and mentions as chips, Discord-style."""
+    if not content:
+        return ""
+    out, last = [], 0
+    for mo in _TOKEN.finditer(content):
+        out.append(esc(content[last:mo.start()]))
+        out.append(_token_html(mo.group(0), guild))
+        last = mo.end()
+    out.append(esc(content[last:]))
+    return "".join(out)
+
+
 def base_url(request: web.Request, settings) -> str:
     if settings.web_base_url:
         return settings.web_base_url
@@ -214,6 +258,11 @@ mark{background:#f5b30155;color:#ffe08a;border-radius:2px;padding:0 1px;}
 .emoji img{width:44px;height:44px;object-fit:contain;}
 .emoji .en{display:block;margin-top:6px;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .emoji .tag{font-size:9px;color:var(--brand);}
+.ie{width:1.375em;height:1.375em;object-fit:contain;vertical-align:-0.3em;}
+.jumbo .ie{width:2.6em;height:2.6em;}
+.mention{background:#5865f233;color:#c9cdfb;border-radius:3px;padding:0 2px;font-weight:500;}
+.sticker{max-width:160px;max-height:160px;border-radius:8px;margin-top:4px;display:block;}
+.rx .ie{width:1.1em;height:1.1em;vertical-align:-0.2em;}
 """
 
 
@@ -625,8 +674,18 @@ class WebDashboard:
                          f"<span class='rn'>{esc(ref.author.display_name)}</span> {esc(snippet)}</div>")
             else:
                 reply = "<div class='reply'>↳ replying to a message</div>"
-        text = esc(m.clean_content)
-        body = f"<div class='text'>{text}</div>" if text else "<div class='text empty'>(no text content)</div>"
+        guild = getattr(m, "guild", None)
+        raw = m.content or ""
+        text_html = render_content(raw, guild)
+        # Discord shows a message that's only custom emoji at jumbo size.
+        only_emoji = bool(raw.strip()) and not _TOKEN.sub("", raw).strip() and bool(_EMOJI.search(raw))
+        text = f"<div class='text{' jumbo' if only_emoji else ''}'>{text_html}</div>" if text_html else ""
+        stickers = []
+        for s in getattr(m, "stickers", []) or []:
+            url = getattr(s, "url", None)
+            if url:
+                stickers.append(f"<img class='sticker' src='{esc(url)}' "
+                                f"alt='{esc(getattr(s, 'name', 'sticker'))}' loading='lazy'>")
         atts = []
         for a in m.attachments:
             ct = (a.content_type or "").lower()
@@ -666,16 +725,26 @@ class WebDashboard:
                 media = f"<img class='emb-img' src='{esc(thumb_url)}' loading='lazy' alt=''>"
             if title or desc or media:
                 embeds.append(f"<div class='emb'>{title}{desc}{media}</div>")
-        reactions = "".join(
-            f"<span class='rx'>{esc(str(r.emoji))} {r.count}</span>" for r in getattr(m, "reactions", [])
-        )
-        profile = f"/g/{getattr(getattr(m, 'guild', None), 'id', 0)}/u/{author.id}"
+        rx = []
+        for r in getattr(m, "reactions", []):
+            e = r.emoji
+            if getattr(e, "id", None):
+                glyph = f"<img class='ie' src='{esc(getattr(e, 'url', ''))}' alt='{esc(getattr(e, 'name', ''))}'>"
+            else:
+                glyph = esc(str(e))
+            rx.append(f"<span class='rx'>{glyph} {r.count}</span>")
+        reactions = "".join(rx)
+        body = text
+        if not text and not stickers and not m.attachments and not m.embeds:
+            body = "<div class='text empty'>(no text content)</div>"
+        profile = f"/g/{getattr(guild, 'id', 0)}/u/{author.id}"
         head = ("" if same else
                 f"<div class='head'><a class='name' href='{profile}'{name_style}>{esc(author.display_name)}{app}</a>"
                 f"<time class='ts' data-ts='{ts}'></time></div>")
         av = f"<a class='av' href='{profile}'><img src='{esc(avatar)}' alt='' loading='lazy'></a>"
         return (f"<div class='m{' grouped' if same else ''}' data-mid='{m.id}'>{av}"
-                f"<div class='content'>{reply}{head}{body}{''.join(atts)}{''.join(embeds)}{reactions}</div></div>")
+                f"<div class='content'>{reply}{head}{body}{''.join(stickers)}"
+                f"{''.join(atts)}{''.join(embeds)}{reactions}</div></div>")
 
     async def _messages_html(self, channel, before: int | None = None) -> str:
         if not channel.permissions_for(channel.guild.me).read_message_history:

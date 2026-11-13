@@ -274,7 +274,7 @@ def _fake_message(mid, uid, name, content, ts):
     author = types.SimpleNamespace(id=uid, display_name=name, bot=False,
         display_avatar=types.SimpleNamespace(url=f"https://cdn/{uid}.png"),
         colour=types.SimpleNamespace(value=0))
-    return types.SimpleNamespace(id=mid, author=author, clean_content=content,
+    return types.SimpleNamespace(id=mid, author=author, clean_content=content, content=content, guild=None, stickers=[],
         created_at=datetime.fromtimestamp(ts, timezone.utc), reference=None,
         attachments=[], embeds=[], reactions=[])
 
@@ -368,7 +368,7 @@ def test_attachment_previews_render_inline(dash):
         return types.SimpleNamespace(**base)
     author = types.SimpleNamespace(id=1, display_name="Ada", bot=False,
         display_avatar=types.SimpleNamespace(url="https://cdn/a.png"), colour=types.SimpleNamespace(value=0))
-    m = types.SimpleNamespace(id=9, author=author, clean_content="", created_at=datetime(2026,11,13,tzinfo=timezone.utc),
+    m = types.SimpleNamespace(id=9, author=author, clean_content="", content="", guild=None, stickers=[], created_at=datetime(2026,11,13,tzinfo=timezone.utc),
         reference=None, reactions=[],
         attachments=[att("image/png","https://cdn/i.png","p.png"), att("video/mp4","https://cdn/v.mp4","v.mp4"),
                      att("audio/mpeg","https://cdn/s.mp3","s.mp3"), att("application/pdf","https://cdn/d.pdf","doc.pdf")],
@@ -420,6 +420,30 @@ async def test_emoji_gallery(dash):
         # linked from the server page
         page = await (await cl.get(f"/g/{guild.id}")).text()
         assert f"/g/{guild.id}/emojis" in page
+
+
+def test_inline_emoji_mentions_and_stickers(dash):
+    import types
+    from datetime import datetime, timezone
+    web = dash[0]
+    guild = types.SimpleNamespace(id=42,
+        get_member=lambda i: types.SimpleNamespace(display_name="Ada") if i == 7 else None,
+        get_channel=lambda i: types.SimpleNamespace(name="general") if i == 10 else None,
+        get_role=lambda i: None)
+    author = types.SimpleNamespace(id=1, display_name="Bo", bot=False,
+        display_avatar=types.SimpleNamespace(url="x"), colour=types.SimpleNamespace(value=0))
+    react = types.SimpleNamespace(id=9, url="https://cdn/r.png", name="pepe")
+    m = types.SimpleNamespace(id=5, guild=guild, author=author,
+        content="yo <:pog:123> <@7> see <#10>", clean_content="",
+        created_at=datetime(2026, 11, 13, tzinfo=timezone.utc), reference=None,
+        attachments=[], embeds=[], stickers=[types.SimpleNamespace(name="catjam", url="https://cdn/s.png")],
+        reactions=[types.SimpleNamespace(emoji=react, count=3)])
+    html = web._one_message(m, None)
+    assert "cdn.discordapp.com/emojis/123.png" in html     # custom emoji inline
+    assert "class='mention'>@Ada" in html                  # user mention chip
+    assert "class='mention'>#general" in html              # channel mention chip
+    assert "class='sticker'" in html and "https://cdn/s.png" in html  # sticker image
+    assert "class='ie' src='https://cdn/r.png'" in html    # custom-emoji reaction as image
 
 
 def test_html_escaping_blocks_injection():
