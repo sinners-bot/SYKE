@@ -302,6 +302,75 @@ async def test_history_paging_with_before(dash):
         assert "?before='+f.dataset.mid" in page and "addEventListener('scroll'" in page
 
 
+def _reaction(emoji, who, count=None):
+    async def users_fn(limit=100):
+        for u in who:
+            yield u
+    return types.SimpleNamespace(emoji=emoji, count=count if count is not None else len(who), users=users_fn)
+
+
+def _reactor(uid, name):
+    return types.SimpleNamespace(id=uid, display_name=name,
+                                 display_avatar=types.SimpleNamespace(url=f"https://cdn/{uid}.png"))
+
+
+async def test_reactions_html_lists_who_reacted(dash):
+    web, bot, guild = dash
+    custom = types.SimpleNamespace(id=5, url="https://cdn/emo.png", name="pepe")
+    msg = types.SimpleNamespace(reactions=[
+        _reaction("🔥", [_reactor(7, "Ada"), _reactor(8, "Bo")]),
+        _reaction(custom, [_reactor(7, "Ada")], count=3),
+    ])
+    html = await web._reactions_html(guild, msg)
+    assert "Ada" in html and "Bo" in html
+    assert "/g/42/u/7" in html and "/g/42/u/8" in html   # reactors link to profiles
+    assert "🔥" in html and "https://cdn/emo.png" in html  # unicode + custom emoji
+    assert "+2 more" in html                              # count 3, one user shown
+
+
+async def test_reactions_html_empty(dash):
+    web, bot, guild = dash
+    html = await web._reactions_html(guild, types.SimpleNamespace(reactions=[]))
+    assert "No reactions" in html
+
+
+def test_one_message_reactions_are_clickable(dash):
+    web, bot, guild = dash
+    m = _fake_message(201, 7, "Ada", "hi", 1_700_000_000)
+    m.guild = guild
+    m.reactions = [_reaction("🔥", [], count=4)]
+    html = web._one_message(m, None)
+    assert "rx rxc" in html and "class='rxs'" in html and "See who reacted" in html
+
+
+def test_rough_age():
+    from datetime import datetime, timedelta, timezone
+
+    from syke.web import rough_age
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert rough_age(now - timedelta(hours=3), now) == "today"
+    assert rough_age(now - timedelta(days=5), now) == "5 days"
+    assert rough_age(now - timedelta(days=60), now) == "2 months"
+    assert rough_age(now - timedelta(days=800), now).startswith("2y")
+    assert rough_age(None, now) == "—"
+
+
+def test_intel_html_surfaces_badges_perms_and_new_account(dash):
+    web, bot, guild = dash
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    created = now - timedelta(days=3)   # fresh account
+    pf = types.SimpleNamespace(all=lambda: [types.SimpleNamespace(name="active_developer"),
+                                            types.SimpleNamespace(name="early_supporter")])
+    perms = types.SimpleNamespace(administrator=True)   # other KEY_PERMS default False via getattr
+    member = types.SimpleNamespace(public_flags=pf, bot=False, guild_permissions=perms, premium_since=None)
+    html = web._intel_html(guild, 7, member, created, now)
+    assert "less than 14 days" in html
+    assert "Active Developer" in html and "Early Supporter" in html
+    assert "Administrator" in html
+    assert "Also in" not in html        # bot shares no other server in this fixture
+
+
 def _voice_member(uid, name, **vstate):
     voice = types.SimpleNamespace(mute=False, self_mute=False, deaf=False, self_deaf=False,
                                   self_stream=False, self_video=False)

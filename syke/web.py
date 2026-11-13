@@ -125,6 +125,44 @@ def base_url(request: web.Request, settings) -> str:
     return f"{proto}://{host}"
 
 
+BADGE_LABELS = {
+    "staff": "Discord Staff", "partner": "Partner", "hypesquad": "HypeSquad Events",
+    "bug_hunter": "Bug Hunter", "bug_hunter_level_2": "Bug Hunter Gold",
+    "hypesquad_bravery": "HypeSquad Bravery", "hypesquad_brilliance": "HypeSquad Brilliance",
+    "hypesquad_balance": "HypeSquad Balance", "early_supporter": "Early Supporter",
+    "verified_bot": "Verified Bot", "early_verified_bot_developer": "Early Verified Bot Dev",
+    "verified_bot_developer": "Early Verified Bot Dev", "discord_certified_moderator": "Certified Mod",
+    "active_developer": "Active Developer", "system": "System", "team_user": "Team User",
+    "spammer": "⚠ Flagged: likely spammer", "bot_http_interactions": "HTTP-only Bot",
+}
+
+# Guild permissions worth surfacing on a profile, strongest first.
+KEY_PERMS = [
+    ("administrator", "Administrator"), ("manage_guild", "Manage Server"),
+    ("manage_roles", "Manage Roles"), ("manage_channels", "Manage Channels"),
+    ("ban_members", "Ban"), ("kick_members", "Kick"), ("manage_messages", "Manage Messages"),
+    ("moderate_members", "Timeout"), ("manage_webhooks", "Manage Webhooks"),
+    ("mention_everyone", "Mention Everyone"), ("manage_emojis_and_stickers", "Manage Expressions"),
+]
+
+
+def rough_age(dt, now: datetime | None = None) -> str:
+    """A compact human age like '3y 2mo' or '5 days' for a datetime."""
+    if dt is None:
+        return "—"
+    now = now or datetime.now(timezone.utc)
+    days = max((now - dt).days, 0)
+    if days < 1:
+        return "today"
+    if days < 31:
+        return f"{days} day{'s' if days != 1 else ''}"
+    if days < 365:
+        mo = days // 30
+        return f"{mo} month{'s' if mo != 1 else ''}"
+    yrs, rem = days // 365, (days % 365) // 30
+    return f"{yrs}y" + (f" {rem}mo" if rem else "")
+
+
 # HTML
 
 STYLE = """
@@ -145,6 +183,9 @@ header .sp{flex:1;}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
 .chip{background:var(--panel2);border:1px solid var(--line);border-radius:999px;
 padding:2px 10px;font-size:12px;color:var(--muted);}
+.chips{display:flex;flex-wrap:wrap;gap:6px;}
+.chip.perm{color:#dbdee1;border-color:var(--brand);}
+.note.warn{border-left-color:var(--warn);color:#f3c780;}
 .btn{display:inline-block;background:var(--panel2);border:1px solid var(--line);color:var(--text);
 border-radius:8px;padding:7px 12px;font-size:14px;cursor:pointer;}
 .btn:hover{border-color:var(--brand);text-decoration:none;}
@@ -237,6 +278,18 @@ border-radius:8px;padding:10px 12px;max-width:400px;color:var(--text);}
 .emb .ed{color:#dbdee1;font-size:14px;}
 .emb .emb-img{display:block;max-width:100%;max-height:300px;border-radius:6px;margin-top:8px;}
 .rx{display:inline-flex;gap:5px;align-items:center;background:#2b2d31;border:1px solid var(--line);border-radius:8px;padding:1px 7px;font-size:12px;margin:5px 4px 0 0;color:#b9bbbe;}
+button.rx.rxc{cursor:pointer;font-family:inherit;}
+button.rx.rxc:hover{border-color:var(--brand);color:#fff;}
+.rx-panel{margin:6px 0 2px;background:#17171d;border:1px solid var(--line);border-radius:8px;padding:8px 10px;max-width:460px;}
+.rxp-empty{color:var(--muted);font-size:13px;}
+.rxp-group{display:flex;gap:8px;align-items:flex-start;padding:4px 0;border-top:1px solid var(--line);}
+.rxp-group:first-child{border-top:none;}
+.rxp-emoji{display:flex;align-items:center;gap:3px;flex:none;color:#b9bbbe;font-size:13px;min-width:38px;}
+.rxp-emoji .ie{width:18px;height:18px;}
+.rxp-users{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;}
+.rxp-u{display:inline-flex;align-items:center;gap:4px;color:#c4c7d0;font-size:12px;background:#2b2d31;border-radius:10px;padding:1px 8px 1px 2px;}
+.rxp-u:hover{color:#fff;text-decoration:none;background:#363a44;}
+.rxp-u img{width:18px;height:18px;border-radius:50%;}
 .dc-input{padding:10px 16px 14px;border-top:1px solid var(--line);background:#1a1a22;}
 .dc-input textarea{width:100%;resize:vertical;background:#2b2d31;border-color:#2b2d31;}
 .dc-input .ir{margin-top:6px;display:flex;justify-content:space-between;align-items:center;}
@@ -375,6 +428,7 @@ class WebDashboard:
         a("/g/{gid}/u/{uid}", self.member_profile)
         a("/g/{gid}/c/{cid}", self.channel)
         a("/g/{gid}/c/{cid}/messages", self.channel_messages)
+        a("/g/{gid}/c/{cid}/m/{mid}/reactions", self.message_reactions)
         a("/g/{gid}/c/{cid}/media", self.channel_media)
         a("/g/{gid}/c/{cid}/ws", self.channel_ws)
         p("/g/{gid}/c/{cid}/say", self.say)
@@ -846,8 +900,8 @@ class WebDashboard:
                 glyph = f"<img class='ie' src='{esc(getattr(e, 'url', ''))}' alt='{esc(getattr(e, 'name', ''))}'>"
             else:
                 glyph = esc(str(e))
-            rx.append(f"<span class='rx'>{glyph} {r.count}</span>")
-        reactions = "".join(rx)
+            rx.append(f"<button type='button' class='rx rxc' title='See who reacted'>{glyph} {r.count}</button>")
+        reactions = f"<div class='rxs'>{''.join(rx)}</div>" if rx else ""
         body = text
         if not text and not stickers and not m.attachments and not m.embeds:
             body = "<div class='text empty'>(no text content)</div>"
@@ -972,6 +1026,14 @@ class WebDashboard:
             "if(typeof older==='function'){var n=0;(function hunt(){older();n++;setTimeout(function(){"
             "if(jumpTo(id))return;if(n<10&&!noMore)hunt();else if(href)window.open(href,'_blank','noopener');},380);})();return;}"
             "if(href)window.open(href,'_blank','noopener');});"
+            # Click a reaction to see who reacted (toggles a panel under the message).
+            "pane.addEventListener('click',async function(e){var b=e.target.closest('.rx');if(!b)return;"
+            "var m=b.closest('.m'),wrap=b.closest('.rxs');if(!m||!wrap)return;"
+            "var ex=wrap.querySelector('.rx-panel');if(ex){ex.remove();return;}"
+            "var d=document.createElement('div');d.className='rx-panel';d.textContent='…';wrap.appendChild(d);"
+            "try{var r=await fetch(location.pathname+'/m/'+m.dataset.mid+'/reactions');"
+            "d.innerHTML=r.ok?await r.text():'<div class=rxp-empty>Could not load.</div>';}"
+            "catch(err){d.innerHTML='<div class=rxp-empty>Could not load.</div>';}});"
             + ("" if searching else
                "pane.scrollTop=pane.scrollHeight;"
                # Live updates over a WebSocket — instant, no flicker, like a real client.
@@ -1077,20 +1139,24 @@ class WebDashboard:
             roles_html = f"<div class='prof-roles'>{''.join(chips)}</div>" if chips else ""
         created = getattr(member, "created_at", None)
         joined = getattr(member, "joined_at", None)
+        now_dt = datetime.now(timezone.utc)
 
         def when(dt):
             return f"<time data-ts='{int(dt.timestamp())}'></time>" if dt else "—"
 
         stats = [
             ("Stored messages", f"{count:,}"),
+            ("Account age", rough_age(created, now_dt)),
+            ("In server for", rough_age(joined, now_dt)),
+            ("Account made", when(created)),
+            ("Joined server", when(joined)),
             ("First seen", when(datetime.fromtimestamp(first, timezone.utc)) if first else "—"),
             ("Last seen", when(datetime.fromtimestamp(last, timezone.utc)) if last else "—"),
-            ("Joined server", when(joined)),
-            ("Account made", when(created)),
             ("Mod cases", str(len(cases))),
         ]
         stat_html = "".join(f"<div class='stat'><div class='k'>{k}</div><div class='v'>{v}</div></div>"
                             for k, v in stats)
+        intel_html = self._intel_html(guild, uid, member, created, now_dt)
         top = storage.member_top_channels(guild.id, uid)
         chan_html = ""
         if top:
@@ -1143,11 +1209,62 @@ class WebDashboard:
             f"<div class='prof'>{back}{gone}"
             f"<div class='prof-top'>{header_img}<div><div class='prof-name'>{esc(name)}</div>{handle}"
             f"<div class='muted'>ID {uid}</div>{roles_html}</div></div>"
-            f"<div class='prof-grid'>{stat_html}</div>{chan_html}{restr_html}{hist_html}{actions}</div>"
+            f"<div class='prof-grid'>{stat_html}</div>{intel_html}{chan_html}{restr_html}{hist_html}{actions}</div>"
             "<script>document.querySelectorAll('time[data-ts]').forEach(function(e){"
             "var d=new Date(+e.dataset.ts*1000);e.textContent=d.toLocaleDateString()+' '+"
             "d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});});</script>"
         )
+
+    def _intel_html(self, guild: discord.Guild, uid: int, member, created, now_dt) -> str:
+        """Discord-native intel: new-account flag, badges, perms, booster, invite, shared servers."""
+        secs = []
+        # Fresh-account warning — a useful alt/raid signal.
+        if created is not None and (now_dt - created).days < 14:
+            secs.append("<div class='note warn'>⚠ Account is less than 14 days old "
+                        f"(created {rough_age(created, now_dt)} ago).</div>")
+        flags = []
+        pf = getattr(member, "public_flags", None)
+        if pf is not None:
+            with contextlib.suppress(Exception):
+                flags = [BADGE_LABELS.get(f.name, f.name.replace('_', ' ').title()) for f in pf.all()]
+        if getattr(member, "bot", False):
+            flags.insert(0, "Bot")
+        chips = "".join(f"<span class='chip'>{esc(b)}</span>" for b in flags)
+        if chips:
+            secs.append(f"<div class='prof-sec'><h3>Badges</h3><div class='chips'>{chips}</div></div>")
+        # Key permissions in this server.
+        perms = getattr(member, "guild_permissions", None)
+        if perms is not None:
+            held = [label for attr, label in KEY_PERMS if getattr(perms, attr, False)]
+            if held:
+                pc = "".join(f"<span class='chip perm'>{esc(p)}</span>" for p in held)
+                secs.append(f"<div class='prof-sec'><h3>Key permissions</h3><div class='chips'>{pc}</div></div>")
+        # Nitro boosting.
+        boost = getattr(member, "premium_since", None)
+        if boost is not None:
+            secs.append(f"<div class='prof-sec'><h3>Boosting since</h3>"
+                        f"<p><time data-ts='{int(boost.timestamp())}'></time> "
+                        f"({rough_age(boost, now_dt)})</p></div>")
+        # Who invited them (from SYKE's invite tracking).
+        join = self.bot.storage.join_of(guild.id, uid)
+        if join:
+            inviter_id, inviter_name, code, kind, _ = join
+            if kind == "vanity":
+                who = f"vanity invite <code>/{esc(code or '')}</code>"
+            elif inviter_id:
+                who = f"<a href='/g/{guild.id}/u/{inviter_id}'>{esc(inviter_name or f'user {inviter_id}')}</a>"
+                if code:
+                    who += f" (<code>{esc(code)}</code>)"
+            else:
+                who = esc(inviter_name or "unknown")
+            secs.append(f"<div class='prof-sec'><h3>Invited by</h3><p>{who}</p></div>")
+        # Other servers SYKE shares with them — intel within the bot's own reach.
+        mutual = [g for g in self.bot.guilds if g.id != guild.id and g.get_member(uid) is not None]
+        if mutual:
+            links = ", ".join(f"<a href='/g/{g.id}'>{esc(g.name)}</a>" for g in mutual[:15])
+            more = f" +{len(mutual) - 15} more" if len(mutual) > 15 else ""
+            secs.append(f"<div class='prof-sec'><h3>Also in ({len(mutual)})</h3><p>{links}{more}</p></div>")
+        return "".join(secs)
 
     async def channel_media(self, request: web.Request) -> web.Response:
         user = self._user(request)
@@ -1213,6 +1330,49 @@ class WebDashboard:
         before_raw = request.query.get("before")
         before = int(before_raw) if before_raw and before_raw.isdigit() else None
         return web.Response(text=await self._messages_html(channel, before), content_type="text/html")
+
+    async def message_reactions(self, request: web.Request) -> web.Response:
+        """Who reacted to one message, grouped by emoji."""
+        user = self._user(request)
+        if user is None:
+            raise web.HTTPForbidden(text="login required")
+        guild = self._guild_or_404(request)
+        channel = self._channel_or_404(request, guild)
+        try:
+            mid = int(request.match_info["mid"])
+        except ValueError:
+            raise web.HTTPNotFound(text="bad message id")
+        try:
+            message = await channel.fetch_message(mid)
+        except discord.HTTPException:
+            return web.Response(text="<div class='rxp-empty'>Message not found.</div>", content_type="text/html")
+        return web.Response(text=await self._reactions_html(guild, message), content_type="text/html")
+
+    async def _reactions_html(self, guild: discord.Guild, message: discord.Message) -> str:
+        groups = []
+        for reaction in getattr(message, "reactions", []) or []:
+            e = reaction.emoji
+            if getattr(e, "id", None):
+                glyph = f"<img class='ie' src='{esc(getattr(e, 'url', ''))}' alt='{esc(getattr(e, 'name', ''))}'>"
+            else:
+                glyph = esc(str(e))
+            chips = []
+            try:
+                async for u in reaction.users(limit=60):
+                    name = getattr(u, "display_name", None) or getattr(u, "name", None) or f"User {u.id}"
+                    av = getattr(getattr(u, "display_avatar", None), "url", "")
+                    chips.append(
+                        f"<a class='rxp-u' href='/g/{guild.id}/u/{u.id}'>"
+                        f"<img src='{esc(av)}' alt='' loading='lazy'>{esc(name)}</a>")
+            except discord.HTTPException:
+                pass
+            extra = f"<span class='muted'>+{reaction.count - len(chips)} more</span>" if reaction.count > len(chips) else ""
+            groups.append(
+                f"<div class='rxp-group'><div class='rxp-emoji'>{glyph}<span>{reaction.count}</span></div>"
+                f"<div class='rxp-users'>{''.join(chips) or '<span class=muted>no one</span>'}{extra}</div></div>")
+        if not groups:
+            return "<div class='rxp-empty'>No reactions on this message.</div>"
+        return "".join(groups)
 
     # Live updates (WebSocket)
 
