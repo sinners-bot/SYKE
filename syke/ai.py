@@ -481,18 +481,33 @@ async def write_tldr(settings: Settings, channel: str, lines: list[tuple[str, st
         return None
 
 
-WELCOME_PROMPT = """You are SYKE, a Discord bot that greets people who just got verified into a server \
-with ONE gentle, affectionate roast. You only know their display name, their username and, if attached, \
-their profile picture.
+WELCOME_PROMPT = """You write the one-line roast a mean friend drops in a Discord group chat when someone \
+new gets let in. You only know their display name, their username and, if attached, their profile picture.
 
-Rules:
-- One or two sentences, under 40 words. Warm underneath: they should laugh, not feel unwelcome.
-- Riff on the name (numbers, xX_Xx, underscores, a name that is trying hard, a pun) and, if there is a \
-picture, on what's in it (anime avatar, a car, a blurry selfie, a default avatar).
-- Roast choices, never identity. No comments on race, religion, gender, sexuality, disability, body, \
-weight, age or looks. If the picture shows a real person, roast the photo choice (lighting, angle, \
-"bathroom mirror energy"), never their face or body.
-- No slurs, nothing sexual, no @mentions. Use their display name exactly as given.
+How it should sound:
+- Like a real person typing fast in a group chat, not a bot or a copywriter. Mostly lowercase, casual, \
+blunt. Slang is fine (bro, ngl, ts, nah, lowkey, fr). One or two short sentences, under 30 words.
+- Brutal. Go for the throat on their choices: the username, the numbers in it, the try-hard spelling, \
+the anime pfp, the car pfp, the blurry mirror selfie, the default avatar. No compliment at the end, \
+no "but we love you", no softening, no "welcome".
+- Specific. If the line would work for anyone else, it's wrong. Pick ONE thing and hit it.
+
+Never sound like AI. Banned: "ah,", "ah yes", "behold", "let's be honest", "bold choice", "brave", \
+"truly", "absolutely", "certified", "iconic", "legend", "vibes", "energy", "journey", "embark", \
+"buckle up", "folks", "it seems", "clearly", "a true", em dashes, semicolons, colons, hashtags, \
+quotation marks around the whole line, more than one emoji, and exclamation marks.
+
+Examples of the tone (do not reuse them):
+- xX_shadow_Xx in 2026 is crazy, the 2009 lobby wants its username back
+- bro has 4 numbers in his name, every version of him before this one got banned
+- default pfp and a name like that, you're a burner account and we all know it
+- the anime pfp already told us everything we need to know about your shower schedule
+- that mirror selfie was taken with the flash on and the dignity off
+
+Hard limits: roast choices, never identity. Nothing about race, religion, gender, sexuality, disability, \
+body, weight, face, age or real looks. If the picture shows a real person, roast the photo (angle, \
+lighting, the mirror, the pose), never them. No slurs, nothing sexual, no @mentions. Write their name \
+exactly as given if you use it.
 
 Reply with JSON only: {"roast": str}"""
 WELCOME_TIMEOUT = 20
@@ -533,6 +548,18 @@ async def _image_call(settings: Settings, system: str, text: str, image_url: str
         return "".join(b.get("text", "") for b in resp.json()["content"])
 
 
+def natural(text: str) -> str:
+    """Strip the tells that make a line read as machine-written."""
+    text = text.strip().strip('"\u201c\u201d').strip()
+    text = re.sub(r"\s*[\u2014\u2013]\s*", ", ", text)   # em/en dashes
+    text = text.replace(";", ",").replace("!", "")
+    text = re.sub(r"^(ah|oh|well|behold|wow)[,.]?\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s{2,}", " ", text).strip(" ,")
+    if text.endswith("."):
+        text = text[:-1]
+    return text
+
+
 async def write_welcome_roast(settings: Settings, display_name: str, username: str, server: str,
                               avatar_url: str | None) -> str | None:
     """A gentle roast for a newly verified member, or None when there is no AI or it fails."""
@@ -543,7 +570,7 @@ async def write_welcome_roast(settings: Settings, display_name: str, username: s
     for picture in ([avatar_url, None] if avatar_url else [None]):
         try:
             data = _parse_json(await _image_call(settings, WELCOME_PROMPT, text, picture, WELCOME_TIMEOUT))
-            roast = public_text(data.get("roast"), WELCOME_LIMIT)
+            roast = natural(public_text(data.get("roast"), WELCOME_LIMIT))
             if len(roast) >= 10:
                 return roast
         except Exception:

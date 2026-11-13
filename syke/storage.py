@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 CARD_TTL_SECONDS = 30 * 24 * 3600
+CORPUS_CHUNK = 500
 CORPUS_EXTRA_COLUMNS = (
     ("created_at", "REAL"),
     ("author_name", "TEXT NOT NULL DEFAULT ''"),
@@ -144,9 +145,14 @@ CREATE TABLE IF NOT EXISTS locked_channels (
 class Storage:
     def __init__(self, path: str) -> None:
         Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(path, check_same_thread=False)
+        self._path = path
+        self._local = threading.local()
+        # Writes take this lock; reads don't. Each thread has its own connection, and WAL mode lets
+        # them read while another thread writes, so the bot's event loop never waits on a long
+        # background write (a big scan) just to look up a prefix or a watched channel.
         self._lock = threading.Lock()
         with self._lock:
+            self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.executescript(SCHEMA)
             columns = {row[1] for row in self._conn.execute("PRAGMA table_info(guild_settings)")}
             if "demo_mode" not in columns:
@@ -161,6 +167,16 @@ class Storage:
                     self._conn.execute(f"ALTER TABLE corpus ADD COLUMN {column} {kind}")
             self._conn.commit()
 
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self._path, check_same_thread=False, timeout=30)
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            self._local.conn = conn
+        return conn
+
     def _write(self, sql: str, params: tuple) -> int:
         with self._lock:
             cur = self._conn.execute(sql, params)
@@ -168,8 +184,7 @@ class Storage:
             return cur.rowcount
 
     def _read(self, sql: str, params: tuple) -> list[tuple]:
-        with self._lock:
-            return self._conn.execute(sql, params).fetchall()
+        return self._conn.execute(sql, params).fetchall()
 
     def track(self, guild_id: int, channel_id: int) -> bool:
         return self._write(
@@ -259,25 +274,36 @@ class Storage:
         )
 
     def add_corpus(self, guild_id: int, rows: list[CorpusRow]) -> int:
-        """Store messages; returns how many were new. Known rows gain any timestamp/reactions they lacked."""
+        """Store messages; returns how many were new. Known rows gain any timestamp/reactions they lacked.
+
+        Big batches go in chunks, so the write lock is never held for long.
+        """
         if not rows:
             return 0
         full = [(guild_id, *row, *(None, "", 0, 0)[len(row) - 4:]) for row in rows]
-        with self._lock:
-            before = self._conn.execute("SELECT COUNT(*) FROM corpus WHERE guild_id = ?", (guild_id,)).fetchone()[0]
-            self._conn.executemany(
-                "INSERT INTO corpus (guild_id, message_id, channel_id, author_id, content, created_at, "
-                "author_name, laugh_reactions, total_reactions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(guild_id, message_id) DO UPDATE SET "
-                "created_at = COALESCE(corpus.created_at, excluded.created_at), "
-                "author_name = CASE WHEN excluded.author_name != '' THEN excluded.author_name ELSE corpus.author_name END, "
-                "laugh_reactions = MAX(corpus.laugh_reactions, excluded.laugh_reactions), "
-                "total_reactions = MAX(corpus.total_reactions, excluded.total_reactions)",
-                full,
-            )
-            self._conn.commit()
-            after = self._conn.execute("SELECT COUNT(*) FROM corpus WHERE guild_id = ?", (guild_id,)).fetchone()[0]
-            return after - before
+        added = 0
+        for start in range(0, len(full), CORPUS_CHUNK):
+            chunk = full[start:start + CORPUS_CHUNK]
+            with self._lock:
+                before = self._conn.total_changes
+                self._conn.executemany(
+                    "INSERT INTO corpus (guild_id, message_id, channel_id, author_id, content, created_at, "
+                    "author_name, laugh_reactions, total_reactions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(guild_id, message_id) DO NOTHING",
+                    chunk,
+                )
+                added += self._conn.total_changes - before
+                self._conn.executemany(
+                    "UPDATE corpus SET "
+                    "created_at = COALESCE(created_at, ?), "
+                    "author_name = CASE WHEN ? != '' THEN ? ELSE author_name END, "
+                    "laugh_reactions = MAX(laugh_reactions, ?), "
+                    "total_reactions = MAX(total_reactions, ?) "
+                    "WHERE guild_id = ? AND message_id = ?",
+                    [(r[5], r[6], r[6], r[7], r[8], r[0], r[1]) for r in chunk],
+                )
+                self._conn.commit()
+        return added
 
     def history(self, guild_id: int, channel_ids: list[int]) -> list[tuple]:
         """Timestamped stored messages from these channels:

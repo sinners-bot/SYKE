@@ -110,11 +110,18 @@ class Dashboard(discord.ui.View):
         if status is not None:
             self.status = status
         self.build()
-        if interaction.response.is_done():
-            with contextlib.suppress(discord.HTTPException):
+        try:
+            if interaction.response.is_done():
                 await interaction.edit_original_response(embed=self.page(), view=self)
-            return
-        await interaction.response.edit_message(embed=self.page(), view=self)
+            else:
+                await interaction.response.edit_message(embed=self.page(), view=self)
+        except discord.NotFound:
+            # Discord gave up on this click (it has 3 seconds). Redraw the message directly instead.
+            if self.message is not None:
+                with contextlib.suppress(discord.HTTPException):
+                    await self.message.edit(embed=self.page(), view=self)
+        except discord.HTTPException:
+            log.warning("Dashboard refresh failed in %s", self.guild.id, exc_info=True)
 
     def _button(self, label: str, callback, *, emoji: str | None = None, row: int = 4,
                 style: discord.ButtonStyle = discord.ButtonStyle.secondary) -> None:
@@ -178,9 +185,13 @@ class Dashboard(discord.ui.View):
         return embed
 
     def _controls_overview(self) -> None:
-        async def reload(interaction: discord.Interaction) -> None:
-            await self.refresh(interaction, "")
-        self._button("Refresh", reload, emoji="🔄", row=1)
+        """One click straight to any section, instead of opening the menu first."""
+        for index, (key, emoji, label, _) in enumerate(SECTIONS[1:]):
+            async def jump(interaction: discord.Interaction, key=key) -> None:
+                self.section = key
+                self.status = ""
+                await self.refresh(interaction)
+            self._button(label, jump, emoji=emoji, row=1 + index // 3)
 
     # General
 

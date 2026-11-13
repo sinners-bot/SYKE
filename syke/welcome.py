@@ -32,30 +32,36 @@ HEX = re.compile(r"#?([0-9a-fA-F]{6})")
 URL = re.compile(r"https?://\S+\.\S+")
 
 GENERIC = (
-    "{name} just walked in like they own the place. They do not.",
-    "Everyone act normal, {name} is here. Too late, they saw everything.",
-    "{name} has entered the lab. Specimen looks harmless. For now.",
-    "A wild {name} appeared. SYKE has already started taking notes.",
-    "{name} finally made it. The bar was on the floor and they still tripped over it.",
-    "Welcome {name}. Your first message will be judged. Harshly. Lovingly. Mostly harshly.",
+    "{name} joined and the average iq in here dropped on contact",
+    "nobody invited {name} and yet here we are",
+    "{name} looks like the type to say \"first\" in a server with 4000 members",
+    "{name} is gonna send one message, get ignored and leave in a week, calling it now",
+    "who let {name} in, i need names",
+    "{name} has main character syndrome and side character screen time",
+    "great, another {name}. we were running low on people to ignore",
+    "{name} joined a discord server at this hour, that alone says enough",
 )
 DEFAULT_AVATAR = (
-    "{name} is rocking the default avatar. Mysterious, or still looking for the settings button?",
-    "No profile picture, {name}? Witness protection or just vibes?",
+    "default pfp in 2026, {name} you're either a burner or a fed",
+    "{name} couldn't even be bothered to pick a pfp, and you think you're gonna be active here",
+    "the default avatar is doing more personality work than {name} ever will",
 )
 NUMBERS = (
-    "{name} has {digits} numbers in their username, so all the good ones were taken. Iconic.",
-    "The numbers in '{username}' tell us {name} arrived fashionably late to Discord.",
+    "{digits} numbers in the username, every version of {name} before this one got banned",
+    "{username} is crazy, you really took whatever discord suggested and ran",
+    "{name} had to add {digits} digits because even the name was taken by someone better",
 )
 GAMER = (
-    "'{username}' has strong 2009 gamer tag energy. Respect the commitment.",
-    "{name}'s username was clearly crafted in a lobby at 3am. We're honoured.",
+    "{username} is a crazy username to still have, the 2009 lobby wants it back",
+    "imagine naming yourself {username} and expecting to be taken seriously",
+    "{username} sounds like someone who rage quits and blames the wifi",
 )
 LONG = (
-    "{name}'s name is so long it needs its own channel.",
+    "{name} needed that many letters to have a personality",
+    "ngl i stopped reading {name}'s name halfway, it's too long to care",
 )
 SHOUTY = (
-    "{name} even TYPES THEIR NAME IN CAPS. We're in for a loud one.",
+    "{name} typed their own name in caps, we're getting the loudest least funny person in here",
 )
 
 
