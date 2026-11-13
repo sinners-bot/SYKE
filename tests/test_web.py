@@ -44,6 +44,12 @@ class Channel:
         self.sent.append(content)
         return types.SimpleNamespace(id=1)
 
+    async def fetch_message(self, mid):
+        for m in getattr(self, "_history", []):
+            if m.id == mid:
+                return m
+        raise discord.NotFound(types.SimpleNamespace(status=404, reason="Not Found"), "missing")
+
 
 class Member:
     def __init__(self, uid):
@@ -294,6 +300,42 @@ async def test_history_paging_with_before(dash):
         # The channel page wires up scroll-back
         page = await (await cl.get(f"/g/{guild.id}/c/10")).text()
         assert "?before='+f.dataset.mid" in page and "addEventListener('scroll'" in page
+
+
+def _reply_to(msg, target_id, resolved=None):
+    msg.reference = types.SimpleNamespace(message_id=target_id, resolved=resolved)
+    return msg
+
+
+async def test_reply_preview_shows_referenced_message(dash):
+    async with serving(dash) as (cl, web, bot, guild):
+        ch = guild.get_channel(10)
+        orig = _fake_message(200, 7, "Ada", "the original question", 1_700_000_000)
+        reply = _reply_to(_fake_message(201, 8, "Bob", "here is the answer", 1_700_000_050), 200)
+        deleted = _reply_to(_fake_message(202, 8, "Bob", "answering a ghost", 1_700_000_060), 999)
+        ch._history = [orig, reply, deleted]
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        body = await (await cl.get(f"/g/{guild.id}/c/10/messages")).text()
+        # The reply points at the original and shows its author + a snippet.
+        assert "data-jump='200'" in body
+        assert "the original question" in body
+        assert "Ada" in body
+        # A reply to a message we can't resolve says so instead of crashing.
+        assert "Original message was deleted" in body
+
+
+async def test_resolve_refs_fetches_offpage_targets(dash):
+    web, bot, guild = dash
+    ch = guild.get_channel(10)
+    orig = _fake_message(300, 7, "Ada", "older message", 1_700_000_000)
+    reply = _reply_to(_fake_message(301, 8, "Bob", "reply", 1_700_000_050), 300)
+    ch._history = [orig]  # original is fetchable but NOT in the page batch
+    refs = await web._resolve_refs(ch, [reply])
+    assert 300 in refs and refs[300].id == 300
+    # A resolved payload is used directly without any fetch.
+    reply2 = _reply_to(_fake_message(303, 8, "Bob", "r2", 1_700_000_060), 302, resolved=orig)
+    refs2 = await web._resolve_refs(ch, [reply2])
+    assert refs2[302].id == 300
 
 
 async def test_channel_messages_endpoint(dash):

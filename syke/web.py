@@ -196,9 +196,18 @@ h1{font-size:22px;margin:0 0 4px;}h2{font-size:17px;margin:22px 0 10px;}
 .m .ts{font-size:11px;color:var(--muted);}
 .m .text{white-space:pre-wrap;word-break:break-word;color:#dbdee1;}
 .m .text.empty{color:var(--muted);font-style:italic;}
-.m .reply{font-size:13px;color:var(--muted);margin-bottom:2px;display:flex;gap:6px;align-items:center;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
-.m .reply img{width:16px;height:16px;border-radius:50%;}
-.m .reply .rn{color:#b9bbbe;font-weight:600;}
+.m .reply{font-size:13px;color:var(--muted);margin-bottom:2px;display:flex;gap:4px;align-items:center;overflow:hidden;white-space:nowrap;}
+.m .reply[data-jump]{cursor:pointer;}
+.m .reply[data-jump]:hover .rt{color:#dbdee1;}
+.m .reply[data-jump]:hover .rn{filter:brightness(1.2);}
+.m .reply .ra{color:#4e5058;margin-right:2px;}
+.m .reply .rav{width:16px;height:16px;border-radius:50%;flex:none;}
+.m .reply .rn{color:#b9bbbe;font-weight:600;flex:none;}
+.m .reply .rt{overflow:hidden;text-overflow:ellipsis;min-width:0;}
+.m .reply .rt .ie{width:16px;height:16px;vertical-align:-3px;}
+.m .reply .rmeta{font-style:italic;opacity:.8;}
+.m.flash{animation:mflash 1.4s ease-out;border-radius:4px;}
+@keyframes mflash{0%,30%{background:rgba(88,101,242,.28);}100%{background:transparent;}}
 .att{display:block;margin-top:4px;}
 .att img{max-width:420px;max-height:320px;border-radius:8px;display:block;}
 .att-media{max-width:420px;max-height:320px;border-radius:8px;display:block;background:#000;}
@@ -681,7 +690,18 @@ class WebDashboard:
                          f"<div class='text'>{self._highlight(content, query)}</div></div>")
         return head + note + "".join(items)
 
-    def _one_message(self, m: discord.Message, prev: discord.Message | None) -> str:
+    @staticmethod
+    def _is_message(x) -> bool:
+        # Duck-typed: a resolved reference is a full message, not a bare stub.
+        return hasattr(x, "author") and hasattr(x, "id") and hasattr(x, "content")
+
+    @staticmethod
+    def _name_colour(member) -> str:
+        colour = getattr(getattr(member, "colour", None), "value", 0)
+        return f" style='color:#{colour:06x}'" if colour else ""
+
+    def _one_message(self, m: discord.Message, prev: discord.Message | None,
+                     refs: dict | None = None) -> str:
         author = m.author
         same = (prev is not None and prev.author.id == author.id
                 and (m.created_at - prev.created_at).total_seconds() < 420
@@ -691,17 +711,36 @@ class WebDashboard:
         name_style = f" style='color:#{colour:06x}'" if colour else ""
         app = "<span class='app'>APP</span>" if getattr(author, "bot", False) else ""
         ts = int(m.created_at.timestamp())
+        guild = getattr(m, "guild", None)
         reply = ""
         if m.reference is not None:
             ref = m.reference.resolved
-            if isinstance(ref, discord.Message):
+            if not self._is_message(ref) and refs:
+                ref = refs.get(getattr(m.reference, "message_id", None)) or ref
+            ref_mid = getattr(m.reference, "message_id", None)
+            if self._is_message(ref):
                 ref_av = getattr(getattr(ref.author, "display_avatar", None), "url", "")
-                snippet = " ".join((ref.clean_content or "").split())[:80] or "(attachment)"
-                reply = (f"<div class='reply'>↳ <img src='{esc(ref_av)}' alt=''>"
-                         f"<span class='rn'>{esc(ref.author.display_name)}</span> {esc(snippet)}</div>")
+                ref_name = getattr(ref.author, "display_name", "someone")
+                snippet_txt = " ".join((ref.content or "").split())
+                if snippet_txt:
+                    snippet = render_content(snippet_txt[:120], guild, _mention_names(ref))
+                elif getattr(ref, "attachments", None):
+                    snippet = "<span class='rmeta'>📎 attachment</span>"
+                elif getattr(ref, "embeds", None) or getattr(ref, "stickers", None):
+                    snippet = "<span class='rmeta'>embed</span>"
+                else:
+                    snippet = "<span class='rmeta'>(no text)</span>"
+                jump = (f"https://discord.com/channels/{getattr(guild, 'id', 0)}/"
+                        f"{getattr(m, 'channel', None) and m.channel.id}/{ref.id}")
+                reply = (f"<div class='reply' data-jump='{ref.id}' data-href='{esc(jump)}'>"
+                         f"<span class='ra'>↳</span><img class='rav' src='{esc(ref_av)}' alt=''>"
+                         f"<span class='rn'{self._name_colour(ref.author)}>{esc(ref_name)}</span>"
+                         f"<span class='rt'>{snippet}</span></div>")
             else:
-                reply = "<div class='reply'>↳ replying to a message</div>"
-        guild = getattr(m, "guild", None)
+                # Referenced message couldn't be resolved (deleted, or beyond fetch budget).
+                data = f" data-jump='{ref_mid}'" if ref_mid else ""
+                reply = f"<div class='reply'{data}><span class='ra'>↳</span>" \
+                        "<span class='rt rmeta'>Original message was deleted</span></div>"
         raw = m.content or ""
         names = _mention_names(m)
         text_html = render_content(raw, guild, names)
@@ -797,12 +836,47 @@ class WebDashboard:
         collected.reverse()
         if not collected:
             return "" if before is not None else "<div class='dc-empty'>No messages yet.</div>"
+        refs = await self._resolve_refs(channel, collected)
         html = []
         prev = None
         for m in collected:
-            html.append(self._one_message(m, prev))
+            html.append(self._one_message(m, prev, refs))
             prev = m
         return "".join(html)
+
+    async def _resolve_refs(self, channel, messages: list) -> dict:
+        """Map referenced-message id -> Message for replies on this page.
+
+        Prefers messages already in this batch and the payload's resolved
+        reference; fetches anything still missing, capped so a page of replies
+        can't spray the API."""
+        refs: dict[int, discord.Message] = {}
+        by_id = {m.id: m for m in messages}
+        need: list[int] = []
+        for m in messages:
+            ref = getattr(m, "reference", None)
+            if ref is None:
+                continue
+            mid = getattr(ref, "message_id", None)
+            if mid is None:
+                continue
+            resolved = getattr(ref, "resolved", None)
+            if self._is_message(resolved):
+                refs[mid] = resolved
+            elif mid in by_id:
+                refs[mid] = by_id[mid]
+            else:
+                need.append(mid)
+        budget = 15
+        for mid in need:
+            if budget <= 0:
+                break
+            budget -= 1
+            try:
+                refs[mid] = await channel.fetch_message(mid)
+            except discord.HTTPException:
+                pass  # deleted or no access; reply falls back to a notice
+        return refs
 
     async def channel(self, request: web.Request) -> web.Response:
         user = self._user(request)
@@ -842,6 +916,15 @@ class WebDashboard:
             "var pane=document.getElementById('messages');"
             "function bot(){return pane.scrollHeight-pane.scrollTop-pane.clientHeight<100;}"
             "stamp(document);"
+            # Click a reply preview to jump to the message it answers.
+            "function jumpTo(id){var t=pane.querySelector(\".m[data-mid='\"+id+\"']\");"
+            "if(!t)return false;t.scrollIntoView({block:'center'});"
+            "t.classList.remove('flash');void t.offsetWidth;t.classList.add('flash');return true;}"
+            "pane.addEventListener('click',function(e){var r=e.target.closest('.reply[data-jump]');if(!r)return;"
+            "var id=r.dataset.jump,href=r.dataset.href;if(jumpTo(id))return;"
+            "if(typeof older==='function'){var n=0;(function hunt(){older();n++;setTimeout(function(){"
+            "if(jumpTo(id))return;if(n<10&&!noMore)hunt();else if(href)window.open(href,'_blank','noopener');},380);})();return;}"
+            "if(href)window.open(href,'_blank','noopener');});"
             + ("" if searching else
                "pane.scrollTop=pane.scrollHeight;"
                # Live updates over a WebSocket — instant, no flicker, like a real client.
@@ -1111,19 +1194,34 @@ class WebDashboard:
             except Exception:
                 subs.discard(ws)
 
+    async def _live_refs(self, message: discord.Message) -> dict:
+        """Resolve a single live message's reply target for the WS render."""
+        ref = getattr(message, "reference", None)
+        mid = getattr(ref, "message_id", None) if ref else None
+        if mid is None or self._is_message(getattr(ref, "resolved", None)):
+            return {}
+        try:
+            return {mid: await message.channel.fetch_message(mid)}
+        except discord.HTTPException:
+            return {}
+
     async def _on_new_message(self, message: discord.Message) -> None:
         if message.guild is None or message.channel.id not in self._subs:
             return
         with contextlib.suppress(Exception):
+            refs = await self._live_refs(message)
             await self._broadcast(message.channel.id,
-                                  {"t": "new", "mid": str(message.id), "html": self._one_message(message, None)})
+                                  {"t": "new", "mid": str(message.id),
+                                   "html": self._one_message(message, None, refs)})
 
     async def _on_edit_message(self, before: discord.Message, after: discord.Message) -> None:
         if after.guild is None or after.channel.id not in self._subs:
             return
         with contextlib.suppress(Exception):
+            refs = await self._live_refs(after)
             await self._broadcast(after.channel.id,
-                                  {"t": "edit", "mid": str(after.id), "html": self._one_message(after, None)})
+                                  {"t": "edit", "mid": str(after.id),
+                                   "html": self._one_message(after, None, refs)})
 
     async def _on_delete_message(self, message: discord.Message) -> None:
         if message.guild is None or message.channel.id not in self._subs:
