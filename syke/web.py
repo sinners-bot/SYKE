@@ -26,7 +26,20 @@ log = logging.getLogger("syke.web")
 
 MESSAGES_SHOWN = 60
 STORED_PREVIEW = 40
+MEDIA_SCAN = 200
 BRAND = "#8B5CF6"
+
+# Filters the sidebar channel list as you type, hiding empty category headers. Shared by the
+# chat and media views (both carry the sidebar).
+SIDEBAR_JS = (
+    "var _s=document.getElementById('chsearch');"
+    "if(_s){_s.addEventListener('input',function(){var q=_s.value.toLowerCase();"
+    "document.querySelectorAll('#chlist .dc-ch').forEach(function(el){"
+    "el.style.display=el.textContent.toLowerCase().indexOf(q)>-1?'':'none';});"
+    "document.querySelectorAll('#chlist .dc-cat').forEach(function(c){var n=c.nextElementSibling,a=false;"
+    "while(n&&!n.classList.contains('dc-cat')){if(n.classList.contains('dc-ch')&&n.style.display!=='none')a=true;"
+    "n=n.nextElementSibling;}c.style.display=a?'':'none';});});}"
+)
 
 
 def esc(value: object) -> str:
@@ -125,6 +138,21 @@ h1{font-size:22px;margin:0 0 4px;}h2{font-size:17px;margin:22px 0 10px;}
 .dc-input textarea{width:100%;resize:vertical;background:#2b2d31;border-color:#2b2d31;}
 .dc-input .ir{margin-top:6px;display:flex;justify-content:space-between;align-items:center;}
 .dc-empty{color:var(--muted);text-align:center;margin-top:30px;}
+.chsearch{width:calc(100% - 4px);margin:4px 2px 6px;padding:6px 8px;background:#0f0f14;border:1px solid var(--line);
+border-radius:6px;color:var(--text);font-size:13px;}
+.ch-tabs{display:flex;gap:4px;margin-left:auto;}
+.ch-tabs a{font-size:13px;font-weight:600;color:var(--muted);padding:4px 10px;border-radius:6px;}
+.ch-tabs a:hover{background:#22222c;color:var(--text);text-decoration:none;}
+.ch-tabs a.on{background:#2d2d3a;color:#fff;}
+.media-grid{flex:1;overflow-y:auto;padding:14px 16px;display:grid;gap:8px;align-content:start;
+grid-template-columns:repeat(auto-fill,minmax(150px,1fr));}
+.tile{position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;background:#000;display:block;}
+.tile img,.tile video{width:100%;height:100%;object-fit:cover;display:block;}
+.tile .cap{position:absolute;left:0;right:0;bottom:0;padding:4px 6px;font-size:11px;color:#fff;
+background:linear-gradient(transparent,rgba(0,0,0,.8));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.tile .play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:30px;
+color:#fff;text-shadow:0 1px 4px #000;pointer-events:none;}
+.tile.file{aspect-ratio:auto;background:#2b2d31;padding:10px;color:var(--text);font-size:13px;}
 """
 
 
@@ -186,6 +214,7 @@ class WebDashboard:
         a("/g/{gid}", self.server)
         a("/g/{gid}/c/{cid}", self.channel)
         a("/g/{gid}/c/{cid}/messages", self.channel_messages)
+        a("/g/{gid}/c/{cid}/media", self.channel_media)
         p("/g/{gid}/c/{cid}/say", self.say)
         p("/g/{gid}/mod", self.moderate)
         p("/g/{gid}/settings", self.change_setting)
@@ -404,8 +433,10 @@ class WebDashboard:
         return channel
 
     def _sidebar(self, guild: discord.Guild, active_id: int) -> str:
-        """Channel list grouped by category, Discord-style."""
-        rows = [f"<a class='srv' href='/g/{guild.id}'>← {esc(guild.name)}</a>"]
+        """Channel list grouped by category, Discord-style, with a search box."""
+        rows = [f"<a class='srv' href='/g/{guild.id}'>← {esc(guild.name)}</a>",
+                "<input id='chsearch' class='chsearch' placeholder='Search channels' autocomplete='off'>",
+                "<div id='chlist'>"]
         try:
             grouped = guild.by_category()
         except Exception:
@@ -427,7 +458,17 @@ class WebDashboard:
                     rows.append(f"<a class='dc-ch{on}' href='/g/{guild.id}/c/{ch.id}'>{icon} {esc(ch.name)}</a>")
                 else:
                     rows.append(f"<div class='dc-ch voice' title='SYKE has no access'>🔒 {esc(ch.name)}</div>")
+        rows.append("</div>")
         return f"<div class='dc-side'>{''.join(rows)}</div>"
+
+    def _channel_header(self, guild: discord.Guild, channel, active: str) -> str:
+        topic = getattr(channel, "topic", None)
+        topic_html = f"<span class='topic'>{esc(topic[:120])}</span>" if topic else ""
+        base = f"/g/{guild.id}/c/{channel.id}"
+        tabs = (f"<div class='ch-tabs'>"
+                f"<a class='{'on' if active == 'chat' else ''}' href='{base}'>Chat</a>"
+                f"<a class='{'on' if active == 'media' else ''}' href='{base}/media'>Media</a></div>")
+        return (f"<div class='dc-head'><span class='hash'>#</span> {esc(channel.name)}{topic_html}{tabs}</div>")
 
     def _one_message(self, m: discord.Message, prev: discord.Message | None) -> str:
         author = m.author
@@ -510,9 +551,7 @@ class WebDashboard:
         sidebar = self._sidebar(guild, channel.id)
         messages = await self._messages_html(channel)
         csrf = self._hidden_csrf(user[0])
-        topic = getattr(channel, "topic", None)
-        head = (f"<div class='dc-head'><span class='hash'>#</span> {esc(channel.name)}"
-                + (f"<span class='topic'>{esc(topic[:120])}</span>" if topic else "") + "</div>")
+        head = self._channel_header(guild, channel, "chat")
         if can_send:
             inp = (f"<form class='dc-input' method='post' action='/g/{guild.id}/c/{channel.id}/say'>{csrf}"
                    f"<textarea name='content' rows='2' maxlength='2000' required "
@@ -539,9 +578,64 @@ class WebDashboard:
             "async function poll(){try{var r=await fetch(location.pathname+'/messages');if(!r.ok)return;"
             "var h=await r.text(),b=bot();pane.innerHTML=h;stamp(pane);if(b)pane.scrollTop=pane.scrollHeight;}catch(e){}}"
             "setInterval(poll,8000);"
+            + SIDEBAR_JS +
             "</script>"
         )
         return layout(f"#{channel.name}", body, user=user, wide=True)
+
+    async def channel_media(self, request: web.Request) -> web.Response:
+        user = self._user(request)
+        if user is None:
+            raise web.HTTPFound("/login")
+        guild = self._guild_or_404(request)
+        channel = self._channel_or_404(request, guild)
+        sidebar = self._sidebar(guild, channel.id)
+        grid = await self._media_html(channel)
+        head = self._channel_header(guild, channel, "media")
+        body = (
+            f"<div class='dc'>{sidebar}<div class='dc-main'>{head}{grid}</div></div>"
+            "<script>function fmt(s){var d=new Date(s*1000),n=new Date(),"
+            "t=d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),y=new Date(n.getTime()-864e5);"
+            "if(d.toDateString()===n.toDateString())return'Today '+t;"
+            "if(d.toDateString()===y.toDateString())return'Yesterday '+t;return d.toLocaleDateString();}"
+            "document.querySelectorAll('time[data-ts]').forEach(function(e){e.textContent=fmt(+e.dataset.ts);});"
+            + SIDEBAR_JS + "</script>"
+        )
+        return layout(f"#{channel.name} · media", body, user=user, wide=True)
+
+    async def _media_html(self, channel) -> str:
+        if not channel.permissions_for(channel.guild.me).read_message_history:
+            return "<div class='dc-empty'>SYKE can't read this channel, so it can't show its media.</div>"
+        try:
+            tiles = []
+            async for m in channel.history(limit=MEDIA_SCAN):
+                ts = int(m.created_at.timestamp())
+                who = esc(m.author.display_name)
+                for a in m.attachments:
+                    ct = a.content_type or ""
+                    cap = f"<span class='cap'>{who} · <time data-ts='{ts}'></time></span>"
+                    if ct.startswith("image"):
+                        tiles.append(f"<a class='tile' href='{esc(a.url)}' target='_blank' rel='noreferrer'>"
+                                     f"<img src='{esc(a.url)}' loading='lazy' alt=''>{cap}</a>")
+                    elif ct.startswith("video"):
+                        tiles.append(f"<a class='tile' href='{esc(a.url)}' target='_blank' rel='noreferrer'>"
+                                     f"<video src='{esc(a.url)}#t=0.1' preload='metadata' muted></video>"
+                                     f"<span class='play'>▶</span>{cap}</a>")
+                    else:
+                        kb = f"{a.size // 1024} KB" if getattr(a, "size", 0) else ""
+                        tiles.append(f"<a class='tile file' href='{esc(a.url)}' target='_blank' rel='noreferrer'>"
+                                     f"📎 {esc(a.filename)}<br><span class='muted'>{kb} · {who}</span></a>")
+                for e in m.embeds:
+                    url = getattr(getattr(e, "thumbnail", None), "url", None) or getattr(getattr(e, "image", None), "url", None)
+                    if url:
+                        tiles.append(f"<a class='tile' href='{esc(getattr(e, 'url', None) or url)}' target='_blank' "
+                                     f"rel='noreferrer'><img src='{esc(url)}' loading='lazy' alt=''>"
+                                     f"<span class='cap'>{who} · <time data-ts='{ts}'></time></span></a>")
+        except discord.HTTPException:
+            return "<div class='dc-empty'>Couldn't load media just now.</div>"
+        if not tiles:
+            return (f"<div class='dc-empty'>No media in the last {MEDIA_SCAN} messages of this channel.</div>")
+        return f"<div class='media-grid'>{''.join(tiles)}</div>"
 
     async def channel_messages(self, request: web.Request) -> web.Response:
         """Just the message list HTML, for the live-refresh poll."""

@@ -274,6 +274,23 @@ async def test_channel_messages_endpoint(dash):
         assert resp.status == 403
 
 
+async def test_sidebar_has_search_and_media_tab(dash):
+    async with serving(dash) as (cl, web, bot, guild):
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        body = await (await cl.get(f"/g/{guild.id}/c/10")).text()
+        assert "id='chsearch'" in body and "id='chlist'" in body   # channel search box
+        assert "/c/10/media" in body and ">Media<" in body          # media tab
+        assert "chsearch" in body
+
+
+async def test_media_endpoint(dash):
+    async with serving(dash) as (cl, web, bot, guild):
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        resp = await cl.get(f"/g/{guild.id}/c/10/media")
+        assert resp.status == 200
+        assert "media-grid" in (await resp.text()) or "No media" in (await resp.text())
+
+
 def test_html_escaping_blocks_injection():
     assert esc("<script>alert(1)</script>") == "&lt;script&gt;alert(1)&lt;/script&gt;"
 
