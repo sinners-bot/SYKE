@@ -30,8 +30,13 @@ class Channel:
     def permissions_for(self, who):
         return discord.Permissions(read_message_history=self._read, send_messages=self._send, view_channel=True)
 
-    async def history(self, limit=50):
-        for m in []:
+    async def history(self, limit=50, before=None):
+        msgs = list(getattr(self, "_history", []))
+        if before is not None:
+            bid = getattr(before, "id", before)
+            msgs = [m for m in msgs if m.id < bid]
+        # Discord returns newest first.
+        for m in sorted(msgs, key=lambda m: m.id, reverse=True)[:limit]:
             yield m
 
     async def send(self, content, **kwargs):
@@ -261,6 +266,33 @@ async def test_channel_view_renders_discord_style(dash):
         assert "# general" in body or "#</span> general" in body  # channel header
         assert "Message #general as SYKE" in body                 # input bar
         assert "setInterval(poll" in body                         # live refresh
+
+
+def _fake_message(mid, uid, name, content, ts):
+    import types
+    from datetime import datetime, timezone
+    author = types.SimpleNamespace(id=uid, display_name=name, bot=False,
+        display_avatar=types.SimpleNamespace(url=f"https://cdn/{uid}.png"),
+        colour=types.SimpleNamespace(value=0))
+    return types.SimpleNamespace(id=mid, author=author, clean_content=content,
+        created_at=datetime.fromtimestamp(ts, timezone.utc), reference=None,
+        attachments=[], embeds=[], reactions=[])
+
+
+async def test_history_paging_with_before(dash):
+    async with serving(dash) as (cl, web, bot, guild):
+        ch = guild.get_channel(10)
+        ch._history = [_fake_message(100 + i, 7, "Ada", f"message {i}", 1_700_000_000 + i) for i in range(10)]
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        # Latest page: no 'before'
+        latest = await (await cl.get(f"/g/{guild.id}/c/10/messages")).text()
+        assert "data-mid='109'" in latest and "setInterval" not in latest
+        # Older page: before the oldest shown
+        older = await (await cl.get(f"/g/{guild.id}/c/10/messages?before=105")).text()
+        assert "data-mid='104'" in older and "data-mid='105'" not in older
+        # The channel page wires up scroll-back
+        page = await (await cl.get(f"/g/{guild.id}/c/10")).text()
+        assert "?before='+f.dataset.mid" in page and "addEventListener('scroll'" in page
 
 
 async def test_channel_messages_endpoint(dash):

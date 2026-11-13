@@ -569,11 +569,13 @@ class WebDashboard:
                 f"<div class='head'><span class='name'{name_style}>{esc(author.display_name)}{app}</span>"
                 f"<time class='ts' data-ts='{ts}'></time></div>")
         av = f"<div class='av'><img src='{esc(avatar)}' alt='' loading='lazy'></div>"
-        return (f"<div class='m{' grouped' if same else ''}'>{av}"
+        return (f"<div class='m{' grouped' if same else ''}' data-mid='{m.id}'>{av}"
                 f"<div class='content'>{reply}{head}{body}{''.join(atts)}{''.join(embeds)}{reactions}</div></div>")
 
-    async def _messages_html(self, channel) -> str:
+    async def _messages_html(self, channel, before: int | None = None) -> str:
         if not channel.permissions_for(channel.guild.me).read_message_history:
+            if before is not None:
+                return ""  # Can't page a channel we can't read.
             stored = self.bot.storage.corpus(channel.guild.id)[:STORED_PREVIEW]
             if not stored:
                 return "<div class='dc-empty'>SYKE can't read this channel and has nothing stored from it.</div>"
@@ -583,13 +585,16 @@ class WebDashboard:
                             f"<div class='head'><span class='name'>user {author_id}</span></div>"
                             f"<div class='text'>{esc(content)}</div></div></div>")
             return "".join(rows)
+        kwargs = {"limit": MESSAGES_SHOWN}
+        if before is not None:
+            kwargs["before"] = discord.Object(id=before)
         try:
-            collected = [m async for m in channel.history(limit=MESSAGES_SHOWN)]
+            collected = [m async for m in channel.history(**kwargs)]
         except discord.HTTPException:
-            return "<div class='note err'>Couldn't read live history just now.</div>"
+            return "" if before is not None else "<div class='note err'>Couldn't read live history just now.</div>"
         collected.reverse()
         if not collected:
-            return "<div class='dc-empty'>No messages yet.</div>"
+            return "" if before is not None else "<div class='dc-empty'>No messages yet.</div>"
         html = []
         prev = None
         for m in collected:
@@ -636,9 +641,18 @@ class WebDashboard:
             "stamp(document);"
             + ("" if searching else
                "pane.scrollTop=pane.scrollHeight;"
-               "async function poll(){try{var r=await fetch(location.pathname+'/messages');if(!r.ok)return;"
-               "var h=await r.text(),b=bot();pane.innerHTML=h;stamp(pane);if(b)pane.scrollTop=pane.scrollHeight;}catch(e){}}"
-               "setInterval(poll,8000);")
+               # Live refresh, but only while you're already at the bottom — never yanks you up.
+               "async function poll(){if(!bot())return;try{var r=await fetch(location.pathname+'/messages');"
+               "if(!r.ok)return;var h=await r.text();pane.innerHTML=h;stamp(pane);pane.scrollTop=pane.scrollHeight;}"
+               "catch(e){}}setInterval(poll,8000);"
+               # Scroll up to load older history, Discord-style, keeping your place.
+               "var loading=false,noMore=false;"
+               "async function older(){if(loading||noMore)return;var f=pane.querySelector('.m[data-mid]');if(!f)return;"
+               "loading=true;try{var r=await fetch(location.pathname+'/messages?before='+f.dataset.mid);"
+               "if(r.ok){var h=await r.text();if(h.indexOf('data-mid')===-1){noMore=true;}else{"
+               "var before=pane.scrollHeight;f.insertAdjacentHTML('beforebegin',h);stamp(pane);"
+               "pane.scrollTop+=pane.scrollHeight-before;}}}catch(e){}loading=false;}"
+               "pane.addEventListener('scroll',function(){if(pane.scrollTop<150)older();});")
             + SIDEBAR_JS +
             "</script>"
         )
@@ -699,13 +713,15 @@ class WebDashboard:
         return f"<div class='media-grid'>{''.join(tiles)}</div>"
 
     async def channel_messages(self, request: web.Request) -> web.Response:
-        """Just the message list HTML, for the live-refresh poll."""
+        """Message list HTML. ?before=<message_id> pages older history; otherwise the latest."""
         user = self._user(request)
         if user is None:
             raise web.HTTPForbidden(text="login required")
         guild = self._guild_or_404(request)
         channel = self._channel_or_404(request, guild)
-        return web.Response(text=await self._messages_html(channel), content_type="text/html")
+        before_raw = request.query.get("before")
+        before = int(before_raw) if before_raw and before_raw.isdigit() else None
+        return web.Response(text=await self._messages_html(channel, before), content_type="text/html")
 
     # Actions
 
