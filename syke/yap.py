@@ -19,7 +19,9 @@ TOKEN = re.compile(r"<a?:\w+:\d+>|:\w+:|[a-z0-9']+")
 QUESTION_START = re.compile(r"^(who|what|why|how|when|where|which|is|are|do|does|did|can|could|would|should|will|wanna|u)\b")
 ANSWER_START = re.compile(r"^(yes|yeah|yea|yep|ye|no|nah|nope|because|bc|cuz|cause|probably|maybe|never|always|obviously|bro|idk|ofc)\b")
 CUSTOM_EMOJI_TAG = re.compile(r"<a?:\w+:\d+>")
+EMOJI_ID = re.compile(r":(\d+)>$")
 URL = re.compile(r"https?://", re.IGNORECASE)
+GIF_HOSTS = ("tenor.com/view", "giphy.com/gifs", "media.tenor.co", "media.giphy.com", "c.tenor.com")
 VOCAB_STRIP = " .,!?;:()[]{}\"“”*_~`|…"
 PINGS = re.compile(r"@(everyone|here)\b|<@[!&]?\d+>")
 SPEAKER_TAG = re.compile(r"^\**(syke|me|reply)\**\s*:\s*", re.IGNORECASE)
@@ -165,6 +167,40 @@ class Voice:
     lowercase: float = 0.0
     periods: float = 0.0
     length: int = 0
+    emojis: list[str] = field(default_factory=list)   # custom emojis users have used, most-used first
+    gifs: list[str] = field(default_factory=list)      # GIF links users have posted, most-used first
+
+
+def emoji_id(tag: str) -> int | None:
+    """The numeric id out of a `<:name:id>` / `<a:name:id>` tag."""
+    m = EMOJI_ID.search(tag)
+    return int(m.group(1)) if m else None
+
+
+def _gif_url(token: str) -> str | None:
+    low = token.lower()
+    if not low.startswith(("http://", "https://")):
+        return None
+    clean = token.rstrip(").,!?*>\"'")
+    low = clean.lower()
+    if low.endswith(".gif") or any(h in low for h in GIF_HOSTS):
+        return clean
+    return None
+
+
+def mine_expressions(texts: Iterable[str]) -> tuple[list[str], list[str]]:
+    """Custom emojis and GIF links that appear in `texts`, each ordered by how often they're used."""
+    emojis: Counter = Counter()
+    gifs: Counter = Counter()
+    for text in texts:
+        for raw in (text or "").split():
+            if CUSTOM_EMOJI_TAG.fullmatch(raw):
+                emojis[raw] += 1
+            else:
+                g = _gif_url(raw)
+                if g:
+                    gifs[g] += 1
+    return [e for e, _ in emojis.most_common()], [g for g, _ in gifs.most_common()]
 
 
 @dataclass
@@ -205,12 +241,15 @@ def build_voice(texts: list[str]) -> Voice:
         return Voice(None)
     lengths = sorted(len(t.split()) for t in texts)
     lettered = [t for t in texts if any(c.isalpha() for c in t)] or texts
+    emojis, gifs = mine_expressions(texts)
     return Voice(
         chain=build_chain(texts),
         words=server_words(texts),
         lowercase=sum(t == t.lower() for t in lettered) / len(lettered),
         periods=sum(t.rstrip().endswith(".") and not t.rstrip().endswith("..") for t in texts) / len(texts),
         length=lengths[len(lengths) // 2],
+        emojis=emojis,
+        gifs=gifs,
     )
 
 

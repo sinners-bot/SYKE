@@ -76,7 +76,19 @@ from .verify import (
     staff_only,
     turn_off,
 )
-from .yap import Turn, Voice, build_voice, detect_tone, folded, query_weights, rank, remixes, search_terms
+from .yap import (
+    CUSTOM_EMOJI_TAG,
+    Turn,
+    Voice,
+    build_voice,
+    detect_tone,
+    emoji_id,
+    folded,
+    query_weights,
+    rank,
+    remixes,
+    search_terms,
+)
 
 log = logging.getLogger("syke")
 
@@ -113,6 +125,11 @@ YAP_TONED = 40
 YAP_CHAIN_SIZE = 15000
 YAP_CHAIN_TTL = 600
 YAP_RECENT = 16
+# How often a yap carries a server emoji / sticker / gif the chat actually uses.
+YAP_EMOJI_CHANCE = 0.4
+YAP_STICKER_CHANCE = 0.1
+YAP_GIF_CHANCE = 0.1
+YAP_STICKER_SCAN = 60
 ASK_TAG = "SYKE AI"
 ASK_COOLDOWN = 3
 ASK_MEMORY = 500
@@ -870,9 +887,56 @@ class Syke(commands.Bot):
             reply = await self.build_yap(message, said, target) or self.pick_yap(
                 message.guild.id, exclude_id=message.id, exclude=used)
         if reply:
-            with contextlib.suppress(discord.HTTPException):
-                await message.reply(reply, mention_author=False)
-                self.remember_yap(message.channel.id, reply)
+            await self._send_yap(message, reply, reply_to=True)
+
+    async def recent_stickers(self, message: discord.Message, limit: int = YAP_STICKER_SCAN) -> list:
+        """Guild stickers members have posted in this channel lately (so SYKE can send them back)."""
+        guild = message.guild
+        by_id = {s.id: s for s in getattr(guild, "stickers", ()) or ()}
+        if not by_id:
+            return []
+        history = getattr(message.channel, "history", None)
+        if history is None:
+            return []
+        seen: dict[int, object] = {}
+        try:
+            async for m in history(limit=limit, before=message):
+                for st in getattr(m, "stickers", ()) or ():
+                    if st.id in by_id:
+                        seen[st.id] = by_id[st.id]
+        except discord.HTTPException:
+            return []
+        return list(seen.values())
+
+    async def yap_extras(self, message: discord.Message, text: str) -> tuple[str, list]:
+        """Maybe dress a yap with a server emoji, sticker or GIF the chat actually uses."""
+        guild = message.guild
+        voice = await self.server_voice(guild.id)
+        content, stickers = text, []
+        # A custom emoji members use, that SYKE can still post here.
+        available = {e.id for e in getattr(guild, "emojis", ()) or ()}
+        pool = [e for e in (voice.emojis or []) if emoji_id(e) in available][:12]
+        if pool and not CUSTOM_EMOJI_TAG.search(text) and random.random() < YAP_EMOJI_CHANCE:
+            content = f"{content} {random.choice(pool)}"
+        # Occasionally a sticker someone used recently, or else a GIF the server posts.
+        if random.random() < YAP_STICKER_CHANCE:
+            found = await self.recent_stickers(message)
+            if found:
+                stickers = [random.choice(found)]
+        if not stickers and (voice.gifs or []) and random.random() < YAP_GIF_CHANCE:
+            content = f"{content}\n{random.choice(voice.gifs[:12])}"
+        return content, stickers
+
+    async def _send_yap(self, message: discord.Message, text: str, *, reply_to: bool) -> None:
+        """Send a yap line, possibly with an emoji/sticker/gif, then remember the base text."""
+        content, stickers = await self.yap_extras(message, text)
+        kwargs = {"stickers": stickers} if stickers else {}
+        with contextlib.suppress(discord.HTTPException):
+            if reply_to:
+                await message.reply(content, mention_author=False, **kwargs)
+            else:
+                await message.channel.send(content, **kwargs)
+            self.remember_yap(message.channel.id, text)
 
     def is_command_text(self, guild_id: int, text: str) -> bool:
         if dollar_tldr(text):
@@ -920,9 +984,7 @@ class Syke(commands.Bot):
         line = await self.contextual_yap(message)
         if line is None:
             return
-        with contextlib.suppress(discord.HTTPException):
-            await message.channel.send(line)
-            self.remember_yap(message.channel.id, line)
+        await self._send_yap(message, line, reply_to=False)
 
     def prefix_for(self, guild_id: int) -> str:
         if guild_id not in self._prefixes:
