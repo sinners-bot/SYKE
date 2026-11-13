@@ -58,7 +58,7 @@ _TOKEN = re.compile(r"<a?:\w{2,32}:\d+>|<@!?\d+>|<#\d+>|<@&\d+>|@everyone|@here"
 _EMOJI = re.compile(r"<(a)?:(\w{2,32}):(\d+)>")
 
 
-def _token_html(token: str, guild) -> str:
+def _token_html(token: str, guild, names: dict) -> str:
     em = _EMOJI.match(token)
     if em:
         ext = "gif" if em.group(1) else "png"
@@ -71,31 +71,50 @@ def _token_html(token: str, guild) -> str:
     if user:
         uid = int(user.group(1))
         member = guild.get_member(uid) if guild is not None and hasattr(guild, "get_member") else None
-        return f"<span class='mention'>@{esc(getattr(member, 'display_name', None) or uid)}</span>"
+        # The message payload carries mentioned users' names even without the Members intent.
+        name = names.get(("u", uid)) or getattr(member, "display_name", None) or uid
+        return f"<span class='mention'>@{esc(name)}</span>"
     chan = re.match(r"<#(\d+)>", token)
     if chan:
         cid = int(chan.group(1))
         ch = guild.get_channel(cid) if guild is not None and hasattr(guild, "get_channel") else None
-        return f"<span class='mention'>#{esc(getattr(ch, 'name', None) or cid)}</span>"
+        return f"<span class='mention'>#{esc(names.get(('c', cid)) or getattr(ch, 'name', None) or cid)}</span>"
     role = re.match(r"<@&(\d+)>", token)
     if role:
         rid = int(role.group(1))
         r = guild.get_role(rid) if guild is not None and hasattr(guild, "get_role") else None
-        return f"<span class='mention'>@{esc(getattr(r, 'name', None) or rid)}</span>"
+        return f"<span class='mention'>@{esc(names.get(('r', rid)) or getattr(r, 'name', None) or rid)}</span>"
     return esc(token)
 
 
-def render_content(content: str, guild) -> str:
-    """Escape message text and render custom emojis as images and mentions as chips, Discord-style."""
+def render_content(content: str, guild, names: dict | None = None) -> str:
+    """Escape message text and render custom emojis as images and mentions as chips, Discord-style.
+
+    `names` maps ('u'|'c'|'r', id) -> display name, built from the message's own mention lists so
+    usernames resolve even when SYKE doesn't have the Server Members intent.
+    """
     if not content:
         return ""
+    names = names or {}
     out, last = [], 0
     for mo in _TOKEN.finditer(content):
         out.append(esc(content[last:mo.start()]))
-        out.append(_token_html(mo.group(0), guild))
+        out.append(_token_html(mo.group(0), guild, names))
         last = mo.end()
     out.append(esc(content[last:]))
     return "".join(out)
+
+
+def _mention_names(message) -> dict:
+    """Resolve names for everyone the message mentions, from the payload (no Members intent needed)."""
+    names: dict = {}
+    for u in getattr(message, "mentions", []) or []:
+        names[("u", u.id)] = getattr(u, "display_name", None) or getattr(u, "name", None) or u.id
+    for c in getattr(message, "channel_mentions", []) or []:
+        names[("c", c.id)] = getattr(c, "name", None) or c.id
+    for r in getattr(message, "role_mentions", []) or []:
+        names[("r", r.id)] = getattr(r, "name", None) or r.id
+    return names
 
 
 def base_url(request: web.Request, settings) -> str:
@@ -684,7 +703,8 @@ class WebDashboard:
                 reply = "<div class='reply'>↳ replying to a message</div>"
         guild = getattr(m, "guild", None)
         raw = m.content or ""
-        text_html = render_content(raw, guild)
+        names = _mention_names(m)
+        text_html = render_content(raw, guild, names)
         # Discord shows a message that's only custom emoji at jumbo size.
         only_emoji = bool(raw.strip()) and not _TOKEN.sub("", raw).strip() and bool(_EMOJI.search(raw))
         text = f"<div class='text{' jumbo' if only_emoji else ''}'>{text_html}</div>" if text_html else ""

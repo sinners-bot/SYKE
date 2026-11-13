@@ -478,6 +478,25 @@ async def test_websocket_requires_login(dash):
             pass
 
 
+def test_mentions_resolve_without_members_intent(dash):
+    import types
+    from datetime import datetime, timezone
+    web = dash[0]
+    # guild cache is empty (Members intent off) — name must come from the message payload.
+    guild = types.SimpleNamespace(id=42, get_member=lambda i: None, get_channel=lambda i: None,
+                                  get_role=lambda i: None)
+    author = types.SimpleNamespace(id=1, display_name="Bo", bot=False,
+        display_avatar=types.SimpleNamespace(url="x"), colour=types.SimpleNamespace(value=0))
+    pinged = types.SimpleNamespace(id=999, display_name="CoolGuy", name="coolguy")
+    m = types.SimpleNamespace(id=5, guild=guild, author=author, content="yo <@999> look",
+        clean_content="", created_at=datetime(2026, 11, 13, tzinfo=timezone.utc), reference=None,
+        attachments=[], embeds=[], stickers=[], reactions=[],
+        mentions=[pinged], channel_mentions=[], role_mentions=[])
+    html = web._one_message(m, None)
+    assert "@CoolGuy" in html
+    assert ">@999<" not in html   # the raw id is not shown as the mention
+
+
 def test_html_escaping_blocks_injection():
     assert esc("<script>alert(1)</script>") == "&lt;script&gt;alert(1)&lt;/script&gt;"
 
