@@ -209,6 +209,11 @@ mark{background:#f5b30155;color:#ffe08a;border-radius:2px;padding:0 1px;}
 .prof-sec h3{font-size:15px;margin:0 0 8px;}
 .bar{height:8px;border-radius:6px;background:var(--panel2);overflow:hidden;margin:4px 0 8px;}
 .bar > i{display:block;height:100%;background:var(--brand);}
+.emoji-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;}
+.emoji{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 6px;text-align:center;}
+.emoji img{width:44px;height:44px;object-fit:contain;}
+.emoji .en{display:block;margin-top:6px;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.emoji .tag{font-size:9px;color:var(--brand);}
 """
 
 
@@ -268,6 +273,7 @@ class WebDashboard:
         a("/callback", self.callback)
         a("/logout", self.logout)
         a("/g/{gid}", self.server)
+        a("/g/{gid}/emojis", self.server_emojis)
         a("/g/{gid}/u/{uid}", self.member_profile)
         a("/g/{gid}/c/{cid}", self.channel)
         a("/g/{gid}/c/{cid}/messages", self.channel_messages)
@@ -451,14 +457,44 @@ class WebDashboard:
             f"</div></div>"
         )
         mod = self._mod_form(guild, user[0])
+        emoji_count = len(getattr(guild, "emojis", ()))
         body = (
             f"{flash(request)}<h1>{esc(guild.name)}</h1>"
             f"<div class='muted'>{guild.member_count or 0} members · owner "
-            f"{esc(getattr(guild.owner, 'display_name', guild.owner_id))}</div>"
+            f"{esc(getattr(guild.owner, 'display_name', guild.owner_id))} · "
+            f"<a href='/g/{guild.id}/emojis'>{emoji_count} emojis</a></div>"
             f"<div class='grid' style='margin-top:14px'>{settings_form}{mod}{danger}</div>"
             f"<h2>Channels</h2><table>{''.join(rows) or '<tr><td>No text channels</td></tr>'}</table>"
         )
         return layout(guild.name, body, user=user)
+
+    async def server_emojis(self, request: web.Request) -> web.Response:
+        user = self._user(request)
+        if user is None:
+            raise web.HTTPFound("/login")
+        guild = self._guild_or_404(request)
+        emojis = sorted(getattr(guild, "emojis", ()), key=lambda e: (e.animated, e.name.lower()))
+        tiles = []
+        for e in emojis:
+            tag = "<span class='tag'>GIF</span>" if e.animated else ""
+            tiles.append(f"<div class='emoji'><a href='{esc(e.url)}' target='_blank' rel='noreferrer'>"
+                         f"<img src='{esc(e.url)}' alt='{esc(e.name)}' loading='lazy'></a>"
+                         f"<span class='en'>:{esc(e.name)}: {tag}</span></div>")
+        stickers = getattr(guild, "stickers", ())
+        sticker_html = ""
+        if stickers:
+            scards = []
+            for s in stickers:
+                url = getattr(s, "url", "")
+                scards.append(f"<div class='emoji'><a href='{esc(url)}' target='_blank' rel='noreferrer'>"
+                              f"<img src='{esc(url)}' alt='{esc(s.name)}' loading='lazy'></a>"
+                              f"<span class='en'>{esc(s.name)}</span></div>")
+            sticker_html = f"<h2>Stickers ({len(stickers)})</h2><div class='emoji-grid'>{''.join(scards)}</div>"
+        grid = f"<div class='emoji-grid'>{''.join(tiles)}</div>" if tiles else \
+            "<div class='dc-empty'>This server has no custom emojis.</div>"
+        body = (f"<div class='muted'><a href='/g/{guild.id}'>← {esc(guild.name)}</a></div>"
+                f"<h1>Emojis ({len(emojis)})</h1>{grid}{sticker_html}")
+        return layout(f"{guild.name} emojis", body, user=user)
 
     def _mod_form(self, guild: discord.Guild, user_id: int) -> str:
         csrf = self._hidden_csrf(user_id)

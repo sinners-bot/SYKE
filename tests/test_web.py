@@ -406,6 +406,22 @@ async def test_chat_has_member_list_and_clickable_authors(dash):
         assert f"/g/{guild.id}/u/7" in body           # member row links to profile
 
 
+async def test_emoji_gallery(dash):
+    import types
+    async with serving(dash) as (cl, web, bot, guild):
+        guild.emojis = [types.SimpleNamespace(name="pepe", url="https://cdn/e1.png", animated=False),
+                        types.SimpleNamespace(name="dance", url="https://cdn/e2.gif", animated=True)]
+        guild.stickers = []
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        body = await (await cl.get(f"/g/{guild.id}/emojis")).text()
+        assert "Emojis (2)" in body
+        assert ":pepe:" in body and ":dance:" in body and "GIF" in body
+        assert "https://cdn/e1.png" in body
+        # linked from the server page
+        page = await (await cl.get(f"/g/{guild.id}")).text()
+        assert f"/g/{guild.id}/emojis" in page
+
+
 def test_html_escaping_blocks_injection():
     assert esc("<script>alert(1)</script>") == "&lt;script&gt;alert(1)&lt;/script&gt;"
 
