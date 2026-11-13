@@ -119,6 +119,19 @@ CREATE TABLE IF NOT EXISTS mod_cases (
     PRIMARY KEY (guild_id, number)
 );
 CREATE INDEX IF NOT EXISTS mod_cases_user ON mod_cases (guild_id, user_id);
+CREATE TABLE IF NOT EXISTS guild_kv (
+    guild_id INTEGER NOT NULL,
+    key      TEXT NOT NULL,
+    value    TEXT NOT NULL,
+    PRIMARY KEY (guild_id, key)
+);
+CREATE TABLE IF NOT EXISTS guess_scores (
+    guild_id INTEGER NOT NULL,
+    user_id  INTEGER NOT NULL,
+    points   INTEGER NOT NULL DEFAULT 0,
+    played   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS locked_channels (
     guild_id   INTEGER NOT NULL,
     channel_id INTEGER NOT NULL,
@@ -584,6 +597,97 @@ class Storage:
             "INSERT INTO guild_settings (guild_id, modlog_channel) VALUES (?, ?) "
             "ON CONFLICT(guild_id) DO UPDATE SET modlog_channel = excluded.modlog_channel",
             (guild_id, channel_id),
+        )
+
+    # Feature settings (welcome, awards) as small JSON blobs per server
+
+    def get_config(self, guild_id: int, key: str) -> dict:
+        rows = self._read("SELECT value FROM guild_kv WHERE guild_id = ? AND key = ?", (guild_id, key))
+        if not rows:
+            return {}
+        try:
+            data = json.loads(rows[0][0])
+        except ValueError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def update_config(self, guild_id: int, key: str, **changes) -> dict:
+        """Merge `changes` into a server's config blob. A None value removes that field."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM guild_kv WHERE guild_id = ? AND key = ?", (guild_id, key),
+            ).fetchone()
+            try:
+                data = json.loads(row[0]) if row else {}
+            except ValueError:
+                data = {}
+            if not isinstance(data, dict):
+                data = {}
+            for name, value in changes.items():
+                if value is None:
+                    data.pop(name, None)
+                else:
+                    data[name] = value
+            self._conn.execute(
+                "INSERT INTO guild_kv VALUES (?, ?, ?) ON CONFLICT(guild_id, key) DO UPDATE SET value = excluded.value",
+                (guild_id, key, json.dumps(data)),
+            )
+            self._conn.commit()
+        return data
+
+    def clear_config(self, guild_id: int, key: str) -> bool:
+        return self._write("DELETE FROM guild_kv WHERE guild_id = ? AND key = ?", (guild_id, key)) > 0
+
+    def configs(self, key: str) -> dict[int, dict]:
+        """Every server's blob for `key`."""
+        found = {}
+        for guild_id, value in self._read("SELECT guild_id, value FROM guild_kv WHERE key = ?", (key,)):
+            try:
+                data = json.loads(value)
+            except ValueError:
+                continue
+            if isinstance(data, dict):
+                found[guild_id] = data
+        return found
+
+    # !guess
+
+    def guess_candidates(self, guild_id: int, limit: int = 40) -> list[tuple]:
+        """Random stored messages worth guessing: `(message_id, channel_id, author_id, author_name, content)`."""
+        return self._read(
+            "SELECT message_id, channel_id, author_id, author_name, content FROM corpus "
+            "WHERE guild_id = ? AND author_name != '' AND length(content) BETWEEN 15 AND 280 "
+            "AND content NOT LIKE '%<@%' AND content NOT LIKE '%http%' ORDER BY RANDOM() LIMIT ?",
+            (guild_id, limit),
+        )
+
+    def top_authors(self, guild_id: int, limit: int = 40) -> list[tuple[int, str, int]]:
+        """`(author_id, latest name, stored messages)` for the most active members."""
+        return self._read(
+            "SELECT author_id, MAX(author_name), COUNT(*) FROM corpus WHERE guild_id = ? AND author_name != '' "
+            "GROUP BY author_id ORDER BY COUNT(*) DESC LIMIT ?",
+            (guild_id, limit),
+        )
+
+    def add_guess_score(self, guild_id: int, user_id: int, points: int) -> int:
+        """Add points (0 just counts a game played). Returns the new total."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO guess_scores (guild_id, user_id, points, played) VALUES (?, ?, ?, 1) "
+                "ON CONFLICT(guild_id, user_id) DO UPDATE SET points = points + excluded.points, played = played + 1",
+                (guild_id, user_id, points),
+            )
+            self._conn.commit()
+            return self._conn.execute(
+                "SELECT points FROM guess_scores WHERE guild_id = ? AND user_id = ?", (guild_id, user_id),
+            ).fetchone()[0]
+
+    def guess_leaders(self, guild_id: int, limit: int = 10) -> list[tuple[int, int, int]]:
+        """`(user_id, points, played)`, best first."""
+        return self._read(
+            "SELECT user_id, points, played FROM guess_scores WHERE guild_id = ? AND points > 0 "
+            "ORDER BY points DESC, played ASC LIMIT ?",
+            (guild_id, limit),
         )
 
     def demo_mode(self, guild_id: int) -> bool:

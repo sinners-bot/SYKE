@@ -63,6 +63,15 @@ switch a server to mentions only with `!prefix mention`.
 | `!demo on\|off` | Manage Server | Add 5 fake members to rankings so you can test alone |
 | `!sample [name]` | Manage Server | Full report for a fake member (Zyro, Mira, bubbles, Dex, Vex) |
 
+### Games, awards and welcomes
+
+| Command | Who | What it does |
+| --- | --- | --- |
+| `!guess` | everyone | **Who said it?** SYKE posts a real stored message with the name hidden and four names as buttons. One guess each, first correct guess wins a point, 30 seconds. `!guess top` is the leaderboard. Aliases: `!whosaid`, `!wsi` |
+| `!awards` | Manage Server | **Weekly awards** from the last 7 days in watched channels: Biggest Yapper, Funniest, Most Laughs, Most Unhinged, Most Toxic, Freakiest, Cringe Lord, Most Serious, Night Owl, plus Message of the Week, each with a quote. `!awards channel #channel` turns them on, `!awards when sunday 18:00` sets the time (server timezone), `!awards role @Role` gives every winner a role until next week, `!awards preview` shows just you, `!awards now` posts immediately, `!awards off` |
+| `!welcome` | Manage Server | **Welcome message** posted when someone gets verified (by `!verify`, the Verify button, or an admin). Your own embed design with a gentle AI roast of their name and avatar (a built-in roaster without an AI key). `!welcome channel #channel`, `!welcome title <text>`, `!welcome message <text>`, `!welcome colour #ff8800`, `!welcome image <url>`, `!welcome footer <text>`, `!welcome ping on\|off`, `!welcome thumbnail on\|off`, `!welcome test`, `!welcome off`. Placeholders: `{roast}` `{mention}` `{name}` `{username}` `{server}` `{count}`; `\n` makes a new line in slash commands |
+| `!dashboard` | Manage Server | **Every setting in one message**: pick a section (General, Channels, Verification, Welcome, Weekly awards, Moderation) and change things with menus, buttons and forms. Only the person who opened it can use it. Aliases: `!panel`, `!admin`, `!setup` |
+
 ### Moderation
 
 Each command needs the matching Discord permission (or Administrator, or `SYKE_OWNER_IDS`).

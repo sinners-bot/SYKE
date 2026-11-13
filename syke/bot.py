@@ -36,6 +36,8 @@ from .invites import (
 )
 from .markov import build_chain
 from .models import Msg
+from .community import Community, help_lines as community_help
+from .dashboard import DashboardCog
 from .moderation import Moderation, help_lines as moderation_help, pretty as pretty_permission
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
 from .scanner import Scanner, to_msg
@@ -326,6 +328,8 @@ class Syke(commands.Bot):
     async def setup_hook(self) -> None:
         await self.add_cog(SykeCommands(self))
         await self.add_cog(Moderation(self))
+        await self.add_cog(Community(self))
+        await self.add_cog(DashboardCog(self))
         self.add_view(ProfileView(self.load_card))
         self.add_view(ShowcaseView(self.tour_prefix, self.invite_url()))
         self.add_view(VerifyView())
@@ -2025,6 +2029,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"`{p}optout` deletes yours. Reports are for fun only."
             ),
         )
+        embed.add_field(name="New", value=community_help(p), inline=False)
         embed.add_field(name="Moderators", value=moderation_help(p), inline=False)
         embed.set_footer(text=f"SYKE version {VERSION}")
         await ctx.reply(embed=embed, ephemeral=True)

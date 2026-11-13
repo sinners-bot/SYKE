@@ -479,3 +479,74 @@ async def write_tldr(settings: Settings, channel: str, lines: list[tuple[str, st
     except Exception:
         log.exception("AI tldr failed; using the offline recap")
         return None
+
+
+WELCOME_PROMPT = """You are SYKE, a Discord bot that greets people who just got verified into a server \
+with ONE gentle, affectionate roast. You only know their display name, their username and, if attached, \
+their profile picture.
+
+Rules:
+- One or two sentences, under 40 words. Warm underneath: they should laugh, not feel unwelcome.
+- Riff on the name (numbers, xX_Xx, underscores, a name that is trying hard, a pun) and, if there is a \
+picture, on what's in it (anime avatar, a car, a blurry selfie, a default avatar).
+- Roast choices, never identity. No comments on race, religion, gender, sexuality, disability, body, \
+weight, age or looks. If the picture shows a real person, roast the photo choice (lighting, angle, \
+"bathroom mirror energy"), never their face or body.
+- No slurs, nothing sexual, no @mentions. Use their display name exactly as given.
+
+Reply with JSON only: {"roast": str}"""
+WELCOME_TIMEOUT = 20
+WELCOME_LIMIT = 300
+
+
+async def _image_call(settings: Settings, system: str, text: str, image_url: str | None, timeout: float) -> str:
+    """Like `_complete`, with an optional picture for models that can see."""
+    if settings.ai_provider == "openai":
+        content: list[dict] = [{"type": "text", "text": text}]
+        if image_url:
+            content.append({"type": "image_url", "image_url": {"url": image_url, "detail": "low"}})
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+                json={
+                    "model": settings.openai_model, "temperature": 1.0,
+                    "response_format": {"type": "json_object"},
+                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+    content = [{"type": "text", "text": text}]
+    if image_url:
+        content.insert(0, {"type": "image", "source": {"type": "url", "url": image_url}})
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": settings.anthropic_api_key, "anthropic-version": "2023-06-01"},
+            json={
+                "model": settings.anthropic_model, "max_tokens": 300, "temperature": 1.0,
+                "system": system, "messages": [{"role": "user", "content": content}],
+            },
+        )
+        resp.raise_for_status()
+        return "".join(b.get("text", "") for b in resp.json()["content"])
+
+
+async def write_welcome_roast(settings: Settings, display_name: str, username: str, server: str,
+                              avatar_url: str | None) -> str | None:
+    """A gentle roast for a newly verified member, or None when there is no AI or it fails."""
+    if settings.ai_provider == "none":
+        return None
+    text = (f"SERVER: {server}\nDISPLAY NAME: {display_name}\nUSERNAME: {username}\n"
+            f"PROFILE PICTURE: {'attached' if avatar_url else 'none, they still have the default avatar'}")
+    for picture in ([avatar_url, None] if avatar_url else [None]):
+        try:
+            data = _parse_json(await _image_call(settings, WELCOME_PROMPT, text, picture, WELCOME_TIMEOUT))
+            roast = public_text(data.get("roast"), WELCOME_LIMIT)
+            if len(roast) >= 10:
+                return roast
+        except Exception:
+            log.warning("AI welcome roast failed%s", " with the avatar; retrying without" if picture else "",
+                        exc_info=picture is None)
+    return None

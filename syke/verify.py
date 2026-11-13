@@ -250,6 +250,11 @@ async def grant(
         )
     if result == "error":
         return _embed("Discord refused", "The role change didn't go through. Try again in a moment.", ok=False)
+    if needs_grant:
+        # Welcome messages listen for this (on_syke_verified).
+        dispatch = getattr(bot, "dispatch", None)
+        if callable(dispatch):
+            dispatch("syke_verified", member)
     if result == "partial" or (remove_blocked and remove is not None and _has(member, remove)):
         stuck = remove.mention if remove is not None else "the other role"
         title = "You're in, almost" if for_self else "Verified, almost"
