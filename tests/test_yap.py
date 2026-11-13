@@ -25,6 +25,19 @@ def test_mine_expressions_orders_by_use():
     assert all("example.com/page" not in g for g in gifs)   # non-gif link ignored
 
 
+def test_yap_defaults_are_livelier():
+    from syke.config import load_settings
+    s = load_settings()
+    assert s.yap_chance >= 0.15 and s.yap_cooldown <= 90   # chimes in more often
+
+
+def test_recent_chat_carries_real_weight():
+    from syke.yap import Turn, query_weights
+    w = query_weights("pizza tonight?", chat=[Turn("a", "valorant ranked grind")])
+    assert w["pizza"] == 1.0                 # the target still dominates
+    assert w.get("valorant", 0) >= 0.4       # but the ongoing conversation matters now
+
+
 def test_gif_keywords_and_pick():
     from syke.yap import gif_keywords, pick_gif
     assert gif_keywords("https://tenor.com/view/happy-dance-excited-gif-12345") == {"happy", "dance", "excited"}

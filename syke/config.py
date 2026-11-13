@@ -27,8 +27,8 @@ class Settings:
     default_timezone: str
     default_prefix: str
     owner_ids: frozenset[int] = frozenset()
-    yap_chance: float = 0.08
-    yap_cooldown: int = 120
+    yap_chance: float = 0.2
+    yap_cooldown: int = 75
     deep_scan_limit: int = 20000
     manage_install: bool = True
     # Owner web dashboard (off unless a client id, secret and session secret are all set).
@@ -84,8 +84,8 @@ def load_settings() -> Settings:
         default_timezone=os.getenv("SYKE_DEFAULT_TIMEZONE", "UTC").strip() or "UTC",
         default_prefix=os.getenv("SYKE_DEFAULT_PREFIX", "!").strip() or "!",
         owner_ids=_ids(os.getenv("SYKE_OWNER_IDS", DEFAULT_OWNER_IDS)),
-        yap_chance=min(max(_float("SYKE_YAP_CHANCE", 0.08), 0.0), 1.0),
-        yap_cooldown=_int("SYKE_YAP_COOLDOWN", 120),
+        yap_chance=min(max(_float("SYKE_YAP_CHANCE", 0.2), 0.0), 1.0),
+        yap_cooldown=_int("SYKE_YAP_COOLDOWN", 75),
         deep_scan_limit=_int("SYKE_DEEP_SCAN_LIMIT", 20000),
         manage_install=os.getenv("SYKE_MANAGE_INSTALL", "1").strip().lower() not in {"0", "false", "no", "off"},
         web_enabled=web_enabled,

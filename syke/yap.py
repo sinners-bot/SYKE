@@ -94,11 +94,11 @@ def query_weights(target: str, said: str | None = None, chat: list[Turn] = ()) -
     """How much each keyword matters: the message being answered most, recent chat least."""
     weights: dict[str, float] = {}
     for i, turn in enumerate(chat):
-        recency = 0.1 + 0.2 * (i + 1) / len(chat)
+        recency = 0.15 + 0.35 * (i + 1) / len(chat)
         for word in keywords(turn.text):
             weights[word] = max(weights.get(word, 0.0), recency)
     for word in keywords(said or ""):
-        weights[word] = max(weights.get(word, 0.0), 0.3)
+        weights[word] = max(weights.get(word, 0.0), 0.5)
     for word in keywords(target):
         weights[word] = 1.0
     return weights
