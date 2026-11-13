@@ -12,7 +12,7 @@ CONFIG_KEY = "welcome"
 DEFAULT_TITLE = "Welcome to {server}, {name} 👋"
 DEFAULT_TEXT = (
     "{roast}\n\n"
-    "You're member **#{count}**. Read the rules, touch grass occasionally, and enjoy the chaos."
+    "You're member **#{count}**. Read the rules, touch grass occasionally, and enjoy the chaos.{next_steps}"
 )
 PLACEHOLDERS = {
     "mention": "pings them",
@@ -21,7 +21,11 @@ PLACEHOLDERS = {
     "server": "the server name",
     "count": "how many members the server has",
     "roast": "SYKE's roast of their name and avatar",
+    "roles": "the roles channel",
+    "colors": "the colour roles channel",
+    "next_steps": "a sentence pointing to the roles and colour channels",
 }
+CHANNEL_TOKENS = ("{next_steps}", "{roles}", "{colors}")
 TITLE_LIMIT = 256
 TEXT_LIMIT = 3000
 HEX = re.compile(r"#?([0-9a-fA-F]{6})")
@@ -102,7 +106,29 @@ def parse_colour(text: str) -> int | None:
     return int(match.group(1), 16) if match else None
 
 
+def next_steps(roles: str, colors: str) -> str:
+    """The sentence after "enjoy the chaos", fitted to whichever channels are set."""
+    if roles and colors:
+        return f" Grab your roles in {roles} and pick a name colour in {colors}."
+    if roles:
+        return f" Grab your roles in {roles}."
+    if colors:
+        return f" Pick a name colour in {colors}."
+    return ""
+
+
+def _channel_mention(guild, channel_id) -> str:
+    if not channel_id:
+        return ""
+    getter = getattr(guild, "get_channel", None)
+    channel = getter(channel_id) if getter else None
+    return getattr(channel, "mention", None) or f"<#{channel_id}>"
+
+
 def render(config: dict, member, guild, roast: str) -> tuple[str | None, discord.Embed]:
+    roles = _channel_mention(guild, config.get("roles_channel"))
+    colors = _channel_mention(guild, config.get("colors_channel"))
+    steps = next_steps(roles, colors)
     values = {
         "mention": getattr(member, "mention", ""),
         "name": getattr(member, "display_name", None) or getattr(member, "name", "someone"),
@@ -110,9 +136,15 @@ def render(config: dict, member, guild, roast: str) -> tuple[str | None, discord
         "server": getattr(guild, "name", "the server"),
         "count": str(getattr(guild, "member_count", None) or "?"),
         "roast": roast,
+        "roles": roles or "the roles channel",
+        "colors": colors or "the colour roles channel",
+        "next_steps": steps,
     }
+    template = config.get("text") or DEFAULT_TEXT
+    if steps and not any(token in template for token in CHANNEL_TOKENS):
+        template = template.rstrip() + "\n\n" + steps.strip()  # Custom text without the placeholders still gets them.
     title = fill(config.get("title") or DEFAULT_TITLE, values)[:TITLE_LIMIT]
-    text = fill(config.get("text") or DEFAULT_TEXT, values)[:4096]
+    text = fill(template, values)[:4096]
     colour = config.get("colour")
     embed = discord.Embed(title=title, description=text,
                           colour=discord.Colour(colour) if isinstance(colour, int) else BRAND)
@@ -136,6 +168,8 @@ def describe(config: dict, guild, prefix: str) -> discord.Embed:
         f"**Channel:** {where}",
         f"**Title:** {config.get('title') or DEFAULT_TITLE}",
         f"**Message:** {(config.get('text') or DEFAULT_TEXT)[:600]}",
+        f"**Roles channel:** {_channel_mention(guild, config.get('roles_channel')) or 'not set'} · "
+        f"**Colour roles channel:** {_channel_mention(guild, config.get('colors_channel')) or 'not set'}",
         f"**Colour:** {('#%06X' % colour) if isinstance(colour, int) else 'SYKE purple'}",
         f"**Banner image:** {config.get('image') or 'none'}",
         f"**Footer:** {config.get('footer') or 'none'}",
@@ -147,6 +181,7 @@ def describe(config: dict, guild, prefix: str) -> discord.Embed:
         "",
         f"`{prefix}welcome channel #channel` · `{prefix}welcome title <text>` · `{prefix}welcome message <text>` · "
         f"`{prefix}welcome colour #ff8800` · `{prefix}welcome image <url|off>` · `{prefix}welcome footer <text|off>` · "
+        f"`{prefix}welcome roles #channel|off` · `{prefix}welcome colors #channel|off` · "
         f"`{prefix}welcome ping on|off` · `{prefix}welcome test` · `{prefix}welcome off`",
         "Or edit it all at once with the **Welcome** page of `" + prefix + "dashboard`.",
     ]

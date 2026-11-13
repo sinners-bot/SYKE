@@ -520,6 +520,39 @@ class Community(commands.Cog, name="Community"):
     async def welcome_message(self, ctx: commands.Context, *, text: str) -> None:
         await self._welcome_text(ctx, "text", text, welcome_mod.TEXT_LIMIT, "Message")
 
+    async def _welcome_link(self, ctx: commands.Context, field: str, channel, setting: str, label: str) -> None:
+        if channel is None:
+            if setting.strip().lower() in OFF_WORDS:
+                self.bot.storage.update_config(ctx.guild.id, welcome_mod.CONFIG_KEY, **{field: None})
+                await ctx.reply(embed=embed(f"{label} removed", "The welcome won't mention it any more."),
+                                ephemeral=True)
+                return
+            await ctx.reply(embed=problem("Which channel?", f"Mention it, like `{self.p(ctx)}welcome "
+                                                            f"{'roles' if field == 'roles_channel' else 'colors'} "
+                                                            f"#channel`, or use `off`."), ephemeral=True)
+            return
+        config = self.bot.storage.update_config(ctx.guild.id, welcome_mod.CONFIG_KEY, **{field: channel.id})
+        roles = welcome_mod._channel_mention(ctx.guild, config.get("roles_channel"))
+        colors = welcome_mod._channel_mention(ctx.guild, config.get("colors_channel"))
+        await ctx.reply(embed=embed(f"{label} set ✅", f"Welcomes now end with:\n>{welcome_mod.next_steps(roles, colors)}"),
+                        ephemeral=True)
+
+    @welcome.command(name="roles", aliases=["rolechannel", "roleschannel"],
+                     description="The roles channel the welcome points new members to")
+    @app_commands.describe(channel="The roles channel", setting="Type 'off' to remove it")
+    @moderator("manage_guild")
+    async def welcome_roles(self, ctx: commands.Context, channel: Optional[discord.TextChannel] = None,
+                            setting: str = "") -> None:
+        await self._welcome_link(ctx, "roles_channel", channel, setting, "Roles channel")
+
+    @welcome.command(name="colors", aliases=["colours", "color-roles", "colorroles", "colourroles"],
+                     description="The colour roles channel the welcome points new members to")
+    @app_commands.describe(channel="The colour roles channel", setting="Type 'off' to remove it")
+    @moderator("manage_guild")
+    async def welcome_colors(self, ctx: commands.Context, channel: Optional[discord.TextChannel] = None,
+                             setting: str = "") -> None:
+        await self._welcome_link(ctx, "colors_channel", channel, setting, "Colour roles channel")
+
     @welcome.command(name="footer", description="Small text under the welcome embed")
     @app_commands.describe(text="The footer, or 'off'")
     @moderator("manage_guild")

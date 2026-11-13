@@ -331,11 +331,22 @@ class Dashboard(discord.ui.View):
             await self.refresh(interaction, "✅ Test welcome sent in this channel." if sent
                                else "⚠️ Couldn't send the test here. Check SYKE can post embeds.")
 
+        def link(field: str, label: str):
+            async def chosen(interaction: discord.Interaction, values) -> None:
+                s.update_config(g.id, welcome_mod.CONFIG_KEY, **{field: values[0].id if values else None})
+                await self.refresh(interaction, f"✅ {label}: {values[0].mention}." if values else f"✅ {label} removed.")
+            return chosen
+
         self._channel_select("Welcome channel… (clear = off)", _channels(g, [config.get("channel", 0)]), channel, row=1)
-        self._button("Edit design", design, emoji="✏️", row=2, style=discord.ButtonStyle.primary)
-        self._button("Toggle ping", ping, emoji="🔔", row=2)
-        self._button("Toggle avatar", thumb, emoji="🖼️", row=2)
-        self._button("Send a test here", test, emoji="🧪", row=2, style=discord.ButtonStyle.success)
+        self._channel_select("Roles channel to point them to… (optional)",
+                             _channels(g, [config.get("roles_channel", 0)]), link("roles_channel", "Roles channel"), row=2)
+        self._channel_select("Colour roles channel… (optional)",
+                             _channels(g, [config.get("colors_channel", 0)]),
+                             link("colors_channel", "Colour roles channel"), row=3)
+        self._button("Edit design", design, emoji="✏️", row=4, style=discord.ButtonStyle.primary)
+        self._button("Toggle ping", ping, emoji="🔔", row=4)
+        self._button("Toggle avatar", thumb, emoji="🖼️", row=4)
+        self._button("Send a test here", test, emoji="🧪", row=4, style=discord.ButtonStyle.success)
 
     # Weekly awards
 
@@ -501,7 +512,7 @@ class WelcomeModal(discord.ui.Modal, title="Design the welcome message"):
         self.title_input = discord.ui.TextInput(label="Title", max_length=welcome_mod.TITLE_LIMIT, required=False,
                                                 default=config.get("title") or welcome_mod.DEFAULT_TITLE)
         self.text_input = discord.ui.TextInput(
-            label="Message ({roast} {mention} {name} {server} {count})", style=discord.TextStyle.paragraph,
+            label="Message ({roast} {mention} {next_steps} {count})", style=discord.TextStyle.paragraph,
             max_length=welcome_mod.TEXT_LIMIT, required=False, default=config.get("text") or welcome_mod.DEFAULT_TEXT,
         )
         self.colour_input = discord.ui.TextInput(label="Colour (hex, e.g. #ff8800)", max_length=7, required=False,

@@ -220,3 +220,32 @@ def test_dashboard_renders_every_section(cog):
             view.stop()
 
     run(flow())
+
+
+def test_welcome_points_to_roles_and_colour_channels():
+    guild = Guild()
+    guild.member_count = 50
+    member = types.SimpleNamespace(mention="<@5>", display_name="Ada", name="ada",
+                                   display_avatar=types.SimpleNamespace(url="https://cdn/a.png"))
+    _, card = welcome_mod.render({}, member, guild, "roast")
+    assert card.description.endswith("enjoy the chaos.")
+    _, card = welcome_mod.render({"roles_channel": 10, "colors_channel": 11}, member, guild, "roast")
+    assert card.description.endswith(
+        "enjoy the chaos. Grab your roles in <#10> and pick a name colour in <#11>.")
+    _, card = welcome_mod.render({"colors_channel": 11}, member, guild, "roast")
+    assert card.description.endswith("enjoy the chaos. Pick a name colour in <#11>.")
+    _, card = welcome_mod.render({"text": "Hi {name}!", "roles_channel": 10}, member, guild, "roast")
+    assert card.description == "Hi Ada!\n\nGrab your roles in <#10>."
+    _, card = welcome_mod.render({"text": "Roles: {roles}", "roles_channel": 10}, member, guild, "roast")
+    assert card.description == "Roles: <#10>"
+
+
+def test_welcome_roles_commands(cog):
+    community = Community(cog.bot)
+    guild = Guild()
+    ctx = Ctx(guild, Member(2, position=20, manage_guild=True))
+    run(community.welcome_roles.callback(community, ctx, guild.channels[0], ""))
+    run(community.welcome_colors.callback(community, ctx, guild.channels[1], ""))
+    assert "Grab your roles in <#10> and pick a name colour in <#11>." in ctx.replies[-1].description
+    run(community.welcome_roles.callback(community, ctx, None, "off"))
+    assert "roles_channel" not in cog.bot.storage.get_config(guild.id, "welcome")
