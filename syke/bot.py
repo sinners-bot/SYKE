@@ -323,6 +323,7 @@ class Syke(commands.Bot):
         self._invite_settle = INVITE_SETTLE_SECONDS
         self._started = time.time()
         self.app_public: bool | None = None
+        self.web = None
         self.add_check(self.channel_check)
 
     async def setup_hook(self) -> None:
@@ -330,6 +331,13 @@ class Syke(commands.Bot):
         await self.add_cog(Moderation(self))
         await self.add_cog(Community(self))
         await self.add_cog(DashboardCog(self))
+        if self.settings.web_enabled:
+            try:
+                from .web import WebDashboard
+                self.web = WebDashboard(self)
+                await self.web.start()
+            except Exception:
+                log.exception("Owner web dashboard failed to start; the bot keeps running")
         self.add_view(ProfileView(self.load_card))
         self.add_view(ShowcaseView(self.tour_prefix, self.invite_url()))
         self.add_view(VerifyView())
@@ -350,6 +358,12 @@ class Syke(commands.Bot):
 
     async def get_context(self, origin, *, cls=None):
         return await super().get_context(origin, cls=cls or SykeContext)
+
+    async def close(self) -> None:
+        if self.web is not None:
+            with contextlib.suppress(Exception):
+                await self.web.close()
+        await super().close()
 
     async def on_guild_join(self, guild: discord.Guild) -> None:
         log.info("Joined %r (%s)", guild.name, guild.id)

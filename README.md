@@ -208,10 +208,43 @@ instantly (global commands can take a while to propagate).
 !profile @someone
 ```
 
+## Owner web dashboard
+
+An optional private website for SYKE's owners: every server SYKE is in, their channels and live
+chats, and controls to act as the bot. It runs inside the same process as the bot (no extra service),
+and is **off** unless you set the four variables below. Login is Discord OAuth, and only the user IDs
+in `SYKE_OWNER_IDS` can get in; everyone else is turned away after signing in.
+
+What you can do from it:
+- **Browse** every server, its channels, and recent messages in each channel.
+- **Send messages as SYKE** in any channel it can talk in.
+- **Moderate**: timeout, restrict, kick, ban (and the reverses) by member ID. Each action is logged
+  as a normal case and shows up in `!history`.
+- **Change settings**: prefix, timezone, and which channels are watched.
+- **Maintenance**: rescan a server, clear its stored messages, or make SYKE leave.
+
+### Turn it on
+
+1. In the [Developer Portal](https://discord.com/developers/applications) → your app:
+   - **General Information**: copy the **Application ID** → `DISCORD_CLIENT_ID`.
+   - **OAuth2**: copy the **Client Secret** → `DISCORD_CLIENT_SECRET`.
+   - **OAuth2 → Redirects**: add `https://YOUR-URL/callback` (whatever `SYKE_WEB_BASE_URL` is, plus `/callback`).
+2. Set the variables (locally in `.env`, or on Railway under **Variables**):
+   - `SYKE_WEB=1`
+   - `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`
+   - `SYKE_WEB_SECRET` = a long random string you invent (it signs login cookies; keep it secret)
+   - `SYKE_WEB_BASE_URL` = the public URL of the service
+3. On Railway, give the service a public domain: **Settings → Networking → Generate Domain**. Use that
+   URL (with `https://`) for `SYKE_WEB_BASE_URL` and the OAuth redirect. Railway sets `PORT` itself.
+
+Then open the URL and log in with Discord. Security: sessions are signed cookies (HMAC), every action
+needs a CSRF token tied to your account, and anything shown from Discord is HTML-escaped.
+
 ## Deploying to Railway
 
-SYKE is a background worker (no web port), and `railway.json` already sets the start
-command and restart policy.
+SYKE runs as a single service, and `railway.json` already sets the start command and restart policy.
+It needs no web port unless you turn on the owner web dashboard (see above), in which case it also
+listens on Railway's `PORT`.
 
 1. Push this repo to GitHub, then in Railway: **New Project → Deploy from GitHub repo**.
 2. **Add a volume** to the service (right-click the service → *Attach volume*) mounted at `/data`.
@@ -221,6 +254,8 @@ command and restart policy.
    - `SYKE_DB_PATH` = `/data/syke.db`
    - `OPENAI_API_KEY` = your key (optional; omit to use the offline roaster)
    - `SYKE_DEFAULT_TIMEZONE`, e.g. `Europe/London` (optional)
+   - For the owner web dashboard (optional): `SYKE_WEB=1`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
+     `SYKE_WEB_SECRET`, `SYKE_WEB_BASE_URL` (see **Owner web dashboard** above)
 4. Deploy. The **Deploy Logs** should show `Synced 2 global commands` and `SYKE online as ...`.
 
 No external database (Supabase, Postgres, etc.) is needed. SYKE stores watched channels,
@@ -247,7 +282,11 @@ All settings live in `.env` (see `.env.example`):
 | `SYKE_MANAGE_INSTALL` | `1` | Set the app's guild-install settings on startup so **Add App** works (`0` to manage them yourself) |
 | `SYKE_YAP_CHANCE` | `0.08` | Chance that a message in a yap channel gets an answer |
 | `SYKE_YAP_COOLDOWN` | `120` | Minimum seconds between yaps in one channel |
-| `SYKE_OWNER_IDS` | `1342786189576634398` | Comma-separated user IDs that can use every admin command in every server, even without Manage Server. Owners without the permission use the prefix or @mention form, since Discord hides admin slash commands from them |
+| `SYKE_OWNER_IDS` | `1342786189576634398` | Comma-separated user IDs that can use every admin command in every server, even without Manage Server. Owners without the permission use the prefix or @mention form, since Discord hides admin slash commands from them. These are also the only accounts that can log in to the owner web dashboard |
+| `SYKE_WEB` | empty | `1` turns on the owner web dashboard (needs the three values below). See **Owner web dashboard** |
+| `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | empty | OAuth app credentials for the dashboard login |
+| `SYKE_WEB_SECRET` | empty | A long random secret that signs dashboard login cookies |
+| `SYKE_WEB_BASE_URL` | empty | The dashboard's public URL, e.g. `https://syke.up.railway.app` |
 
 ## Development
 

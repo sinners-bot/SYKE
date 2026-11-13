@@ -1,3 +1,5 @@
+import asyncio
+import inspect
 import types
 from dataclasses import replace
 
@@ -5,6 +7,16 @@ import pytest
 
 from syke.bot import Syke, SykeCommands
 from syke.config import load_settings
+
+
+def pytest_pyfunc_call(pyfuncitem):
+    """Run `async def` tests on a fresh event loop, so no pytest-asyncio plugin is needed."""
+    func = pyfuncitem.obj
+    if inspect.iscoroutinefunction(func):
+        kwargs = {name: pyfuncitem.funcargs[name] for name in pyfuncitem._fixtureinfo.argnames}
+        asyncio.run(func(**kwargs))
+        return True
+    return None
 
 
 @pytest.fixture()

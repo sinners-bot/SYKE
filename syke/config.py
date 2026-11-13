@@ -31,6 +31,13 @@ class Settings:
     yap_cooldown: int = 120
     deep_scan_limit: int = 20000
     manage_install: bool = True
+    # Owner web dashboard (off unless a client id, secret and session secret are all set).
+    web_enabled: bool = False
+    web_port: int = 8080
+    web_base_url: str = ""
+    web_client_id: str = ""
+    web_client_secret: str = ""
+    web_secret: str = ""
 
 DEFAULT_OWNER_IDS = "1342786189576634398"
 
@@ -56,6 +63,12 @@ def load_settings() -> Settings:
         provider = "none"
 
     dev_guild = os.getenv("SYKE_DEV_GUILD_ID", "").strip()
+    client_id = os.getenv("DISCORD_CLIENT_ID", "").strip()
+    client_secret = os.getenv("DISCORD_CLIENT_SECRET", "").strip()
+    web_secret = os.getenv("SYKE_WEB_SECRET", "").strip()
+    base_url = os.getenv("SYKE_WEB_BASE_URL", "").strip().rstrip("/")
+    want_web = os.getenv("SYKE_WEB", "").strip().lower() not in {"0", "false", "no", "off", ""}
+    web_enabled = want_web and bool(client_id and client_secret and web_secret)
     return Settings(
         discord_token=os.getenv("DISCORD_TOKEN", "").strip(),
         dev_guild_id=int(dev_guild) if dev_guild else None,
@@ -75,4 +88,10 @@ def load_settings() -> Settings:
         yap_cooldown=_int("SYKE_YAP_COOLDOWN", 120),
         deep_scan_limit=_int("SYKE_DEEP_SCAN_LIMIT", 20000),
         manage_install=os.getenv("SYKE_MANAGE_INSTALL", "1").strip().lower() not in {"0", "false", "no", "off"},
+        web_enabled=web_enabled,
+        web_port=_int("PORT", _int("SYKE_WEB_PORT", 8080)),
+        web_base_url=base_url,
+        web_client_id=client_id,
+        web_client_secret=client_secret,
+        web_secret=web_secret,
     )
