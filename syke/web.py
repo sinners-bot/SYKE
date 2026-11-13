@@ -84,20 +84,63 @@ td,th{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertic
 form.inline{display:inline;}
 h1{font-size:22px;margin:0 0 4px;}h2{font-size:17px;margin:22px 0 10px;}
 @media(max-width:760px){.cols{grid-template-columns:1fr;}}
+/* Discord-like channel view */
+.dc{display:flex;height:calc(100vh - 56px);}
+.dc-side{width:240px;flex:0 0 240px;background:#17171d;border-right:1px solid var(--line);overflow-y:auto;padding:8px 6px;}
+.dc-side .srv{font-weight:700;padding:6px 8px;border-bottom:1px solid var(--line);margin-bottom:6px;display:block;color:var(--text);}
+.dc-cat{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:12px 8px 2px;font-weight:700;}
+.dc-ch{display:block;padding:5px 8px;border-radius:6px;color:#9aa0b3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px;}
+.dc-ch:hover{background:#22222c;color:var(--text);text-decoration:none;}
+.dc-ch.on{background:#2d2d3a;color:#fff;}
+.dc-ch.voice{color:#5c5f70;cursor:default;}
+.dc-ch.voice:hover{background:none;color:#5c5f70;}
+.dc-main{flex:1;display:flex;flex-direction:column;min-width:0;}
+.dc-head{padding:12px 16px;border-bottom:1px solid var(--line);font-weight:700;display:flex;gap:10px;align-items:center;background:#1a1a22;}
+.dc-head .hash{color:var(--muted);}
+.dc-head .topic{font-weight:400;color:var(--muted);font-size:13px;border-left:1px solid var(--line);padding-left:10px;}
+.dc-msgs{flex:1;overflow-y:auto;padding:14px 16px 20px;display:flex;flex-direction:column;}
+.m{display:flex;gap:14px;padding:2px 8px;border-radius:4px;margin-top:14px;}
+.m.grouped{margin-top:0;}
+.m:hover{background:#1e1e26;}
+.m .av{width:40px;flex:0 0 40px;}
+.m .av img{width:40px;height:40px;border-radius:50%;display:block;}
+.m.grouped .av{visibility:hidden;height:0;}
+.m .content{min-width:0;flex:1;}
+.m .head{display:flex;align-items:baseline;gap:8px;line-height:1.3;}
+.m .name{font-weight:600;color:#f2f3f5;}
+.m .name .app{background:var(--brand);color:#fff;font-size:9px;font-weight:700;border-radius:3px;padding:0 4px;margin-left:5px;vertical-align:middle;letter-spacing:.02em;}
+.m .ts{font-size:11px;color:var(--muted);}
+.m .text{white-space:pre-wrap;word-break:break-word;color:#dbdee1;}
+.m .text.empty{color:var(--muted);font-style:italic;}
+.m .reply{font-size:13px;color:var(--muted);margin-bottom:2px;display:flex;gap:6px;align-items:center;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.m .reply img{width:16px;height:16px;border-radius:50%;}
+.m .reply .rn{color:#b9bbbe;font-weight:600;}
+.att img{max-width:420px;max-height:320px;border-radius:8px;margin-top:4px;display:block;}
+.att a{display:inline-block;margin-top:4px;}
+.emb{border-left:4px solid var(--brand);background:#2b2d31;border-radius:4px;padding:8px 12px;margin-top:4px;max-width:460px;}
+.emb .et{font-weight:600;margin-bottom:2px;}
+.emb .ed{color:#dbdee1;font-size:14px;}
+.rx{display:inline-flex;gap:5px;align-items:center;background:#2b2d31;border:1px solid var(--line);border-radius:8px;padding:1px 7px;font-size:12px;margin:5px 4px 0 0;color:#b9bbbe;}
+.dc-input{padding:10px 16px 14px;border-top:1px solid var(--line);background:#1a1a22;}
+.dc-input textarea{width:100%;resize:vertical;background:#2b2d31;border-color:#2b2d31;}
+.dc-input .ir{margin-top:6px;display:flex;justify-content:space-between;align-items:center;}
+.dc-empty{color:var(--muted);text-align:center;margin-top:30px;}
 """
 
 
-def layout(title: str, body: str, *, user: Optional[tuple[int, str]] = None) -> web.Response:
+def layout(title: str, body: str, *, user: Optional[tuple[int, str]] = None, wide: bool = False,
+           head_extra: str = "") -> web.Response:
     nav = ""
     if user is not None:
         nav = (f'<span class="muted">{esc(user[1])}</span>'
                f'<a class="btn sm" href="/logout">Log out</a>')
+    inner = body if wide else f"<div class='wrap'>{body}</div>"
     page = (
         f"<!doctype html><html><head><meta charset='utf-8'>"
         f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>{esc(title)} · SYKE</title><style>{STYLE}</style></head><body>"
+        f"<title>{esc(title)} · SYKE</title><style>{STYLE}</style>{head_extra}</head><body>"
         f"<header><span class='brand'>SYKE</span> <a class='btn sm' href='/'>Servers</a>"
-        f"<span class='sp'></span>{nav}</header><div class='wrap'>{body}</div></body></html>"
+        f"<span class='sp'></span>{nav}</header>{inner}</body></html>"
     )
     return web.Response(text=page, content_type="text/html")
 
@@ -142,6 +185,7 @@ class WebDashboard:
         a("/logout", self.logout)
         a("/g/{gid}", self.server)
         a("/g/{gid}/c/{cid}", self.channel)
+        a("/g/{gid}/c/{cid}/messages", self.channel_messages)
         p("/g/{gid}/c/{cid}/say", self.say)
         p("/g/{gid}/mod", self.moderate)
         p("/g/{gid}/settings", self.change_setting)
@@ -349,55 +393,164 @@ class WebDashboard:
             f"<div style='margin-top:10px'><button class='btn brand'>Apply</button></div></form>"
         )
 
+    def _channel_or_404(self, request: web.Request, guild: discord.Guild):
+        try:
+            cid = int(request.match_info["cid"])
+        except ValueError:
+            raise web.HTTPNotFound(text="bad channel id")
+        channel = guild.get_channel_or_thread(cid) if hasattr(guild, "get_channel_or_thread") else guild.get_channel(cid)
+        if channel is None or not hasattr(channel, "history") or not hasattr(channel, "send"):
+            raise web.HTTPNotFound(text="no such channel")
+        return channel
+
+    def _sidebar(self, guild: discord.Guild, active_id: int) -> str:
+        """Channel list grouped by category, Discord-style."""
+        rows = [f"<a class='srv' href='/g/{guild.id}'>← {esc(guild.name)}</a>"]
+        try:
+            grouped = guild.by_category()
+        except Exception:
+            grouped = [(None, list(guild.channels))]
+        for category, channels in grouped:
+            visible = [c for c in channels if not isinstance(c, discord.CategoryChannel)]
+            if not visible:
+                continue
+            if category is not None:
+                rows.append(f"<div class='dc-cat'>{esc(category.name)}</div>")
+            for ch in visible:
+                if isinstance(ch, discord.VoiceChannel):
+                    rows.append(f"<div class='dc-ch voice'>🔊 {esc(ch.name)}</div>")
+                    continue
+                can = ch.permissions_for(guild.me).read_message_history
+                on = " on" if ch.id == active_id else ""
+                icon = "🧵" if isinstance(ch, discord.Thread) else "#"
+                if can:
+                    rows.append(f"<a class='dc-ch{on}' href='/g/{guild.id}/c/{ch.id}'>{icon} {esc(ch.name)}</a>")
+                else:
+                    rows.append(f"<div class='dc-ch voice' title='SYKE has no access'>🔒 {esc(ch.name)}</div>")
+        return f"<div class='dc-side'>{''.join(rows)}</div>"
+
+    def _one_message(self, m: discord.Message, prev: discord.Message | None) -> str:
+        author = m.author
+        same = (prev is not None and prev.author.id == author.id
+                and (m.created_at - prev.created_at).total_seconds() < 420
+                and m.reference is None and prev.reference is None)
+        avatar = getattr(getattr(author, "display_avatar", None), "url", "")
+        colour = getattr(getattr(author, "colour", None), "value", 0)
+        name_style = f" style='color:#{colour:06x}'" if colour else ""
+        app = "<span class='app'>APP</span>" if getattr(author, "bot", False) else ""
+        ts = int(m.created_at.timestamp())
+        reply = ""
+        if m.reference is not None:
+            ref = m.reference.resolved
+            if isinstance(ref, discord.Message):
+                ref_av = getattr(getattr(ref.author, "display_avatar", None), "url", "")
+                snippet = " ".join((ref.clean_content or "").split())[:80] or "(attachment)"
+                reply = (f"<div class='reply'>↳ <img src='{esc(ref_av)}' alt=''>"
+                         f"<span class='rn'>{esc(ref.author.display_name)}</span> {esc(snippet)}</div>")
+            else:
+                reply = "<div class='reply'>↳ replying to a message</div>"
+        text = esc(m.clean_content)
+        body = f"<div class='text'>{text}</div>" if text else "<div class='text empty'>(no text content)</div>"
+        atts = []
+        for a in m.attachments:
+            if (a.content_type or "").startswith("image"):
+                atts.append(f"<div class='att'><img src='{esc(a.url)}' alt='{esc(a.filename)}' loading='lazy'></div>")
+            else:
+                kb = f" ({a.size // 1024} KB)" if getattr(a, "size", 0) else ""
+                atts.append(f"<div class='att'>📎 <a href='{esc(a.url)}' target='_blank' rel='noreferrer'>"
+                            f"{esc(a.filename)}</a>{kb}</div>")
+        embeds = []
+        for e in m.embeds:
+            title = f"<div class='et'>{esc(e.title)}</div>" if e.title else ""
+            desc = f"<div class='ed'>{esc(e.description[:400])}</div>" if e.description else ""
+            if title or desc:
+                embeds.append(f"<div class='emb'>{title}{desc}</div>")
+        reactions = "".join(
+            f"<span class='rx'>{esc(str(r.emoji))} {r.count}</span>" for r in getattr(m, "reactions", [])
+        )
+        head = ("" if same else
+                f"<div class='head'><span class='name'{name_style}>{esc(author.display_name)}{app}</span>"
+                f"<time class='ts' data-ts='{ts}'></time></div>")
+        av = f"<div class='av'><img src='{esc(avatar)}' alt='' loading='lazy'></div>"
+        return (f"<div class='m{' grouped' if same else ''}'>{av}"
+                f"<div class='content'>{reply}{head}{body}{''.join(atts)}{''.join(embeds)}{reactions}</div></div>")
+
+    async def _messages_html(self, channel) -> str:
+        if not channel.permissions_for(channel.guild.me).read_message_history:
+            stored = self.bot.storage.corpus(channel.guild.id)[:STORED_PREVIEW]
+            if not stored:
+                return "<div class='dc-empty'>SYKE can't read this channel and has nothing stored from it.</div>"
+            rows = ["<div class='note'>SYKE can't read live history here — showing stored messages for the server.</div>"]
+            for author_id, content in stored:
+                rows.append(f"<div class='m'><div class='av'></div><div class='content'>"
+                            f"<div class='head'><span class='name'>user {author_id}</span></div>"
+                            f"<div class='text'>{esc(content)}</div></div></div>")
+            return "".join(rows)
+        try:
+            collected = [m async for m in channel.history(limit=MESSAGES_SHOWN)]
+        except discord.HTTPException:
+            return "<div class='note err'>Couldn't read live history just now.</div>"
+        collected.reverse()
+        if not collected:
+            return "<div class='dc-empty'>No messages yet.</div>"
+        html = []
+        prev = None
+        for m in collected:
+            html.append(self._one_message(m, prev))
+            prev = m
+        return "".join(html)
+
     async def channel(self, request: web.Request) -> web.Response:
         user = self._user(request)
         if user is None:
             raise web.HTTPFound("/login")
         guild = self._guild_or_404(request)
-        try:
-            cid = int(request.match_info["cid"])
-        except ValueError:
-            raise web.HTTPNotFound(text="bad channel id")
-        channel = guild.get_channel(cid)
-        if channel is None or not hasattr(channel, "history") or not hasattr(channel, "send"):
-            raise web.HTTPNotFound(text="no such channel")
-        me = guild.me
-        can_read = channel.permissions_for(me).read_message_history
-        can_send = channel.permissions_for(me).send_messages
-        items = []
-        if can_read:
-            try:
-                async for m in channel.history(limit=MESSAGES_SHOWN):
-                    items.append(self._render_message(m.author.display_name, m.created_at.timestamp(),
-                                                      m.clean_content, bot=m.author.bot))
-            except discord.HTTPException:
-                items.append("<div class='note err'>Couldn't read live history.</div>")
-            items.reverse()
-        else:
-            items.append("<div class='note'>SYKE can't read live history here. Showing stored messages.</div>")
-            for author_id, content in self.bot.storage.corpus(guild.id)[:STORED_PREVIEW]:
-                items.append(self._render_message(f"user {author_id}", None, content))
+        channel = self._channel_or_404(request, guild)
+        can_send = channel.permissions_for(guild.me).send_messages
+        sidebar = self._sidebar(guild, channel.id)
+        messages = await self._messages_html(channel)
         csrf = self._hidden_csrf(user[0])
-        say = ""
+        topic = getattr(channel, "topic", None)
+        head = (f"<div class='dc-head'><span class='hash'>#</span> {esc(channel.name)}"
+                + (f"<span class='topic'>{esc(topic[:120])}</span>" if topic else "") + "</div>")
         if can_send:
-            say = (f"<form method='post' action='/g/{guild.id}/c/{channel.id}/say' class='card'>{csrf}"
-                   f"<h3>Send as SYKE</h3><textarea name='content' rows='3' maxlength='2000' "
-                   f"placeholder='Message to post in #{esc(channel.name)}' required></textarea>"
-                   f"<div style='margin-top:8px'><button class='btn brand'>Send</button></div></form>")
+            inp = (f"<form class='dc-input' method='post' action='/g/{guild.id}/c/{channel.id}/say'>{csrf}"
+                   f"<textarea name='content' rows='2' maxlength='2000' required "
+                   f"placeholder='Message #{esc(channel.name)} as SYKE…'></textarea>"
+                   f"<div class='ir'><span class='muted'>Posts as SYKE</span>"
+                   f"<button class='btn brand'>Send</button></div></form>")
         else:
-            say = "<div class='note'>SYKE can't send messages in this channel.</div>"
+            inp = "<div class='dc-input'><div class='note'>SYKE can't send messages in this channel.</div></div>"
+        flash_html = flash(request)
         body = (
-            f"{flash(request)}<div class='muted'><a href='/g/{guild.id}'>← {esc(guild.name)}</a></div>"
-            f"<h1>#{esc(channel.name)}</h1>{say}"
-            f"<div class='card' style='margin-top:14px'>{''.join(items) or 'No messages.'}</div>"
+            f"<div class='dc'>{sidebar}<div class='dc-main'>{head}"
+            f"<div class='dc-msgs' id='messages'>{flash_html}{messages}</div>{inp}</div></div>"
+            "<script>"
+            "function fmt(s){var d=new Date(s*1000),n=new Date(),"
+            "t=d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),"
+            "y=new Date(n.getTime()-864e5);"
+            "if(d.toDateString()===n.toDateString())return'Today at '+t;"
+            "if(d.toDateString()===y.toDateString())return'Yesterday at '+t;"
+            "return d.toLocaleDateString()+' '+t;}"
+            "function stamp(r){r.querySelectorAll('time[data-ts]').forEach(function(e){e.textContent=fmt(+e.dataset.ts);});}"
+            "var pane=document.getElementById('messages');"
+            "function bot(){return pane.scrollHeight-pane.scrollTop-pane.clientHeight<100;}"
+            "stamp(document);pane.scrollTop=pane.scrollHeight;"
+            "async function poll(){try{var r=await fetch(location.pathname+'/messages');if(!r.ok)return;"
+            "var h=await r.text(),b=bot();pane.innerHTML=h;stamp(pane);if(b)pane.scrollTop=pane.scrollHeight;}catch(e){}}"
+            "setInterval(poll,8000);"
+            "</script>"
         )
-        return layout(f"#{channel.name}", body, user=user)
+        return layout(f"#{channel.name}", body, user=user, wide=True)
 
-    def _render_message(self, who: str, ts: float | None, content: str, *, bot: bool = False) -> str:
-        when = f"<span class='when'>&lt;t:{int(ts)}&gt;</span>" if ts else ""
-        tag = " 🤖" if bot else ""
-        return (f"<div class='msg'><span class='who'>{esc(who)}{tag}</span>{when}"
-                f"<div class='body'>{esc(content) or '<span class=\"muted\">(no text)</span>'}</div></div>")
+    async def channel_messages(self, request: web.Request) -> web.Response:
+        """Just the message list HTML, for the live-refresh poll."""
+        user = self._user(request)
+        if user is None:
+            raise web.HTTPForbidden(text="login required")
+        guild = self._guild_or_404(request)
+        channel = self._channel_or_404(request, guild)
+        return web.Response(text=await self._messages_html(channel), content_type="text/html")
 
     # Actions
 

@@ -21,6 +21,8 @@ class Channel:
         self.id = cid
         self.name = name
         self.mention = f"<#{cid}>"
+        self.topic = None
+        self.guild = None
         self._read = read
         self._send = send
         self.sent = []
@@ -69,12 +71,21 @@ class Guild:
         self.me = types.SimpleNamespace(id=999)
         self.member_count = 10
         self.text_channels = [Channel(10, "general"), Channel(11, "locked", read=False, send=False)]
+        self.channels = list(self.text_channels)
+        for c in self.text_channels:
+            c.guild = self
         self.members = {7: Member(7)}
         self.banned = []
         self.left = False
 
+    def by_category(self):
+        return [(None, list(self.text_channels))]
+
     def get_channel(self, cid):
         return next((c for c in self.text_channels if c.id == cid), None)
+
+    def get_channel_or_thread(self, cid):
+        return self.get_channel(cid)
 
     def get_member(self, uid):
         return self.members.get(uid)
@@ -238,6 +249,29 @@ async def test_clear_data(dash):
         token = auth.csrf_token(SECRET, 42)
         await cl.post(f"/g/{guild.id}/clear", data={"csrf": token}, allow_redirects=False)
         assert bot.storage.corpus_size(guild.id)[0] == 0
+
+
+async def test_channel_view_renders_discord_style(dash):
+    async with serving(dash) as (cl, web, bot, guild):
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        resp = await cl.get(f"/g/{guild.id}/c/10")
+        assert resp.status == 200
+        body = await resp.text()
+        assert "dc-side" in body and "dc-msgs" in body          # sidebar + message pane
+        assert "# general" in body or "#</span> general" in body  # channel header
+        assert "Message #general as SYKE" in body                 # input bar
+        assert "setInterval(poll" in body                         # live refresh
+
+
+async def test_channel_messages_endpoint(dash):
+    async with serving(dash) as (cl, web, bot, guild):
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        resp = await cl.get(f"/g/{guild.id}/c/10/messages")
+        assert resp.status == 200
+        # Anonymous is refused.
+        cl.session.cookie_jar.clear()
+        resp = await cl.get(f"/g/{guild.id}/c/10/messages", allow_redirects=False)
+        assert resp.status == 403
 
 
 def test_html_escaping_blocks_injection():
