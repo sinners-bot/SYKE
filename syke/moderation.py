@@ -585,10 +585,29 @@ class Moderation(commands.Cog, name="Moderation"):
                 await self.lift_expired(guild_id, user_id, kinds)
             except Exception:
                 log.exception("Couldn't lift an expired restriction in %s", guild_id)
+        for guild_id, user_id in self.bot.storage.due_temp_bans(time.time()):
+            try:
+                await self.lift_temp_ban(guild_id, user_id)
+            except Exception:
+                log.exception("Couldn't lift an expired temp ban in %s", guild_id)
 
     @expire.before_loop
     async def _before_expire(self) -> None:
         await self.bot.wait_until_ready()
+
+    async def lift_temp_ban(self, guild_id: int, user_id: int) -> None:
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            return  # Try again once SYKE is back in that server.
+        self.bot.storage.remove_temp_ban(guild_id, user_id)
+        try:
+            await guild.unban(discord.Object(id=user_id), reason="SYKE temp ban ended")
+        except discord.NotFound:
+            return  # Already unbanned by a mod.
+        except discord.HTTPException:
+            return
+        self.bot.storage.add_case(guild_id, user_id, getattr(self.bot.user, "id", 0), "unban", "temp ban expired")
+        await self.log(guild, embed("⏰ Temp ban ended", f"<@{user_id}> (`{user_id}`) was unbanned.", OK))
 
     async def lift_expired(self, guild_id: int, user_id: int, kinds: list[str]) -> None:
         guild = self.bot.get_guild(guild_id)
@@ -1037,6 +1056,69 @@ class Moderation(commands.Cog, name="Moderation"):
         await self.finish(ctx, action_embed(f"🕊️ {user.display_name} unbanned", user, ctx.author, reason=reason,
                                             case=case, colour=OK))
 
+    @commands.hybrid_command(name="tempban", aliases=["tban"], usage="@user <duration> [reason]",
+                             description="Ban someone for a set time, then auto-unban")
+    @app_commands.describe(user="Who to ban", duration="How long, e.g. 1d, 12h, 1w", reason="Why")
+    @moderator("ban_members")
+    async def tempban(self, ctx: commands.Context, user: discord.User, duration: str, *, reason: str = "") -> None:
+        guild = ctx.guild
+        seconds = parse_duration(duration)
+        if not seconds:
+            await ctx.reply(embed=problem("How long?", f"Try `{self.p(ctx)}tempban @user 1d spamming`."),
+                            ephemeral=True)
+            return
+        target = guild.get_member(user.id) or user
+        blocked = blocker(guild, ctx.author, target, owner_ids=self.bot.settings.owner_ids)
+        if blocked:
+            await ctx.reply(embed=problem("Can't ban them", blocked), ephemeral=True)
+            return
+        missing = bot_lacks(guild, "ban_members")
+        if missing:
+            await ctx.reply(embed=needs(missing), ephemeral=True)
+            return
+        reason = clean_reason(reason)
+        length = until(seconds)
+        if isinstance(target, discord.Member):
+            await self.tell(target, guild, "banned", reason=reason, duration=length)
+        try:
+            await guild.ban(user, reason=f"{ctx.author} (temp {human_duration(seconds)}): {reason or 'no reason'}",
+                            delete_message_seconds=0)
+        except discord.HTTPException:
+            await ctx.reply(embed=problem("Discord said no", "Check SYKE's role is above theirs."), ephemeral=True)
+            return
+        self.bot.storage.add_temp_ban(guild.id, user.id, time.time() + seconds, reason, ctx.author.id)
+        case = self.bot.storage.add_case(guild.id, user.id, ctx.author.id, "tempban", reason, seconds)
+        await self.finish(ctx, action_embed(f"🔨 {user.display_name} temp-banned", user, ctx.author, reason=reason,
+                                            duration=length, case=case, colour=DANGER))
+
+    @commands.hybrid_command(name="softban", usage="@user [reason]",
+                             description="Ban then immediately unban to wipe a member's recent messages")
+    @app_commands.describe(user="Who to softban", reason="Why")
+    @moderator("ban_members")
+    async def softban(self, ctx: commands.Context, user: discord.Member, *, reason: str = "") -> None:
+        guild = ctx.guild
+        blocked = blocker(guild, ctx.author, user, owner_ids=self.bot.settings.owner_ids)
+        if blocked:
+            await ctx.reply(embed=problem("Can't softban them", blocked), ephemeral=True)
+            return
+        missing = bot_lacks(guild, "ban_members")
+        if missing:
+            await ctx.reply(embed=needs(missing), ephemeral=True)
+            return
+        reason = clean_reason(reason)
+        await self.tell(user, guild, "kicked (messages cleared)", reason=reason)
+        try:
+            await guild.ban(user, reason=f"{ctx.author} (softban): {reason or 'no reason'}",
+                            delete_message_seconds=86400)
+            await guild.unban(discord.Object(id=user.id), reason="SYKE softban: immediate unban")
+        except discord.HTTPException:
+            await ctx.reply(embed=problem("Discord said no", "Check SYKE's role is above theirs."), ephemeral=True)
+            return
+        case = self.bot.storage.add_case(guild.id, user.id, ctx.author.id, "softban", reason)
+        await self.finish(ctx, action_embed(f"🧹 {user.display_name} softbanned", user, ctx.author, reason=reason,
+                                            case=case, colour=DANGER,
+                                            extra="Banned and unbanned to clear their last day of messages."))
+
     # Settings
 
     @commands.hybrid_command(name="modlog", usage="<#channel|off>",
@@ -1074,5 +1156,6 @@ def help_lines(p: str) -> str:
         f"`{p}timeout @member <10m|2h|1d> [reason]` · `{p}untimeout @member`\n"
         f"`{p}warn @member <reason>` · `{p}warnings @member` · `{p}history @member`\n"
         f"`{p}purge <amount> [@member]` · `{p}slowmode <10s|off>` · `{p}lock` / `{p}unlock`\n"
-        f"`{p}kick @member` · `{p}ban @user` · `{p}unban <id>` · `{p}modlog #channel`"
+        f"`{p}kick @member` · `{p}ban @user` · `{p}unban <id>`\n"
+        f"`{p}tempban @user <1d>` · `{p}softban @user` · `{p}modlog #channel`"
     )

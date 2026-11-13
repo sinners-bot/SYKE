@@ -139,6 +139,14 @@ CREATE TABLE IF NOT EXISTS locked_channels (
     previous   TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (guild_id, channel_id)
 );
+CREATE TABLE IF NOT EXISTS temp_bans (
+    guild_id     INTEGER NOT NULL,
+    user_id      INTEGER NOT NULL,
+    unban_at     REAL NOT NULL,
+    reason       TEXT NOT NULL DEFAULT '',
+    moderator_id INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
+);
 """
 
 
@@ -613,6 +621,28 @@ class Storage:
         except ValueError:
             saved = {}
         return saved if isinstance(saved, dict) else {}
+
+    def add_temp_ban(self, guild_id: int, user_id: int, unban_at: float, reason: str,
+                     moderator_id: int) -> None:
+        self._write(
+            "INSERT INTO temp_bans (guild_id, user_id, unban_at, reason, moderator_id) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(guild_id, user_id) DO UPDATE SET unban_at = excluded.unban_at, reason = excluded.reason, "
+            "moderator_id = excluded.moderator_id",
+            (guild_id, user_id, unban_at, reason, moderator_id),
+        )
+
+    def remove_temp_ban(self, guild_id: int, user_id: int) -> bool:
+        return self._write("DELETE FROM temp_bans WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)) > 0
+
+    def due_temp_bans(self, now: float) -> list[tuple[int, int]]:
+        """`(guild_id, user_id)` for temp bans whose time is up."""
+        return self._read("SELECT guild_id, user_id FROM temp_bans WHERE unban_at <= ?", (now,))
+
+    def temp_bans(self, guild_id: int) -> list[tuple[int, float, str]]:
+        """`(user_id, unban_at, reason)` still pending, soonest first."""
+        return self._read(
+            "SELECT user_id, unban_at, reason FROM temp_bans WHERE guild_id = ? ORDER BY unban_at", (guild_id,),
+        )
 
     def modlog_channel(self, guild_id: int) -> int | None:
         rows = self._read("SELECT modlog_channel FROM guild_settings WHERE guild_id = ?", (guild_id,))

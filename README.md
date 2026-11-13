@@ -92,7 +92,27 @@ the mod log if one is set.
 | `!lock [#channel] [reason]` / `!unlock [#channel]` | Manage Channels | Stop @everyone talking in a channel; unlocking restores what was there before |
 | `!kick @member [reason]` | Kick Members | Kick a member |
 | `!ban @user [reason]` / `!unban <user ID>` | Ban Members | Ban a member, or anyone by ID even if they already left |
+| `!tempban @user <duration> [reason]` | Ban Members | Ban for a set time (e.g. `1d`, `12h`, `1w`), then SYKE auto-unbans. Survives restarts. Alias: `!tban` |
+| `!softban @user [reason]` | Ban Members | Ban and instantly unban to wipe the member's last day of messages (a kick that cleans up a spammer) |
 | `!modlog <#channel\|off>` | Manage Server | Post every moderation action, and restrictions ending, to a channel |
+
+### Automod
+
+Runs automatically on every message. Administrators, anyone with Manage Messages, SYKE owners, and any
+role you exempt are never filtered. Every action becomes a numbered case and is posted to the mod log.
+See the whole setup at a glance with `!automod`.
+
+| Command | Who | What it does |
+| --- | --- | --- |
+| `!filter on\|off` · `!filter add <word>` · `!filter remove <word>` | Manage Server | **Word/slur blacklist** that auto-deletes matches. Catches whole words, leetspeak (`sh1t`), and spaced-out or embedded long words. `!filter action delete\|warn\|timeout [10m]` sets what happens, `!filter clear` empties it |
+| `!automod toxic <#channel> [threshold]` | Manage Server | **Flag** borderline-toxic messages (using SYKE's toxicity scoring) to a review channel **instead of deleting**, so mods decide. Threshold 1.0 (strict) – 3.0 (loose) |
+| `!links invites on\|off` | Manage Server | Auto-remove Discord server invites from non-mods |
+| `!links urls on\|off` · `!links allow <domain>` | Manage Server | Auto-remove links not on the allowlist. `!links allow youtube.com` whitelists a domain |
+| `!antispam on\|off` | Manage Server | Catch message **floods**, **duplicate** messages, **mass mentions** and **wall-of-caps**, then timeout the sender. Tune with `!antispam rate <count> <seconds>`, `!antispam mentions <n>`, `!antispam duration <10m>` |
+| `!automod ignore @role` | Manage Server | Exempt a role from all automod (toggle) |
+
+SYKE needs **Manage Messages** to delete, and **Timeout Members** for anti-spam timeouts. Toxicity
+review only needs a channel it can post in.
 
 **How `!restrict` holds server-wide.** SYKE makes one role per restriction (`SYKE · no images`,
 `SYKE · no links`, …) and denies that permission to it in every channel and category, including channels

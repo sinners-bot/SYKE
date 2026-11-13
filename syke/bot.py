@@ -36,6 +36,7 @@ from .invites import (
 )
 from .markov import build_chain
 from .models import Msg
+from .automod import AutoMod, help_lines as automod_help
 from .community import Community, help_lines as community_help
 from .dashboard import DashboardCog
 from .moderation import Moderation, help_lines as moderation_help, pretty as pretty_permission
@@ -329,6 +330,7 @@ class Syke(commands.Bot):
     async def setup_hook(self) -> None:
         await self.add_cog(SykeCommands(self))
         await self.add_cog(Moderation(self))
+        await self.add_cog(AutoMod(self))
         await self.add_cog(Community(self))
         await self.add_cog(DashboardCog(self))
         if self.settings.web_enabled:
@@ -2045,6 +2047,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
         )
         embed.add_field(name="New", value=community_help(p), inline=False)
         embed.add_field(name="Moderators", value=moderation_help(p), inline=False)
+        embed.add_field(name="Automod", value=automod_help(p), inline=False)
         embed.set_footer(text=f"SYKE version {VERSION}")
         await ctx.reply(embed=embed, ephemeral=True)
 

@@ -181,6 +181,17 @@ class Guild:
         self.roles = {}
         self.members = {}
         self.emojis = []
+        self.banned = []
+
+    async def ban(self, user, reason=None, delete_message_seconds=0):
+        self.banned.append(getattr(user, "id", user))
+
+    async def unban(self, user, reason=None):
+        uid = getattr(user, "id", user)
+        if uid in self.banned:
+            self.banned.remove(uid)
+        else:
+            raise discord.NotFound(types.SimpleNamespace(status=404, reason=""), "not banned")
 
     def get_role(self, rid):
         return self.roles.get(rid)
@@ -391,9 +402,10 @@ def test_help_lists_moderation(cog):
 
     ctx = FakeCtx()
     run(cog.help.callback(cog, ctx))
-    field = ctx.replies[-1].fields[-1]
-    assert field.name == "Moderators" and "restrict" in field.value
-    assert len(field.value) <= 1024
+    fields = {f.name: f.value for f in ctx.replies[-1].fields}
+    assert "restrict" in fields["Moderators"] and "tempban" in fields["Moderators"]
+    assert "filter" in fields["Automod"]
+    assert all(len(v) <= 1024 for v in fields.values())
     assert len(help_lines("!")) <= 1024
 
 
@@ -403,3 +415,29 @@ def test_install_asks_for_moderation_permissions():
     perms = install_permissions()
     for name in ("manage_messages", "moderate_members", "kick_members", "ban_members", "attach_files"):
         assert getattr(perms, name), name
+
+
+def test_tempban_schedules_unban(mod):
+    guild, boss, target = _setup(mod)
+    boss.guild_permissions = discord.Permissions(ban_members=True)
+    guild.me.guild_permissions = discord.Permissions(ban_members=True, moderate_members=True)
+    import time as _t
+    run(mod.tempban.callback(mod, Ctx(guild, boss), target, "1d", reason="raiding"))
+    assert target.id in guild.banned
+    pending = mod.bot.storage.temp_bans(guild.id)
+    assert len(pending) == 1 and pending[0][0] == target.id
+    assert any(c[2] == "tempban" for c in mod.bot.storage.cases(guild.id, target.id))
+    # Expiry unbans and clears the record.
+    mod.bot.storage.add_temp_ban(guild.id, target.id, _t.time() - 1, "raiding", boss.id)
+    run(mod.lift_temp_ban(guild.id, target.id))
+    assert target.id not in guild.banned
+    assert mod.bot.storage.temp_bans(guild.id) == []
+
+
+def test_softban_bans_then_unbans(mod):
+    guild, boss, target = _setup(mod)
+    boss.guild_permissions = discord.Permissions(ban_members=True)
+    guild.me.guild_permissions = discord.Permissions(ban_members=True)
+    run(mod.softban.callback(mod, Ctx(guild, boss), target, reason="spam"))
+    assert target.id not in guild.banned          # unbanned immediately
+    assert any(c[2] == "softban" for c in mod.bot.storage.cases(guild.id, target.id))
