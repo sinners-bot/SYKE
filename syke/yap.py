@@ -188,6 +188,36 @@ def _gif_url(token: str) -> str | None:
     return None
 
 
+_GIF_SLUG = re.compile(r"/(?:view|gifs|clip)/([a-z0-9-]+)", re.IGNORECASE)
+_GIF_STOP = {"gif", "gifs", "the", "a", "an", "of", "to", "and", "with", "mp4"}
+
+
+def gif_keywords(url: str) -> set[str]:
+    """Descriptive words from a GIF link's slug, e.g. tenor .../view/happy-dance-gif-123 -> {happy, dance}."""
+    m = _GIF_SLUG.search(url or "")
+    slug = m.group(1) if m else (url.rsplit("/", 1)[-1] if url else "")
+    slug = re.sub(r"\.(gif|mp4|webp|png|jpe?g)$", "", slug, flags=re.IGNORECASE)
+    words = set()
+    for w in re.split(r"[-_]", slug.lower()):
+        w = w.strip()
+        if len(w) >= 3 and not w.isdigit() and w not in _GIF_STOP:
+            words.add(w)
+    return words
+
+
+def pick_gif(gifs: list[str], context: str) -> str | None:
+    """Choose the GIF whose slug words best overlap the conversation; None if none fit."""
+    terms = {w for w in re.findall(r"[a-z]{3,}", (context or "").lower())}
+    if not terms:
+        return None
+    best, best_score = None, 0
+    for g in gifs:
+        score = len(gif_keywords(g) & terms)
+        if score > best_score:
+            best, best_score = g, score
+    return best
+
+
 def mine_expressions(texts: Iterable[str]) -> tuple[list[str], list[str]]:
     """Custom emojis and GIF links that appear in `texts`, each ordered by how often they're used."""
     emojis: Counter = Counter()

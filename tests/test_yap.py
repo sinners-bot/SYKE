@@ -25,6 +25,16 @@ def test_mine_expressions_orders_by_use():
     assert all("example.com/page" not in g for g in gifs)   # non-gif link ignored
 
 
+def test_gif_keywords_and_pick():
+    from syke.yap import gif_keywords, pick_gif
+    assert gif_keywords("https://tenor.com/view/happy-dance-excited-gif-12345") == {"happy", "dance", "excited"}
+    assert gif_keywords("https://media.giphy.com/media/abc/sad-cat.gif") == {"sad", "cat"}
+    gifs = ["https://tenor.com/view/happy-dance-gif-1", "https://tenor.com/view/sad-cat-gif-2"]
+    assert pick_gif(gifs, "i am so happy today") == gifs[0]
+    assert pick_gif(gifs, "nothing relevant xyz") is None
+    assert pick_gif(gifs, "") is None
+
+
 def test_emoji_id():
     assert emoji_id("<:pepe:111>") == 111
     assert emoji_id("<a:dance:222>") == 222
@@ -99,16 +109,43 @@ async def test_yap_extras_sends_recent_sticker(cog, monkeypatch):
     assert stickers == [sticker]
 
 
-async def test_yap_extras_appends_gif(cog, monkeypatch):
+async def test_yap_extras_never_appends_gif(cog, monkeypatch):
     monkeypatch.setattr(botmod, "YAP_EMOJI_CHANCE", 0.0)
     monkeypatch.setattr(botmod, "YAP_STICKER_CHANCE", 0.0)
-    monkeypatch.setattr(botmod, "YAP_GIF_CHANCE", 1.0)
     guild = types.SimpleNamespace(id=42, emojis=[], stickers=[])
     _seed_voice(cog.bot, 42, emojis=[], gifs=["https://tenor.com/view/x-gif-1"])
     msg = _message(guild, _channel())
     content, stickers = await cog.bot.yap_extras(msg, "lol")
-    assert content == "lol\nhttps://tenor.com/view/x-gif-1"
+    assert content == "lol"      # GIFs no longer ride along with the text
     assert stickers == []
+
+
+async def test_contextual_gif_fits_the_conversation(cog, monkeypatch):
+    monkeypatch.setattr(botmod, "YAP_GIF_CHANCE", 1.0)
+    gifs = ["https://tenor.com/view/happy-dance-gif-1", "https://tenor.com/view/sad-cat-gif-2"]
+    _seed_voice(cog.bot, 42, emojis=[], gifs=gifs)
+    guild = types.SimpleNamespace(id=42, emojis=[], stickers=[])
+    msg = _message(guild, _channel())
+    msg.content = "i am so happy today"
+    assert await cog.bot.contextual_gif(msg, "yeah good vibes") == gifs[0]   # picks the fitting one
+    # Nothing in the pool matches -> no gif forced.
+    msg.content = "quarterly spreadsheet numbers"
+    assert await cog.bot.contextual_gif(msg, "boring meeting") is None
+
+
+async def test_send_yap_sends_gif_as_separate_message(cog, monkeypatch):
+    monkeypatch.setattr(botmod, "YAP_EMOJI_CHANCE", 0.0)
+    monkeypatch.setattr(botmod, "YAP_STICKER_CHANCE", 0.0)
+    monkeypatch.setattr(botmod, "YAP_GIF_CHANCE", 1.0)
+    gifs = ["https://tenor.com/view/happy-dance-gif-1"]
+    _seed_voice(cog.bot, 42, emojis=[], gifs=gifs)
+    guild = types.SimpleNamespace(id=42, emojis=[], stickers=[])
+    ch = _channel()
+    msg = _message(guild, ch)
+    msg.content = "so happy right now"
+    await cog.bot._send_yap(msg, "happy energy", reply_to=False)
+    sent = [c for c, _ in ch.sent]
+    assert sent == ["happy energy", gifs[0]]   # text first, GIF as its own follow-up message
 
 
 async def test_send_yap_passes_stickers_to_reply(cog, monkeypatch):

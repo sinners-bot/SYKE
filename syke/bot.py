@@ -83,6 +83,7 @@ from .yap import (
     build_voice,
     detect_tone,
     emoji_id,
+    pick_gif,
     folded,
     query_weights,
     rank,
@@ -909,7 +910,7 @@ class Syke(commands.Bot):
         return list(seen.values())
 
     async def yap_extras(self, message: discord.Message, text: str) -> tuple[str, list]:
-        """Maybe dress a yap with a server emoji, sticker or GIF the chat actually uses."""
+        """Maybe dress a yap with a server emoji or a recently-used sticker (GIFs go separately)."""
         guild = message.guild
         voice = await self.server_voice(guild.id)
         content, stickers = text, []
@@ -918,17 +919,24 @@ class Syke(commands.Bot):
         pool = [e for e in (voice.emojis or []) if emoji_id(e) in available][:12]
         if pool and not CUSTOM_EMOJI_TAG.search(text) and random.random() < YAP_EMOJI_CHANCE:
             content = f"{content} {random.choice(pool)}"
-        # Occasionally a sticker someone used recently, or else a GIF the server posts.
+        # A sticker someone used recently (its own attachment, not glued to the text).
         if random.random() < YAP_STICKER_CHANCE:
             found = await self.recent_stickers(message)
             if found:
                 stickers = [random.choice(found)]
-        if not stickers and (voice.gifs or []) and random.random() < YAP_GIF_CHANCE:
-            content = f"{content}\n{random.choice(voice.gifs[:12])}"
         return content, stickers
 
+    async def contextual_gif(self, message: discord.Message, text: str) -> str | None:
+        """A GIF the server uses that fits what's being talked about — sent as its own message."""
+        voice = await self.server_voice(message.guild.id)
+        if not (voice.gifs or []) or random.random() >= YAP_GIF_CHANCE:
+            return None
+        chat = " ".join(t.text for t in await self.recent_chat(message, YAP_CONTEXT // 2))
+        context = f"{text} {message.content or ''} {chat}"
+        return pick_gif(voice.gifs[:40], context)
+
     async def _send_yap(self, message: discord.Message, text: str, *, reply_to: bool) -> None:
-        """Send a yap line, possibly with an emoji/sticker/gif, then remember the base text."""
+        """Send a yap line (with an optional emoji/sticker), then a fitting GIF as its own message."""
         content, stickers = await self.yap_extras(message, text)
         kwargs = {"stickers": stickers} if stickers else {}
         with contextlib.suppress(discord.HTTPException):
@@ -937,6 +945,10 @@ class Syke(commands.Bot):
             else:
                 await message.channel.send(content, **kwargs)
             self.remember_yap(message.channel.id, text)
+        gif = await self.contextual_gif(message, text)
+        if gif:
+            with contextlib.suppress(discord.HTTPException):
+                await message.channel.send(gif)
 
     def is_command_text(self, guild_id: int, text: str) -> bool:
         if dollar_tldr(text):
