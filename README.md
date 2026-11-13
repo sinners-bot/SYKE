@@ -63,6 +63,38 @@ switch a server to mentions only with `!prefix mention`.
 | `!demo on\|off` | Manage Server | Add 5 fake members to rankings so you can test alone |
 | `!sample [name]` | Manage Server | Full report for a fake member (Zyro, Mira, bubbles, Dex, Vex) |
 
+### Moderation
+
+Each command needs the matching Discord permission (or Administrator, or `SYKE_OWNER_IDS`).
+Moderators can only act on members whose top role is below theirs, and SYKE's role must be above
+the member for timeouts, kicks and bans. Actions are numbered as cases, DMed to the member, and posted to
+the mod log if one is set.
+
+| Command | Who | What it does |
+| --- | --- | --- |
+| `!restrict @member [what] [duration] [reason]` | Manage Roles | Stop a member posting `images` (all files), `links` (links, GIFs and embeds), `reactions`, `stickers` or `emojis` (external ones) anywhere in the server. Combine them (`images links`), or use `media` (images, links, stickers) or `all`. Nothing named means images and links. Durations like `30m`, `2h`, `7d`; nothing means until lifted. Example: `!restrict @Dex images links 1d posting gore`. Aliases: `!mediaban`, `!nomedia` |
+| `!unrestrict @member [what]` | Manage Roles | Lift some restrictions, or all of them |
+| `!restrictions [list\|sync]` | Manage Roles | Who is restricted and until when. `sync` re-applies the restriction roles to every channel |
+| `!timeout @member <duration> [reason]` | Moderate Members | Discord timeout, up to 28 days. `!untimeout @member` ends it. Aliases: `!mute`, `!unmute` |
+| `!warn @member <reason>` | Moderate Members | A warning in their record. `!warnings @member` lists them, `!delwarn <case>` removes one, `!clearwarns @member` removes all |
+| `!history @member` | Moderate Members | Every case on that member: warnings, restrictions, timeouts, kicks, bans. Aliases: `!modlogs`, `!cases` |
+| `!purge <amount> [@member]` | Manage Messages | Delete up to 500 recent messages here, or only that member's. Pins are kept. Aliases: `!clear`, `!prune` |
+| `!slowmode <10s\|2m\|off> [#channel]` | Manage Channels | Set or remove slowmode (max 6h) |
+| `!lock [#channel] [reason]` / `!unlock [#channel]` | Manage Channels | Stop @everyone talking in a channel; unlocking restores what was there before |
+| `!kick @member [reason]` | Kick Members | Kick a member |
+| `!ban @user [reason]` / `!unban <user ID>` | Ban Members | Ban a member, or anyone by ID even if they already left |
+| `!modlog <#channel\|off>` | Manage Server | Post every moderation action, and restrictions ending, to a channel |
+
+**How `!restrict` holds server-wide.** SYKE makes one role per restriction (`SYKE · no images`,
+`SYKE · no links`, …) and denies that permission to it in every channel and category, including channels
+made later. Discord then greys out uploads for that member. Anything that still gets through is deleted:
+a role elsewhere that explicitly *allows* the permission (Discord lets an allow win), administrators,
+forwarded messages, server stickers (no Discord permission covers those) and reactions. Restrictions are
+saved, end on time even across restarts, and come back if the member leaves and rejoins.
+SYKE needs **Manage Roles** and **Manage Messages**. The `SYKE · no …` roles are created at the bottom
+of the role list, below SYKE, so they work straight away. Run `!restrictions sync` if you move channels around or SYKE was offline
+when channels were created.
+
 ## Testing on your own
 
 1. `!demo on` adds five fake members (Zyro, Mira, bubbles, Dex, Vex) to this server's
@@ -137,7 +169,10 @@ Members need `SYKE_MIN_MESSAGES` (default 15) messages in watched channels befor
    **View Channels**, **Read Message History**, **Send Messages**, **Embed Links**,
    **Use External Emojis**, **Add Reactions**, **Manage Expressions** (so `!steal`, `!emoji` and `!sticker` can add them),
    **Manage Server** (so `!inviter` can read which invite was used),
-   and **Manage Roles** (so `!verify` can give the verified role).
+   **Manage Roles** (so `!verify` and `!restrict` can give roles), and for moderation **Attach Files**,
+   **Use External Stickers**, **Manage Messages**, **Manage Channels**, **Moderate Members**,
+   **Kick Members** and **Ban Members**. A bot can only deny permissions it has, which is why
+   `!restrict` needs Attach Files and Use External Stickers itself.
    Open the generated URL to invite SYKE to your server.
 4. **Add App button**: keep **Public Bot** on (Bot tab) so other people can add SYKE. On startup SYKE sets
    its own guild-install settings (scopes `bot` + `applications.commands`, the permissions above), so **Add App** on SYKE's profile adds it to a server.
@@ -180,7 +215,8 @@ command and restart policy.
 4. Deploy. The **Deploy Logs** should show `Synced 2 global commands` and `SYKE online as ...`.
 
 No external database (Supabase, Postgres, etc.) is needed. SYKE stores watched channels,
-opt-outs, per-server settings, who invited each member, and the Markov corpus in that SQLite file.
+opt-outs, per-server settings, who invited each member, moderation cases and restrictions, and the
+Markov corpus in that SQLite file.
 
 ## Configuration
 

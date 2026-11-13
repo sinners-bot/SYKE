@@ -91,6 +91,40 @@ CREATE TABLE IF NOT EXISTS verification (
     panel_channel_id INTEGER,
     panel_message_id INTEGER
 );
+CREATE TABLE IF NOT EXISTS restrictions (
+    guild_id     INTEGER NOT NULL,
+    user_id      INTEGER NOT NULL,
+    kind         TEXT NOT NULL,
+    expires_at   REAL,
+    reason       TEXT NOT NULL DEFAULT '',
+    moderator_id INTEGER NOT NULL,
+    created_at   REAL NOT NULL,
+    PRIMARY KEY (guild_id, user_id, kind)
+);
+CREATE TABLE IF NOT EXISTS restrict_roles (
+    guild_id INTEGER NOT NULL,
+    kind     TEXT NOT NULL,
+    role_id  INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, kind)
+);
+CREATE TABLE IF NOT EXISTS mod_cases (
+    guild_id     INTEGER NOT NULL,
+    number       INTEGER NOT NULL,
+    user_id      INTEGER NOT NULL,
+    moderator_id INTEGER NOT NULL,
+    action       TEXT NOT NULL,
+    reason       TEXT NOT NULL DEFAULT '',
+    duration     REAL,
+    created_at   REAL NOT NULL,
+    PRIMARY KEY (guild_id, number)
+);
+CREATE INDEX IF NOT EXISTS mod_cases_user ON mod_cases (guild_id, user_id);
+CREATE TABLE IF NOT EXISTS locked_channels (
+    guild_id   INTEGER NOT NULL,
+    channel_id INTEGER NOT NULL,
+    previous   TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (guild_id, channel_id)
+);
 """
 
 
@@ -106,6 +140,8 @@ class Storage:
                 self._conn.execute("ALTER TABLE guild_settings ADD COLUMN demo_mode INTEGER NOT NULL DEFAULT 0")
             if "prefix" not in columns:
                 self._conn.execute("ALTER TABLE guild_settings ADD COLUMN prefix TEXT")
+            if "modlog_channel" not in columns:
+                self._conn.execute("ALTER TABLE guild_settings ADD COLUMN modlog_channel INTEGER")
             corpus_columns = {row[1] for row in self._conn.execute("PRAGMA table_info(corpus)")}
             for column, kind in CORPUS_EXTRA_COLUMNS:
                 if column not in corpus_columns:
@@ -409,6 +445,146 @@ class Storage:
 
     def clear_verification(self, guild_id: int) -> bool:
         return self._write("DELETE FROM verification WHERE guild_id = ?", (guild_id,)) > 0
+
+    # Moderation
+
+    def restrict(self, guild_id: int, user_id: int, kind: str, *, expires_at: float | None,
+                 reason: str, moderator_id: int) -> None:
+        """Add or replace one restriction. A new duration replaces the old one."""
+        self._write(
+            "INSERT INTO restrictions (guild_id, user_id, kind, expires_at, reason, moderator_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(guild_id, user_id, kind) DO UPDATE SET expires_at = excluded.expires_at, "
+            "reason = excluded.reason, moderator_id = excluded.moderator_id, created_at = excluded.created_at",
+            (guild_id, user_id, kind, expires_at, reason, moderator_id, time.time()),
+        )
+
+    def unrestrict(self, guild_id: int, user_id: int, kinds: list[str] | None = None) -> list[str]:
+        """Lift restrictions (all of them when `kinds` is None). Returns the kinds that were active."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT kind FROM restrictions WHERE guild_id = ? AND user_id = ?", (guild_id, user_id),
+            ).fetchall()
+            active = [r[0] for r in rows if kinds is None or r[0] in kinds]
+            self._conn.executemany(
+                "DELETE FROM restrictions WHERE guild_id = ? AND user_id = ? AND kind = ?",
+                [(guild_id, user_id, kind) for kind in active],
+            )
+            self._conn.commit()
+        return active
+
+    def restrictions(self, guild_id: int, user_id: int | None = None) -> list[tuple]:
+        """`(user_id, kind, expires_at, reason, moderator_id, created_at)` rows, soonest expiry first."""
+        sql = ("SELECT user_id, kind, expires_at, reason, moderator_id, created_at FROM restrictions "
+               "WHERE guild_id = ?")
+        params: tuple = (guild_id,)
+        if user_id is not None:
+            sql += " AND user_id = ?"
+            params += (user_id,)
+        return self._read(sql + " ORDER BY expires_at IS NULL, expires_at, user_id", params)
+
+    def expired_restrictions(self, now: float) -> list[tuple[int, int, str]]:
+        """`(guild_id, user_id, kind)` for every restriction whose time is up."""
+        return self._read(
+            "SELECT guild_id, user_id, kind FROM restrictions WHERE expires_at IS NOT NULL AND expires_at <= ?",
+            (now,),
+        )
+
+    def restrict_role(self, guild_id: int, kind: str) -> int | None:
+        rows = self._read("SELECT role_id FROM restrict_roles WHERE guild_id = ? AND kind = ?", (guild_id, kind))
+        return rows[0][0] if rows else None
+
+    def restrict_roles(self, guild_id: int) -> dict[str, int]:
+        return dict(self._read("SELECT kind, role_id FROM restrict_roles WHERE guild_id = ?", (guild_id,)))
+
+    def set_restrict_role(self, guild_id: int, kind: str, role_id: int) -> None:
+        self._write(
+            "INSERT INTO restrict_roles VALUES (?, ?, ?) "
+            "ON CONFLICT(guild_id, kind) DO UPDATE SET role_id = excluded.role_id",
+            (guild_id, kind, role_id),
+        )
+
+    def add_case(self, guild_id: int, user_id: int, moderator_id: int, action: str,
+                 reason: str = "", duration: float | None = None) -> int:
+        """Record a moderation action. Returns its case number, counted per server."""
+        with self._lock:
+            number = self._conn.execute(
+                "SELECT COALESCE(MAX(number), 0) + 1 FROM mod_cases WHERE guild_id = ?", (guild_id,),
+            ).fetchone()[0]
+            self._conn.execute(
+                "INSERT INTO mod_cases (guild_id, number, user_id, moderator_id, action, reason, duration, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (guild_id, number, user_id, moderator_id, action, reason, duration, time.time()),
+            )
+            self._conn.commit()
+        return number
+
+    def cases(self, guild_id: int, user_id: int, action: str | None = None) -> list[tuple]:
+        """`(number, moderator_id, action, reason, duration, created_at)`, newest first."""
+        sql = ("SELECT number, moderator_id, action, reason, duration, created_at FROM mod_cases "
+               "WHERE guild_id = ? AND user_id = ?")
+        params: tuple = (guild_id, user_id)
+        if action is not None:
+            sql += " AND action = ?"
+            params += (action,)
+        return self._read(sql + " ORDER BY number DESC", params)
+
+    def case(self, guild_id: int, number: int) -> tuple | None:
+        """`(user_id, moderator_id, action, reason, duration, created_at)` or None."""
+        rows = self._read(
+            "SELECT user_id, moderator_id, action, reason, duration, created_at FROM mod_cases "
+            "WHERE guild_id = ? AND number = ?",
+            (guild_id, number),
+        )
+        return rows[0] if rows else None
+
+    def delete_case(self, guild_id: int, number: int) -> bool:
+        return self._write("DELETE FROM mod_cases WHERE guild_id = ? AND number = ?", (guild_id, number)) > 0
+
+    def clear_cases(self, guild_id: int, user_id: int, action: str) -> int:
+        return self._write(
+            "DELETE FROM mod_cases WHERE guild_id = ? AND user_id = ? AND action = ?", (guild_id, user_id, action),
+        )
+
+    def lock_channel(self, guild_id: int, channel_id: int, previous: dict[str, bool | None]) -> bool:
+        """Remember a channel's @everyone overwrites before locking. False if it was already locked."""
+        return self._write(
+            "INSERT OR IGNORE INTO locked_channels VALUES (?, ?, ?)", (guild_id, channel_id, json.dumps(previous)),
+        ) > 0
+
+    def is_locked(self, guild_id: int, channel_id: int) -> bool:
+        return bool(self._read(
+            "SELECT 1 FROM locked_channels WHERE guild_id = ? AND channel_id = ?", (guild_id, channel_id),
+        ))
+
+    def unlock_channel(self, guild_id: int, channel_id: int) -> dict[str, bool | None] | None:
+        """The overwrites saved when the channel was locked (None if it wasn't), and forget the lock."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT previous FROM locked_channels WHERE guild_id = ? AND channel_id = ?", (guild_id, channel_id),
+            ).fetchone()
+            self._conn.execute(
+                "DELETE FROM locked_channels WHERE guild_id = ? AND channel_id = ?", (guild_id, channel_id),
+            )
+            self._conn.commit()
+        if row is None:
+            return None
+        try:
+            saved = json.loads(row[0] or "{}")
+        except ValueError:
+            saved = {}
+        return saved if isinstance(saved, dict) else {}
+
+    def modlog_channel(self, guild_id: int) -> int | None:
+        rows = self._read("SELECT modlog_channel FROM guild_settings WHERE guild_id = ?", (guild_id,))
+        return rows[0][0] if rows else None
+
+    def set_modlog_channel(self, guild_id: int, channel_id: int | None) -> None:
+        self._write(
+            "INSERT INTO guild_settings (guild_id, modlog_channel) VALUES (?, ?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET modlog_channel = excluded.modlog_channel",
+            (guild_id, channel_id),
+        )
 
     def demo_mode(self, guild_id: int) -> bool:
         rows = self._read("SELECT demo_mode FROM guild_settings WHERE guild_id = ?", (guild_id,))

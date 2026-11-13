@@ -36,6 +36,7 @@ from .invites import (
 )
 from .markov import build_chain
 from .models import Msg
+from .moderation import Moderation, help_lines as moderation_help, pretty as pretty_permission
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
 from .scanner import Scanner, to_msg
 from .ship import read_ship, ship_embed, voice_sample
@@ -85,10 +86,14 @@ VERSION = (os.getenv("RAILWAY_GIT_COMMIT_SHA") or "dev")[:7]
 NEEDED_PERMISSIONS = ("view_channel", "send_messages", "embed_links", "read_message_history")
 # Requested on invite: what SYKE needs to work, plus posting server emojis, reactions,
 # adding emojis and stickers (Manage Expressions), reading invites (Manage Server)
-# so !inviter can tell who brought someone in, and handing out roles (Manage Roles)
-# so !verify can give the verified role.
+# so !inviter can tell who brought someone in, handing out roles (Manage Roles)
+# so !verify and !restrict work, and the moderation commands: deleting messages, slowmode
+# and locks, timeouts, kicks and bans. Attach Files and Use External Stickers are there
+# because Discord only lets a bot deny permissions it has itself (for !restrict's roles).
 INVITE_PERMISSIONS = NEEDED_PERMISSIONS + (
     "use_external_emojis", "add_reactions", "manage_emojis", "manage_guild", "manage_roles",
+    "attach_files", "use_external_stickers", "manage_messages", "manage_channels",
+    "moderate_members", "kick_members", "ban_members",
 )
 INSTALL_SCOPES = ["bot", "applications.commands"]
 MIN_MIMIC_MESSAGES = 10
@@ -320,6 +325,7 @@ class Syke(commands.Bot):
 
     async def setup_hook(self) -> None:
         await self.add_cog(SykeCommands(self))
+        await self.add_cog(Moderation(self))
         self.add_view(ProfileView(self.load_card))
         self.add_view(ShowcaseView(self.tour_prefix, self.invite_url()))
         self.add_view(VerifyView())
@@ -560,10 +566,11 @@ class Syke(commands.Bot):
                 if self.storage.tracked(guild.id):
                     self.spawn(self._warm(guild))
 
-    def spawn(self, coro) -> None:
+    def spawn(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
         self._background.add(task)
         task.add_done_callback(self._background.discard)
+        return task
 
     async def _warm(self, guild: discord.Guild) -> None:
         """Read watched channels after startup so the first !profile doesn't wait on a full scan."""
@@ -1081,7 +1088,9 @@ class Syke(commands.Bot):
         if isinstance(err, (commands.CommandOnCooldown, app_commands.CommandOnCooldown)):
             embed = notice("Easy there 🧪", f"The lab is still recovering. Try again in {err.retry_after:.0f}s.")
         elif isinstance(err, (commands.MissingPermissions, app_commands.MissingPermissions)):
-            embed = notice("Not so fast", "You need **Manage Server** to do that.")
+            needed = getattr(err, "missing_permissions", None) or ["manage_guild"]
+            listed = " or ".join(f"**{pretty_permission(p)}**" for p in needed)
+            embed = notice("Not so fast", f"You need {listed} to do that.")
         elif isinstance(err, (commands.NoPrivateMessage, app_commands.NoPrivateMessage)):
             embed = notice("Servers only", "SYKE judges people in servers, not in DMs.")
         elif isinstance(err, commands.MemberNotFound):
@@ -2016,6 +2025,7 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 f"`{p}optout` deletes yours. Reports are for fun only."
             ),
         )
+        embed.add_field(name="Moderators", value=moderation_help(p), inline=False)
         embed.set_footer(text=f"SYKE version {VERSION}")
         await ctx.reply(embed=embed, ephemeral=True)
 
