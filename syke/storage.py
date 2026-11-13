@@ -687,6 +687,23 @@ class Storage:
             (guild_id, limit),
         )
 
+    def search_channel(self, guild_id: int, channel_id: int, query: str,
+                        limit: int = 80) -> list[tuple]:
+        """Stored messages in a channel whose text contains `query` (newest first).
+
+        Returns `(message_id, author_id, author_name, content, created_at)`.
+        """
+        if not query.strip():
+            return []
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
+        return self._read(
+            "SELECT message_id, author_id, author_name, content, created_at FROM corpus "
+            "WHERE guild_id = ? AND channel_id = ? AND content != '' AND content LIKE ? ESCAPE '\\' "
+            "ORDER BY created_at IS NULL, created_at DESC LIMIT ?",
+            (guild_id, channel_id, like, limit),
+        )
+
     def top_authors(self, guild_id: int, limit: int = 40) -> list[tuple[int, str, int]]:
         """`(author_id, latest name, stored messages)` for the most active members."""
         return self._read(

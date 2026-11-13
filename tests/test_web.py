@@ -291,6 +291,37 @@ async def test_media_endpoint(dash):
         assert "media-grid" in (await resp.text()) or "No media" in (await resp.text())
 
 
+async def test_channel_message_search(dash):
+    async with serving(dash) as (cl, web, bot, guild):
+        bot.storage.track(guild.id, 10)
+        now = 1_700_000_000.0
+        bot.storage.add_corpus(guild.id, [
+            (1001, 10, 7, "the quick brown fox jumps", now, "Ada", 0, 0),
+            (1002, 10, 7, "nothing to see here", now + 1, "Ada", 0, 0),
+            (1003, 10, 8, "another FOX appeared", now + 2, "Bo", 0, 0),
+        ])
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        body = await (await cl.get(f"/g/{guild.id}/c/10?q=fox")).text()
+        assert "2 result(s) for" in body
+        assert "<mark>" in body                    # highlighted match
+        assert "quick brown" in body and "another" in body
+        assert "nothing to see" not in body
+        assert f"discord.com/channels/{guild.id}/10/1001" in body   # jump link
+        # value prefilled in the search box, poll disabled
+        assert "value='fox'" in body and "setInterval(poll" not in body
+
+
+def test_storage_search_escapes_wildcards(cog):
+    now = 1.0
+    cog.bot.storage.add_corpus(42, [
+        (1, 5, 7, "100% sure about this", now, "Ada", 0, 0),
+        (2, 5, 7, "fifty percent maybe", now + 1, "Ada", 0, 0),
+    ])
+    hits = cog.bot.storage.search_channel(42, 5, "100%")
+    assert len(hits) == 1 and hits[0][0] == 1
+    assert cog.bot.storage.search_channel(42, 5, "") == []
+
+
 def test_html_escaping_blocks_injection():
     assert esc("<script>alert(1)</script>") == "&lt;script&gt;alert(1)&lt;/script&gt;"
 

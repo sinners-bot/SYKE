@@ -7,8 +7,10 @@ touch discord.py objects directly. Turned on only when a client id, secret and s
 
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
+import re
 import time
 from datetime import timedelta
 from functools import wraps
@@ -153,6 +155,18 @@ background:linear-gradient(transparent,rgba(0,0,0,.8));white-space:nowrap;overfl
 .tile .play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:30px;
 color:#fff;text-shadow:0 1px 4px #000;pointer-events:none;}
 .tile.file{aspect-ratio:auto;background:#2b2d31;padding:10px;color:var(--text);font-size:13px;}
+.ch-search{margin-left:auto;}
+.ch-search input{background:#0f0f14;border:1px solid var(--line);border-radius:6px;color:var(--text);
+font-size:13px;padding:5px 8px;width:200px;}
+.sr-head{color:var(--muted);font-size:13px;padding:4px 2px 10px;border-bottom:1px solid var(--line);margin-bottom:8px;
+display:flex;justify-content:space-between;align-items:center;}
+.sr{padding:8px;border-radius:6px;margin-bottom:2px;}
+.sr:hover{background:#1e1e26;}
+.sr .head{display:flex;align-items:baseline;gap:8px;}
+.sr .name{font-weight:600;color:#f2f3f5;}
+.sr .jump{margin-left:auto;font-size:12px;}
+.sr .text{white-space:pre-wrap;word-break:break-word;color:#dbdee1;margin-top:2px;}
+mark{background:#f5b30155;color:#ffe08a;border-radius:2px;padding:0 1px;}
 """
 
 
@@ -461,14 +475,56 @@ class WebDashboard:
         rows.append("</div>")
         return f"<div class='dc-side'>{''.join(rows)}</div>"
 
-    def _channel_header(self, guild: discord.Guild, channel, active: str) -> str:
+    def _channel_header(self, guild: discord.Guild, channel, active: str, query: str = "") -> str:
         topic = getattr(channel, "topic", None)
         topic_html = f"<span class='topic'>{esc(topic[:120])}</span>" if topic else ""
         base = f"/g/{guild.id}/c/{channel.id}"
+        search = (f"<form class='ch-search' method='get' action='{base}'>"
+                  f"<input name='q' value='{esc(query)}' placeholder='Search messages' autocomplete='off'></form>")
         tabs = (f"<div class='ch-tabs'>"
                 f"<a class='{'on' if active == 'chat' else ''}' href='{base}'>Chat</a>"
                 f"<a class='{'on' if active == 'media' else ''}' href='{base}/media'>Media</a></div>")
-        return (f"<div class='dc-head'><span class='hash'>#</span> {esc(channel.name)}{topic_html}{tabs}</div>")
+        return (f"<div class='dc-head'><span class='hash'>#</span> {esc(channel.name)}{topic_html}{search}{tabs}</div>")
+
+    def _highlight(self, text: str, query: str) -> str:
+        safe = esc(text)
+        if not query:
+            return safe
+        try:
+            pattern = re.compile(re.escape(esc(query)), re.IGNORECASE)
+        except re.error:
+            return safe
+        return pattern.sub(lambda mo: f"<mark>{mo.group(0)}</mark>", safe)
+
+    async def _search_html(self, guild: discord.Guild, channel, query: str) -> str:
+        rows = await asyncio.to_thread(self.bot.storage.search_channel, guild.id, channel.id, query, 80)
+        results = [(r[0], r[2] or f"user {r[1]}", r[3], r[4]) for r in rows]
+        note = ""
+        if not results and channel.permissions_for(guild.me).read_message_history:
+            # Not a stored channel (or nothing stored) — scan recent live history instead.
+            note = "<div class='note'>Searching recent messages (this channel isn't fully stored).</div>"
+            needle = query.lower()
+            try:
+                async for m in channel.history(limit=MEDIA_SCAN):
+                    if needle in (m.clean_content or "").lower():
+                        results.append((m.id, m.author.display_name, m.clean_content, m.created_at.timestamp()))
+                        if len(results) >= 80:
+                            break
+            except discord.HTTPException:
+                pass
+        clear = f"<a href='/g/{guild.id}/c/{channel.id}'>Clear</a>"
+        head = (f"<div class='sr-head'><span>{len(results)} result(s) for "
+                f"<strong>{esc(query)}</strong></span>{clear}</div>")
+        if not results:
+            return head + "<div class='dc-empty'>No messages matched.</div>"
+        items = []
+        for mid, name, content, created in results:
+            ts = f"<time class='ts' data-ts='{int(created)}'></time>" if created else ""
+            jump = (f"<a class='jump' href='https://discord.com/channels/{guild.id}/{channel.id}/{mid}' "
+                    f"target='_blank' rel='noreferrer'>Jump ↗</a>") if mid else ""
+            items.append(f"<div class='sr'><div class='head'><span class='name'>{esc(name)}</span>{ts}{jump}</div>"
+                         f"<div class='text'>{self._highlight(content, query)}</div></div>")
+        return head + note + "".join(items)
 
     def _one_message(self, m: discord.Message, prev: discord.Message | None) -> str:
         author = m.author
@@ -549,9 +605,12 @@ class WebDashboard:
         channel = self._channel_or_404(request, guild)
         can_send = channel.permissions_for(guild.me).send_messages
         sidebar = self._sidebar(guild, channel.id)
-        messages = await self._messages_html(channel)
+        query = (request.query.get("q") or "").strip()
+        searching = bool(query)
+        messages = await self._search_html(guild, channel, query) if searching \
+            else await self._messages_html(channel)
         csrf = self._hidden_csrf(user[0])
-        head = self._channel_header(guild, channel, "chat")
+        head = self._channel_header(guild, channel, "chat", query)
         if can_send:
             inp = (f"<form class='dc-input' method='post' action='/g/{guild.id}/c/{channel.id}/say'>{csrf}"
                    f"<textarea name='content' rows='2' maxlength='2000' required "
@@ -574,10 +633,12 @@ class WebDashboard:
             "function stamp(r){r.querySelectorAll('time[data-ts]').forEach(function(e){e.textContent=fmt(+e.dataset.ts);});}"
             "var pane=document.getElementById('messages');"
             "function bot(){return pane.scrollHeight-pane.scrollTop-pane.clientHeight<100;}"
-            "stamp(document);pane.scrollTop=pane.scrollHeight;"
-            "async function poll(){try{var r=await fetch(location.pathname+'/messages');if(!r.ok)return;"
-            "var h=await r.text(),b=bot();pane.innerHTML=h;stamp(pane);if(b)pane.scrollTop=pane.scrollHeight;}catch(e){}}"
-            "setInterval(poll,8000);"
+            "stamp(document);"
+            + ("" if searching else
+               "pane.scrollTop=pane.scrollHeight;"
+               "async function poll(){try{var r=await fetch(location.pathname+'/messages');if(!r.ok)return;"
+               "var h=await r.text(),b=bot();pane.innerHTML=h;stamp(pane);if(b)pane.scrollTop=pane.scrollHeight;}catch(e){}}"
+               "setInterval(poll,8000);")
             + SIDEBAR_JS +
             "</script>"
         )
