@@ -205,6 +205,130 @@ def join_clusters(joins, window: float = 60, min_size: int = 3) -> list[list[int
     return clusters
 
 
+SEARCH_SCAN = 1000
+HAS_KINDS = {"image", "video", "audio", "file", "link", "url", "embed", "sticker", "gif"}
+_URL_IN = re.compile(r"https?://", re.IGNORECASE)
+_MENTION_ID = re.compile(r"<@!?(\d+)>$")
+_BARE_ID = re.compile(r"(\d{15,25})$")
+
+
+class SearchFilters:
+    """A parsed dashboard query: free text plus Discord-style from:/has:/before:/after:."""
+    __slots__ = ("text", "from_ids", "from_names", "has", "before", "after")
+
+    def __init__(self):
+        self.text = ""
+        self.from_ids: set[int] = set()
+        self.from_names: list[str] = []
+        self.has: set[str] = set()
+        self.before: float | None = None
+        self.after: float | None = None
+
+    @property
+    def structural(self) -> bool:
+        return bool(self.has or self.before is not None or self.after is not None)
+
+    @property
+    def has_from(self) -> bool:
+        return bool(self.from_ids or self.from_names)
+
+
+def _parse_date(s: str) -> float | None:
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            continue
+    return None
+
+
+def parse_search(query: str) -> SearchFilters:
+    """Parse `from:@u has:image before:2025-01-01 words` into a SearchFilters."""
+    f = SearchFilters()
+    words = []
+    for tok in (query or "").split():
+        low = tok.lower()
+        if low.startswith("from:") and len(tok) > 5:
+            v = tok[5:]
+            m = _MENTION_ID.match(v) or _BARE_ID.match(v)
+            if m:
+                f.from_ids.add(int(m.group(1)))
+            else:
+                f.from_names.append(v.lstrip("@").lower())
+        elif low.startswith("has:") and low[4:] in HAS_KINDS:
+            f.has.add(low[4:])
+        elif low.startswith("before:"):
+            f.before = _parse_date(tok[7:]) or f.before
+        elif low.startswith("after:"):
+            f.after = _parse_date(tok[6:]) or f.after
+        else:
+            words.append(tok)
+    f.text = " ".join(words)
+    return f
+
+
+def _msg_has(m, kind: str) -> bool:
+    atts = getattr(m, "attachments", []) or []
+    embeds = getattr(m, "embeds", []) or []
+    content = getattr(m, "content", "") or ""
+
+    def ct(a):
+        return (getattr(a, "content_type", None) or "").lower()
+
+    if kind == "image":
+        return (any(ct(a).startswith("image") for a in atts)
+                or any(getattr(getattr(e, "image", None), "url", None)
+                       or getattr(getattr(e, "thumbnail", None), "url", None) for e in embeds))
+    if kind == "video":
+        return (any(ct(a).startswith("video") for a in atts)
+                or any(getattr(e, "type", "") == "gifv" or getattr(getattr(e, "video", None), "url", None)
+                       for e in embeds))
+    if kind == "audio":
+        return any(ct(a).startswith("audio") for a in atts)
+    if kind == "file":
+        return bool(atts)
+    if kind == "embed":
+        return bool(embeds)
+    if kind == "sticker":
+        return bool(getattr(m, "stickers", []) or [])
+    if kind in ("link", "url"):
+        return bool(_URL_IN.search(content)) or any(getattr(e, "url", None) for e in embeds)
+    if kind == "gif":
+        low = content.lower()
+        return (".gif" in low or "tenor.com" in low or "giphy.com" in low
+                or any(getattr(e, "type", "") == "gifv" for e in embeds))
+    return False
+
+
+def author_matches(aid: int, name: str, f: SearchFilters) -> bool:
+    if aid in f.from_ids:
+        return True
+    low = (name or "").lower()
+    return any(fn in low for fn in f.from_names)
+
+
+def message_matches(m, f: SearchFilters) -> bool:
+    """Does a (real or fake) message satisfy every filter in `f`?"""
+    if f.has_from:
+        name = getattr(m.author, "display_name", None) or getattr(m.author, "name", "")
+        if not author_matches(getattr(m.author, "id", 0), name, f):
+            return False
+    for kind in f.has:
+        if not _msg_has(m, kind):
+            return False
+    created = getattr(m, "created_at", None)
+    ts = created.timestamp() if created else None
+    if f.before is not None and (ts is None or ts >= f.before):
+        return False
+    if f.after is not None and (ts is None or ts < f.after):
+        return False
+    if f.text:
+        hay = (getattr(m, "clean_content", None) or getattr(m, "content", "") or "").lower()
+        if f.text.lower() not in hay:
+            return False
+    return True
+
+
 # HTML
 
 STYLE = """
@@ -809,7 +933,10 @@ class WebDashboard:
         topic_html = f"<span class='topic'>{esc(topic[:120])}</span>" if topic else ""
         base = f"/g/{guild.id}/c/{channel.id}"
         search = (f"<form class='ch-search' method='get' action='{base}'>"
-                  f"<input name='q' value='{esc(query)}' placeholder='Search messages' autocomplete='off'></form>")
+                  f"<input name='q' value='{esc(query)}' autocomplete='off' "
+                  f"placeholder='Search — try from:@user has:image after:2025-01-01' "
+                  f"title='Operators: from:@user or from:name · has:image|video|audio|file|link|embed|sticker|gif · "
+                  f"before:YYYY-MM-DD · after:YYYY-MM-DD'></form>")
         tabs = (f"<div class='ch-tabs'>"
                 f"<a class='{'on' if active == 'chat' else ''}' href='{base}'>Chat</a>"
                 f"<a class='{'on' if active == 'media' else ''}' href='{base}/media'>Media</a></div>")
@@ -825,22 +952,59 @@ class WebDashboard:
             return safe
         return pattern.sub(lambda mo: f"<mark>{mo.group(0)}</mark>", safe)
 
+    @staticmethod
+    def _result_text(m) -> str:
+        """A one-line description of a message for search results, even if it's media-only."""
+        txt = (getattr(m, "clean_content", None) or getattr(m, "content", "") or "").strip()
+        if txt:
+            return txt
+        atts = getattr(m, "attachments", []) or []
+        if atts:
+            return f"📎 {getattr(atts[0], 'filename', 'attachment')}" + (f" +{len(atts) - 1}" if len(atts) > 1 else "")
+        if getattr(m, "stickers", []):
+            return "[sticker]"
+        for e in getattr(m, "embeds", []) or []:
+            return f"[embed] {esc(getattr(e, 'title', '') or '')}".strip()
+        return "(no text)"
+
     async def _search_html(self, guild: discord.Guild, channel, query: str) -> str:
-        rows = await asyncio.to_thread(self.bot.storage.search_channel, guild.id, channel.id, query, 80)
-        results = [(r[0], r[2] or f"user {r[1]}", r[3], r[4]) for r in rows]
+        f = parse_search(query)
+        can = channel.permissions_for(guild.me).read_message_history
+        results = []  # (message_id, author name, content, created_ts)
         note = ""
-        if not results and channel.permissions_for(guild.me).read_message_history:
-            # Not a stored channel (or nothing stored) — scan recent live history instead.
-            note = "<div class='note'>Searching recent messages (this channel isn't fully stored).</div>"
-            needle = query.lower()
+        # has:/date: and from-only (no text) filters need message metadata → scan live history.
+        live = can and (f.structural or (f.has_from and not f.text))
+        if live:
+            note = "<div class='note'>Scanning recent history for matches.</div>"
             try:
-                async for m in channel.history(limit=MEDIA_SCAN):
-                    if needle in (m.clean_content or "").lower():
-                        results.append((m.id, m.author.display_name, m.clean_content, m.created_at.timestamp()))
+                async for m in channel.history(limit=SEARCH_SCAN):
+                    if message_matches(m, f):
+                        results.append((m.id, m.author.display_name, self._result_text(m),
+                                        m.created_at.timestamp()))
                         if len(results) >= 80:
                             break
             except discord.HTTPException:
                 pass
+        else:
+            rows = await asyncio.to_thread(self.bot.storage.search_channel, guild.id, channel.id,
+                                           f.text, 400 if f.has_from else 80)
+            for mid, aid, aname, content, created in rows:
+                if f.has_from and not author_matches(aid, aname, f):
+                    continue
+                results.append((mid, aname or f"user {aid}", content, created))
+                if len(results) >= 80:
+                    break
+            if not results and can:
+                note = "<div class='note'>Searching recent messages (this channel isn't fully stored).</div>"
+                try:
+                    async for m in channel.history(limit=MEDIA_SCAN):
+                        if message_matches(m, f):
+                            results.append((m.id, m.author.display_name, self._result_text(m),
+                                            m.created_at.timestamp()))
+                            if len(results) >= 80:
+                                break
+                except discord.HTTPException:
+                    pass
         clear = f"<a href='/g/{guild.id}/c/{channel.id}'>Clear</a>"
         head = (f"<div class='sr-head'><span>{len(results)} result(s) for "
                 f"<strong>{esc(query)}</strong></span>{clear}</div>")
@@ -852,7 +1016,7 @@ class WebDashboard:
             jump = (f"<a class='jump' href='https://discord.com/channels/{guild.id}/{channel.id}/{mid}' "
                     f"target='_blank' rel='noreferrer'>Jump ↗</a>") if mid else ""
             items.append(f"<div class='sr'><div class='head'><span class='name'>{esc(name)}</span>{ts}{jump}</div>"
-                         f"<div class='text'>{self._highlight(content, query)}</div></div>")
+                         f"<div class='text'>{self._highlight(content, f.text)}</div></div>")
         return head + note + "".join(items)
 
     @staticmethod

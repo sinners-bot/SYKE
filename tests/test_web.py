@@ -302,6 +302,51 @@ async def test_history_paging_with_before(dash):
         assert "?before='+f.dataset.mid" in page and "addEventListener('scroll'" in page
 
 
+def test_parse_search_operators():
+    from syke.web import parse_search
+    f = parse_search("from:<@111111111111111111> has:image has:video before:2025-06-01 hello world")
+    assert 111111111111111111 in f.from_ids
+    assert f.has == {"image", "video"}
+    assert f.before is not None and f.after is None
+    assert f.text == "hello world"
+    assert f.structural and f.has_from
+    g = parse_search("from:Ada just text")
+    assert g.from_names == ["ada"] and g.text == "just text" and not g.structural
+    assert parse_search("plain words").text == "plain words"
+    assert parse_search("<@!999> hi") .text == "<@!999> hi"   # bare mention (no from:) is text
+
+
+def _smsg(uid=7, name="Ada", content="", atts=(), embeds=(), stickers=(), ts=1_700_000_000):
+    from datetime import datetime, timezone
+    def att(ctype, fn="f"):
+        return types.SimpleNamespace(content_type=ctype, filename=fn, url=f"https://cdn/{fn}")
+    return types.SimpleNamespace(
+        id=1, author=types.SimpleNamespace(id=uid, display_name=name, name=name),
+        content=content, clean_content=content,
+        attachments=[att(*a) if isinstance(a, tuple) else att(a) for a in atts],
+        embeds=list(embeds), stickers=list(stickers),
+        created_at=datetime.fromtimestamp(ts, timezone.utc))
+
+
+def test_message_matches_filters():
+    from syke.web import message_matches, parse_search
+    img = _smsg(content="look at this", atts=[("image/png", "a.png")])
+    assert message_matches(img, parse_search("has:image"))
+    assert message_matches(img, parse_search("has:image look"))
+    assert not message_matches(img, parse_search("has:video"))
+    assert not message_matches(img, parse_search("has:image missing"))   # text must also match
+    # from: by name and id
+    assert message_matches(img, parse_search("from:ada"))
+    assert not message_matches(img, parse_search("from:bob"))
+    assert message_matches(_smsg(uid=111111111111111111), parse_search("from:111111111111111111"))
+    # link detection from content
+    assert message_matches(_smsg(content="see https://x.com"), parse_search("has:link"))
+    # date window
+    early = _smsg(ts=1_600_000_000)
+    assert message_matches(early, parse_search("before:2021-01-01"))
+    assert not message_matches(early, parse_search("after:2021-01-01"))
+
+
 def _embed(**kw):
     base = dict(title=None, description=None, url=None, author=None, fields=[], footer=None,
                 timestamp=None, image=None, thumbnail=None, video=None, type="rich", colour=None)
