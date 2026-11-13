@@ -354,6 +354,34 @@ def test_storage_search_escapes_wildcards(cog):
     assert cog.bot.storage.search_channel(42, 5, "") == []
 
 
+def test_attachment_previews_render_inline(dash):
+    import types
+    from datetime import datetime, timezone
+    web = dash[0]
+    def att(ct, url, name, size=1000):
+        return types.SimpleNamespace(content_type=ct, url=url, filename=name, size=size)
+    def emb(**k):
+        base = dict(type="rich", url=None, title=None, description=None,
+                    image=types.SimpleNamespace(url=None), thumbnail=types.SimpleNamespace(url=None),
+                    video=types.SimpleNamespace(url=None))
+        base.update(k)
+        return types.SimpleNamespace(**base)
+    author = types.SimpleNamespace(id=1, display_name="Ada", bot=False,
+        display_avatar=types.SimpleNamespace(url="https://cdn/a.png"), colour=types.SimpleNamespace(value=0))
+    m = types.SimpleNamespace(id=9, author=author, clean_content="", created_at=datetime(2026,11,13,tzinfo=timezone.utc),
+        reference=None, reactions=[],
+        attachments=[att("image/png","https://cdn/i.png","p.png"), att("video/mp4","https://cdn/v.mp4","v.mp4"),
+                     att("audio/mpeg","https://cdn/s.mp3","s.mp3"), att("application/pdf","https://cdn/d.pdf","doc.pdf")],
+        embeds=[emb(type="gifv", video=types.SimpleNamespace(url="https://cdn/g.mp4")),
+                emb(title="Hello", image=types.SimpleNamespace(url="https://cdn/e.png"))])
+    html = web._one_message(m, None)
+    assert "att-media" in html and "src='https://cdn/v.mp4'" in html   # inline video
+    assert "<audio" in html and "s.mp3" in html                        # inline audio
+    assert "att-file" in html and "doc.pdf" in html                    # file card
+    assert "emb-img" in html and "https://cdn/e.png" in html           # embed image
+    assert "autoplay loop muted" in html and "https://cdn/g.mp4" in html  # gif as video
+
+
 def test_html_escaping_blocks_injection():
     assert esc("<script>alert(1)</script>") == "&lt;script&gt;alert(1)&lt;/script&gt;"
 

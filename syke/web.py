@@ -130,11 +130,20 @@ h1{font-size:22px;margin:0 0 4px;}h2{font-size:17px;margin:22px 0 10px;}
 .m .reply{font-size:13px;color:var(--muted);margin-bottom:2px;display:flex;gap:6px;align-items:center;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
 .m .reply img{width:16px;height:16px;border-radius:50%;}
 .m .reply .rn{color:#b9bbbe;font-weight:600;}
-.att img{max-width:420px;max-height:320px;border-radius:8px;margin-top:4px;display:block;}
-.att a{display:inline-block;margin-top:4px;}
+.att{display:block;margin-top:4px;}
+.att img{max-width:420px;max-height:320px;border-radius:8px;display:block;}
+.att-media{max-width:420px;max-height:320px;border-radius:8px;display:block;background:#000;}
+.att-audio audio{width:360px;max-width:100%;margin-top:3px;}
+.att-audio .fn{font-size:13px;color:#dbdee1;}
+.att-file{display:flex;gap:10px;align-items:center;background:#2b2d31;border:1px solid var(--line);
+border-radius:8px;padding:10px 12px;max-width:400px;color:var(--text);}
+.att-file:hover{text-decoration:none;border-color:var(--brand);}
+.att-file .fi{font-size:20px;}
+.att-file .fn{font-size:13px;word-break:break-word;}
 .emb{border-left:4px solid var(--brand);background:#2b2d31;border-radius:4px;padding:8px 12px;margin-top:4px;max-width:460px;}
-.emb .et{font-weight:600;margin-bottom:2px;}
+.emb .et{font-weight:600;margin-bottom:2px;display:block;color:#8ab4f8;}
 .emb .ed{color:#dbdee1;font-size:14px;}
+.emb .emb-img{display:block;max-width:100%;max-height:300px;border-radius:6px;margin-top:8px;}
 .rx{display:inline-flex;gap:5px;align-items:center;background:#2b2d31;border:1px solid var(--line);border-radius:8px;padding:1px 7px;font-size:12px;margin:5px 4px 0 0;color:#b9bbbe;}
 .dc-input{padding:10px 16px 14px;border-top:1px solid var(--line);background:#1a1a22;}
 .dc-input textarea{width:100%;resize:vertical;background:#2b2d31;border-color:#2b2d31;}
@@ -550,18 +559,43 @@ class WebDashboard:
         body = f"<div class='text'>{text}</div>" if text else "<div class='text empty'>(no text content)</div>"
         atts = []
         for a in m.attachments:
-            if (a.content_type or "").startswith("image"):
-                atts.append(f"<div class='att'><img src='{esc(a.url)}' alt='{esc(a.filename)}' loading='lazy'></div>")
+            ct = (a.content_type or "").lower()
+            url = esc(a.url)
+            if ct.startswith("image"):
+                atts.append(f"<a class='att' href='{url}' target='_blank' rel='noreferrer'>"
+                            f"<img src='{url}' alt='{esc(a.filename)}' loading='lazy'></a>")
+            elif ct.startswith("video"):
+                atts.append(f"<div class='att'><video class='att-media' src='{url}' controls "
+                            f"preload='metadata'></video></div>")
+            elif ct.startswith("audio"):
+                atts.append(f"<div class='att att-audio'><div class='fn'>🎵 {esc(a.filename)}</div>"
+                            f"<audio src='{url}' controls preload='none'></audio></div>")
             else:
-                kb = f" ({a.size // 1024} KB)" if getattr(a, "size", 0) else ""
-                atts.append(f"<div class='att'>📎 <a href='{esc(a.url)}' target='_blank' rel='noreferrer'>"
-                            f"{esc(a.filename)}</a>{kb}</div>")
+                kb = f"{a.size // 1024} KB" if getattr(a, "size", 0) else "file"
+                atts.append(f"<a class='att att-file' href='{url}' target='_blank' rel='noreferrer'>"
+                            f"<span class='fi'>📎</span><span class='fn'>{esc(a.filename)}"
+                            f"<br><span class='muted'>{kb}</span></span></a>")
         embeds = []
         for e in m.embeds:
-            title = f"<div class='et'>{esc(e.title)}</div>" if e.title else ""
-            desc = f"<div class='ed'>{esc(e.description[:400])}</div>" if e.description else ""
-            if title or desc:
-                embeds.append(f"<div class='emb'>{title}{desc}</div>")
+            link = getattr(e, "url", None)
+            title = esc(e.title)
+            if title:
+                title = (f"<a class='et' href='{esc(link)}' target='_blank' rel='noreferrer'>{title}</a>"
+                         if link else f"<div class='et'>{title}</div>")
+            desc = f"<div class='ed'>{esc(e.description[:600])}</div>" if e.description else ""
+            media = ""
+            video_url = getattr(getattr(e, "video", None), "url", None)
+            image_url = getattr(getattr(e, "image", None), "url", None)
+            thumb_url = getattr(getattr(e, "thumbnail", None), "url", None)
+            if getattr(e, "type", "") == "gifv" and video_url:
+                media = (f"<video class='emb-img' src='{esc(video_url)}' autoplay loop muted "
+                         f"playsinline preload='metadata'></video>")
+            elif image_url:
+                media = f"<img class='emb-img' src='{esc(image_url)}' loading='lazy' alt=''>"
+            elif thumb_url:
+                media = f"<img class='emb-img' src='{esc(thumb_url)}' loading='lazy' alt=''>"
+            if title or desc or media:
+                embeds.append(f"<div class='emb'>{title}{desc}{media}</div>")
         reactions = "".join(
             f"<span class='rx'>{esc(str(r.emoji))} {r.count}</span>" for r in getattr(m, "reactions", [])
         )
