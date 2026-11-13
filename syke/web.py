@@ -324,10 +324,21 @@ border-radius:8px;padding:10px 12px;max-width:400px;color:var(--text);}
 .att-file:hover{text-decoration:none;border-color:var(--brand);}
 .att-file .fi{font-size:20px;}
 .att-file .fn{font-size:13px;word-break:break-word;}
-.emb{border-left:4px solid var(--brand);background:#2b2d31;border-radius:4px;padding:8px 12px;margin-top:4px;max-width:460px;}
-.emb .et{font-weight:600;margin-bottom:2px;display:block;color:#8ab4f8;}
-.emb .ed{color:#dbdee1;font-size:14px;}
+.emb{border-left:4px solid var(--brand);background:#2b2d31;border-radius:4px;padding:8px 12px;margin-top:4px;max-width:520px;display:flex;gap:10px;}
+.emb .emb-main{min-width:0;flex:1;}
+.emb .et{font-weight:600;margin:2px 0;display:block;color:#8ab4f8;}
+.emb .ed{color:#dbdee1;font-size:14px;white-space:pre-wrap;word-break:break-word;}
 .emb .emb-img{display:block;max-width:100%;max-height:300px;border-radius:6px;margin-top:8px;}
+.emb .ea{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:#dbdee1;margin-bottom:2px;}
+.emb .ea-ic{width:20px;height:20px;border-radius:50%;}
+.emb .efs{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:6px;}
+.emb .ef{min-width:100%;}
+.emb .ef.inline{min-width:30%;flex:1;}
+.emb .efn{font-size:13px;font-weight:600;color:#fff;}
+.emb .efv{font-size:13px;color:#c4c7d0;white-space:pre-wrap;word-break:break-word;}
+.emb .eft{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);margin-top:8px;}
+.emb .ef-ic{width:16px;height:16px;border-radius:50%;}
+.emb .eth{width:72px;height:72px;border-radius:6px;object-fit:cover;flex:none;}
 .rx{display:inline-flex;gap:5px;align-items:center;background:#2b2d31;border:1px solid var(--line);border-radius:8px;padding:1px 7px;font-size:12px;margin:5px 4px 0 0;color:#b9bbbe;}
 button.rx.rxc{cursor:pointer;font-family:inherit;}
 button.rx.rxc:hover{border-color:var(--brand);color:#fff;}
@@ -925,27 +936,8 @@ class WebDashboard:
                 atts.append(f"<a class='att att-file' href='{url}' target='_blank' rel='noreferrer'>"
                             f"<span class='fi'>📎</span><span class='fn'>{esc(a.filename)}"
                             f"<br><span class='muted'>{kb}</span></span></a>")
-        embeds = []
-        for e in m.embeds:
-            link = getattr(e, "url", None)
-            title = esc(e.title)
-            if title:
-                title = (f"<a class='et' href='{esc(link)}' target='_blank' rel='noreferrer'>{title}</a>"
-                         if link else f"<div class='et'>{title}</div>")
-            desc = f"<div class='ed'>{esc(e.description[:600])}</div>" if e.description else ""
-            media = ""
-            video_url = getattr(getattr(e, "video", None), "url", None)
-            image_url = getattr(getattr(e, "image", None), "url", None)
-            thumb_url = getattr(getattr(e, "thumbnail", None), "url", None)
-            if getattr(e, "type", "") == "gifv" and video_url:
-                media = (f"<video class='emb-img' src='{esc(video_url)}' autoplay loop muted "
-                         f"playsinline preload='metadata'></video>")
-            elif image_url:
-                media = f"<img class='emb-img' src='{esc(image_url)}' loading='lazy' alt=''>"
-            elif thumb_url:
-                media = f"<img class='emb-img' src='{esc(thumb_url)}' loading='lazy' alt=''>"
-            if title or desc or media:
-                embeds.append(f"<div class='emb'>{title}{desc}{media}</div>")
+        embeds = [self._embed_html(e, guild, names) for e in m.embeds]
+        embeds = [h for h in embeds if h]
         rx = []
         for r in getattr(m, "reactions", []):
             e = r.emoji
@@ -1482,6 +1474,60 @@ class WebDashboard:
         except discord.HTTPException:
             return web.Response(text="<div class='rxp-empty'>Message not found.</div>", content_type="text/html")
         return web.Response(text=await self._reactions_html(guild, message), content_type="text/html")
+
+    def _embed_html(self, e, guild, names) -> str:
+        """Render one embed the way Discord does: author, title, description, fields, media, footer."""
+        parts = []
+        # Author line (name + icon), e.g. the target user on a `,av` card.
+        au = getattr(e, "author", None)
+        if au is not None and getattr(au, "name", None):
+            icon = getattr(au, "icon_url", None)
+            ic = f"<img class='ea-ic' src='{esc(icon)}' alt=''>" if icon else ""
+            aname = esc(au.name)
+            aurl = getattr(au, "url", None)
+            if aurl:
+                aname = f"<a href='{esc(aurl)}' target='_blank' rel='noreferrer'>{aname}</a>"
+            parts.append(f"<div class='ea'>{ic}<span>{aname}</span></div>")
+        link = getattr(e, "url", None)
+        title = esc(e.title)
+        if title:
+            parts.append(f"<a class='et' href='{esc(link)}' target='_blank' rel='noreferrer'>{title}</a>"
+                         if link else f"<div class='et'>{title}</div>")
+        if e.description:
+            parts.append(f"<div class='ed'>{render_content(e.description[:1800], guild, names)}</div>")
+        fields = getattr(e, "fields", []) or []
+        if fields:
+            fs = []
+            for f in fields:
+                inline = " inline" if getattr(f, "inline", False) else ""
+                fs.append(f"<div class='ef{inline}'><div class='efn'>{esc(f.name)}</div>"
+                          f"<div class='efv'>{render_content((f.value or '')[:800], guild, names)}</div></div>")
+            parts.append(f"<div class='efs'>{''.join(fs)}</div>")
+        video_url = getattr(getattr(e, "video", None), "url", None)
+        image_url = getattr(getattr(e, "image", None), "url", None)
+        thumb_url = getattr(getattr(e, "thumbnail", None), "url", None)
+        if getattr(e, "type", "") == "gifv" and video_url:
+            parts.append(f"<video class='emb-img' src='{esc(video_url)}' autoplay loop muted "
+                         f"playsinline preload='metadata'></video>")
+        elif image_url:
+            parts.append(f"<img class='emb-img' src='{esc(image_url)}' loading='lazy' alt=''>")
+        foot = getattr(e, "footer", None)
+        ftext = getattr(foot, "text", None) if foot is not None else None
+        ets = getattr(e, "timestamp", None)
+        if ftext or ets:
+            ficon = getattr(foot, "icon_url", None) if foot is not None else None
+            fi = f"<img class='ef-ic' src='{esc(ficon)}' alt=''>" if ficon else ""
+            stamp = f" · <time data-ts='{int(ets.timestamp())}'></time>" if ets else ""
+            parts.append(f"<div class='eft'>{fi}<span>{esc(ftext or '')}{stamp}</span></div>")
+        # Thumbnail sits top-right; only when it isn't already the main image.
+        thumb = (f"<img class='eth' src='{esc(thumb_url)}' loading='lazy' alt=''>"
+                 if thumb_url and thumb_url != image_url else "")
+        if not parts and not thumb:
+            return ""
+        accent = getattr(getattr(e, "colour", None), "value", None)
+        bar = f" style='border-left-color:#{accent:06x}'" if accent else ""
+        inner = f"<div class='emb-main'>{''.join(parts)}</div>{thumb}" if thumb else "".join(parts)
+        return f"<div class='emb'{bar}>{inner}</div>"
 
     async def _reactions_html(self, guild: discord.Guild, message: discord.Message) -> str:
         groups = []

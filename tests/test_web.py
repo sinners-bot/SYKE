@@ -302,6 +302,48 @@ async def test_history_paging_with_before(dash):
         assert "?before='+f.dataset.mid" in page and "addEventListener('scroll'" in page
 
 
+def _embed(**kw):
+    base = dict(title=None, description=None, url=None, author=None, fields=[], footer=None,
+                timestamp=None, image=None, thumbnail=None, video=None, type="rich", colour=None)
+    base.update(kw)
+    return types.SimpleNamespace(**base)
+
+
+def test_embed_html_renders_bot_card_fully(dash):
+    web, bot, guild = dash
+    e = _embed(
+        title="User Info", description="an account",
+        author=types.SimpleNamespace(name="Ada", icon_url="https://cdn/ic.png", url=None),
+        fields=[types.SimpleNamespace(name="ID", value="123", inline=True),
+                types.SimpleNamespace(name="Created", value="2020", inline=True)],
+        footer=types.SimpleNamespace(text="bleed", icon_url=None),
+        image=types.SimpleNamespace(url="https://cdn/img.png"),
+        thumbnail=types.SimpleNamespace(url="https://cdn/th.png"),
+        colour=types.SimpleNamespace(value=0xFF8800),
+    )
+    html = web._embed_html(e, guild, {})
+    assert "Ada" in html and "https://cdn/ic.png" in html        # author + icon
+    assert "User Info" in html                                   # title
+    assert "ID" in html and "123" in html and "Created" in html  # fields
+    assert "bleed" in html                                       # footer
+    assert "https://cdn/img.png" in html                         # image
+    assert "https://cdn/th.png" in html                          # thumbnail
+    assert "border-left-color:#ff8800" in html                   # colour bar
+
+
+def test_embed_html_avatar_card_without_title(dash):
+    web, bot, guild = dash
+    e = _embed(author=types.SimpleNamespace(name="Ada avatar", icon_url=None, url=None),
+               image=types.SimpleNamespace(url="https://cdn/av.png"))
+    html = web._embed_html(e, guild, {})
+    assert "Ada avatar" in html and "https://cdn/av.png" in html
+
+
+def test_embed_html_empty_is_skipped(dash):
+    web, bot, guild = dash
+    assert web._embed_html(_embed(), guild, {}) == ""
+
+
 def test_hour_histogram_and_peak_window():
     from datetime import datetime, timezone
 
