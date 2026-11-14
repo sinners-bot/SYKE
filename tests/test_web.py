@@ -27,12 +27,18 @@ class Channel:
         self._read = read
         self._send = send
         self.sent = []
+        self.sent_kwargs = []
 
     def permissions_for(self, who):
         return discord.Permissions(read_message_history=self._read, send_messages=self._send, view_channel=True)
 
-    async def history(self, limit=50, before=None):
+    async def history(self, limit=50, before=None, around=None):
         msgs = list(getattr(self, "_history", []))
+        if around is not None:
+            # A jump window: just hand back everything (newest first) so the target is present.
+            for m in sorted(msgs, key=lambda m: m.id, reverse=True)[:limit]:
+                yield m
+            return
         if before is not None:
             bid = getattr(before, "id", before)
             msgs = [m for m in msgs if m.id < bid]
@@ -40,8 +46,9 @@ class Channel:
         for m in sorted(msgs, key=lambda m: m.id, reverse=True)[:limit]:
             yield m
 
-    async def send(self, content, **kwargs):
+    async def send(self, content=None, **kwargs):
         self.sent.append(content)
+        self.sent_kwargs.append(kwargs)
         return types.SimpleNamespace(id=1)
 
     async def fetch_message(self, mid):
@@ -483,6 +490,49 @@ def test_embed_html_empty_is_skipped(dash):
     assert web._embed_html(_embed(), guild, {}) == ""
 
 
+def test_install_permissions_requires_administrator():
+    from syke.bot import install_permissions
+    assert install_permissions().administrator is True
+
+
+def test_announce_body_excludes_owner_features():
+    from syke.web import ANNOUNCE_BODY
+    low = ANNOUNCE_BODY.lower()
+    assert "dashboard" not in low and "owner" not in low   # never leak owner-only stuff
+    assert "moderation" in low and "text toys" in low      # but does cover public features
+
+
+async def test_search_jump_link_is_in_dashboard(dash):
+    async with serving(dash) as (cl, web, bot, guild):
+        guild.get_channel(10)._history = [_fake_message(500, 7, "Ada", "hello world here", 1_700_000_000)]
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        body = await (await cl.get(f"/g/{guild.id}/c/10?q=hello")).text()
+        assert f"/g/{guild.id}/c/10?to=500" in body      # internal jump
+        assert "Jump →" in body
+        assert "discord.com/channels" not in body         # no external redirect
+
+
+async def test_channel_jump_sets_target(dash):
+    async with serving(dash) as (cl, web, bot, guild):
+        guild.get_channel(10)._history = [_fake_message(600, 7, "Ada", "hi", 1_700_000_000)]
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        body = await (await cl.get(f"/g/{guild.id}/c/10?to=600")).text()
+        assert "var JUMP=600;" in body
+
+
+async def test_announce_posts_embed(dash):
+    async with serving(dash) as (cl, web, bot, guild):
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        token = auth.csrf_token(SECRET, 42)
+        resp = await cl.post(f"/g/{guild.id}/announce",
+                             data={"cid": "10", "title": "Big news", "body": "we shipped stuff", "csrf": token},
+                             allow_redirects=False)
+        assert resp.status == 302
+        kwargs = guild.get_channel(10).sent_kwargs[-1]
+        em = kwargs.get("embed")
+        assert em is not None and em.title == "Big news" and "we shipped stuff" in em.description
+
+
 def test_dashboard_css_is_mobile_friendly():
     from syke.web import STYLE
     assert "@media(max-width:820px)" in STYLE            # phone breakpoint exists
@@ -743,7 +793,7 @@ async def test_channel_message_search(dash):
         assert "<mark>" in body                    # highlighted match
         assert "quick brown" in body and "another" in body
         assert "nothing to see" not in body
-        assert f"discord.com/channels/{guild.id}/10/1001" in body   # jump link
+        assert f"/g/{guild.id}/c/10?to=1001" in body   # in-dashboard jump link
         # value prefilled in the search box, poll disabled
         assert "value='fox'" in body and "setInterval(poll" not in body
 

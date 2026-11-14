@@ -192,7 +192,9 @@ def answer_embed(question: str, answer: str, author) -> discord.Embed:
 
 
 def install_permissions() -> discord.Permissions:
-    return discord.Permissions(**{p: True for p in INVITE_PERMISSIONS})
+    # SYKE is invited with Administrator — it covers everything in INVITE_PERMISSIONS
+    # and the anti-nuke/anti-raid tooling, so nothing is missing on a fresh add.
+    return discord.Permissions(administrator=True)
 
 
 def invite_view(url: str) -> discord.ui.View:

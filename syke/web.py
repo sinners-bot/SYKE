@@ -125,6 +125,21 @@ def base_url(request: web.Request, settings) -> str:
     return f"{proto}://{host}"
 
 
+ANNOUNCE_TITLE = "✨ What's new in SYKE"
+# Public-facing features only — never mention the owner dashboard or owner-only tools.
+ANNOUNCE_BODY = (
+    "**🛡️ Full moderation suite** — timeouts, warns, kicks, bans, tempban & softban, "
+    "purge, slowmode, lock, and server-wide `!restrict`.\n"
+    "**🚦 Automod** — word/slur filter, invite & link control, and anti-spam.\n"
+    "**🚨 Server security** — anti-nuke and anti-raid protection.\n"
+    "**🎉 Community** — weekly awards, `!guess`, custom welcome messages, and `!verify` gating.\n"
+    "**🤖 Talk to SYKE** — @mention it anywhere and it replies in the server's own voice.\n"
+    "**🧠 Profiles & vibes** — `!profile`, `!iq`, `!aura`, `!ship`, `!top`.\n"
+    "**😀 Emojis & stickers** — `!emoji`, `!sticker`, `!steal`.\n"
+    "**🔤 Text toys** — `!drunk`, `!scramble`, `!zalgo`, `!uwu`, `!mock`, `!keysmash`.\n"
+    "Run `!help` to see everything."
+)
+
 BADGE_LABELS = {
     "staff": "Discord Staff", "partner": "Partner", "hypesquad": "HypeSquad Events",
     "bug_hunter": "Bug Hunter", "bug_hunter_level_2": "Bug Hunter Gold",
@@ -411,6 +426,11 @@ padding:2px 10px;font-size:12px;color:var(--muted);}
 .altu:hover{color:#fff;text-decoration:none;border-color:var(--brand);}
 .altu img{width:22px;height:22px;border-radius:50%;}
 .altburst{margin:8px 0;padding:8px 10px;background:#17171d;border:1px solid var(--line);border-radius:8px;}
+.ann-form{display:flex;flex-direction:column;gap:12px;margin:12px 0 20px;max-width:560px;}
+.ann-form label{font-size:13px;color:var(--muted);font-weight:600;}
+.ann-form select,.ann-form input,.ann-form textarea{width:100%;background:#1e1e26;border:1px solid var(--line);
+border-radius:8px;color:var(--text);padding:9px 11px;font:inherit;font-size:15px;margin-top:4px;}
+.ann-form textarea{resize:vertical;line-height:1.5;}
 .btn{display:inline-block;background:var(--panel2);border:1px solid var(--line);color:var(--text);
 border-radius:8px;padding:7px 12px;font-size:14px;cursor:pointer;}
 .btn:hover{border-color:var(--brand);text-decoration:none;}
@@ -703,6 +723,8 @@ class WebDashboard:
         a("/g/{gid}/emojis", self.server_emojis)
         a("/g/{gid}/u/{uid}", self.member_profile)
         a("/g/{gid}/alts", self.alt_scan)
+        a("/g/{gid}/announce", self.announce_page)
+        p("/g/{gid}/announce", self.announce_send)
         a("/g/{gid}/c/{cid}", self.channel)
         a("/g/{gid}/c/{cid}/messages", self.channel_messages)
         a("/g/{gid}/c/{cid}/m/{mid}/reactions", self.message_reactions)
@@ -893,7 +915,8 @@ class WebDashboard:
             f"<div class='muted'>{guild.member_count or 0} members · owner "
             f"{esc(getattr(guild.owner, 'display_name', guild.owner_id))} · "
             f"<a href='/g/{guild.id}/emojis'>{emoji_count} emojis</a> · "
-            f"<a href='/g/{guild.id}/alts'>🔎 Alt &amp; raid scan</a></div>"
+            f"<a href='/g/{guild.id}/alts'>🔎 Alt &amp; raid scan</a> · "
+            f"<a href='/g/{guild.id}/announce'>📣 Announce features</a></div>"
             f"<div class='grid' style='margin-top:14px'>{settings_form}{mod}{danger}</div>"
             f"<h2>Channels</h2><table>{''.join(rows) or '<tr><td>No text channels</td></tr>'}</table>"
         )
@@ -1130,8 +1153,7 @@ class WebDashboard:
         for mid, name, content, created, ch in results:
             ts = f"<time class='ts' data-ts='{int(created)}'></time>" if created else ""
             where = f"<a class='sr-ch' href='/g/{guild.id}/c/{ch.id}'>#{esc(ch.name)}</a>" if multi else ""
-            jump = (f"<a class='jump' href='https://discord.com/channels/{guild.id}/{ch.id}/{mid}' "
-                    f"target='_blank' rel='noreferrer'>Jump ↗</a>") if mid else ""
+            jump = (f"<a class='jump' href='/g/{guild.id}/c/{ch.id}?to={mid}'>Jump →</a>") if mid else ""
             items.append(f"<div class='sr'><div class='head'><span class='name'>{esc(name)}</span>"
                          f"{where}{ts}{jump}</div>"
                          f"<div class='text'>{self._highlight(content, f.text)}</div></div>")
@@ -1273,7 +1295,7 @@ class WebDashboard:
                 f"<div class='content'>{reply}{head}{body}{''.join(stickers)}"
                 f"{''.join(atts)}{''.join(embeds)}{components_html}{forward_html}{reactions}</div></div>")
 
-    async def _messages_html(self, channel, before: int | None = None) -> str:
+    async def _messages_html(self, channel, before: int | None = None, around: int | None = None) -> str:
         if not channel.permissions_for(channel.guild.me).read_message_history:
             if before is not None:
                 return ""  # Can't page a channel we can't read.
@@ -1287,7 +1309,9 @@ class WebDashboard:
                             f"<div class='text'>{esc(content)}</div></div></div>")
             return "".join(rows)
         kwargs = {"limit": MESSAGES_SHOWN}
-        if before is not None:
+        if around is not None:
+            kwargs["around"] = discord.Object(id=around)   # Discord-style "jump to" window
+        elif before is not None:
             kwargs["before"] = discord.Object(id=before)
         try:
             collected = [m async for m in channel.history(**kwargs)]
@@ -1352,8 +1376,12 @@ class WebDashboard:
         sidebar = self._sidebar(guild, channel.id)
         query = (request.query.get("q") or "").strip()
         searching = bool(query)
-        messages = await self._search_html(guild, channel, query) if searching \
-            else await self._messages_html(channel)
+        to_raw = request.query.get("to")
+        jump_to = int(to_raw) if to_raw and to_raw.isdigit() else None
+        if searching:
+            messages = await self._search_html(guild, channel, query)
+        else:
+            messages = await self._messages_html(channel, around=jump_to)
         csrf = self._hidden_csrf(user[0])
         head = self._channel_header(guild, channel, "chat", query)
         if can_send:
@@ -1380,6 +1408,7 @@ class WebDashboard:
             "return d.toLocaleDateString()+' '+t;}"
             "function stamp(r){r.querySelectorAll('time[data-ts]').forEach(function(e){e.textContent=fmt(+e.dataset.ts);});}"
             "var pane=document.getElementById('messages');"
+            f"var JUMP={jump_to if jump_to else 'null'};"
             "function bot(){return pane.scrollHeight-pane.scrollTop-pane.clientHeight<100;}"
             "stamp(document);"
             # Click a reply preview to jump to the message it answers.
@@ -1387,10 +1416,9 @@ class WebDashboard:
             "if(!t)return false;t.scrollIntoView({block:'center'});"
             "t.classList.remove('flash');void t.offsetWidth;t.classList.add('flash');return true;}"
             "pane.addEventListener('click',function(e){var r=e.target.closest('.reply[data-jump]');if(!r)return;"
-            "var id=r.dataset.jump,href=r.dataset.href;if(jumpTo(id))return;"
-            "if(typeof older==='function'){var n=0;(function hunt(){older();n++;setTimeout(function(){"
-            "if(jumpTo(id))return;if(n<10&&!noMore)hunt();else if(href)window.open(href,'_blank','noopener');},380);})();return;}"
-            "if(href)window.open(href,'_blank','noopener');});"
+            "var id=r.dataset.jump;if(jumpTo(id))return;"
+            # Not on this page — reopen the channel centred on that message, in-dashboard.
+            "location.href=location.pathname+'?to='+id;});"
             # Click a reaction to see who reacted (toggles a panel under the message).
             "pane.addEventListener('click',async function(e){var b=e.target.closest('.rx');if(!b)return;"
             "var m=b.closest('.m'),wrap=b.closest('.rxs');if(!m||!wrap)return;"
@@ -1400,7 +1428,8 @@ class WebDashboard:
             "d.innerHTML=r.ok?await r.text():'<div class=rxp-empty>Could not load.</div>';}"
             "catch(err){d.innerHTML='<div class=rxp-empty>Could not load.</div>';}});"
             + ("" if searching else
-               "pane.scrollTop=pane.scrollHeight;"
+               "if(JUMP){setTimeout(function(){if(!jumpTo(JUMP))pane.scrollTop=pane.scrollHeight;},60);}"
+               "else{pane.scrollTop=pane.scrollHeight;}"
                # Live updates over a WebSocket — instant, no flicker, like a real client.
                "function nodeOf(h){var t=document.createElement('div');t.innerHTML=h;return t.firstElementChild;}"
                "function append(h){var b=bot(),n=nodeOf(h);if(!n)return;"
@@ -1489,6 +1518,65 @@ class WebDashboard:
             raise web.HTTPFound("/login")
         guild = self._guild_or_404(request)
         return layout(f"Alt scan · {guild.name}", self._alts_body(guild), user=user)
+
+    async def announce_page(self, request: web.Request) -> web.Response:
+        user = self._user(request)
+        if user is None:
+            raise web.HTTPFound("/login")
+        guild = self._guild_or_404(request)
+        return layout(f"Announce · {guild.name}", self._announce_body(guild, user[0], request), user=user)
+
+    def _announce_body(self, guild: discord.Guild, user_id: int, request: web.Request) -> str:
+        csrf = self._hidden_csrf(user_id)
+        opts = []
+        for ch in getattr(guild, "text_channels", []) or []:
+            if ch.permissions_for(guild.me).send_messages:
+                opts.append(f"<option value='{ch.id}'>#{esc(ch.name)}</option>")
+        channels = "".join(opts) or "<option disabled>No channels SYKE can post in</option>"
+        return (
+            f"<div class='prof'><div class='muted'><a href='/g/{guild.id}'>← {esc(guild.name)}</a></div>"
+            "<h1>📣 Announce new features</h1>"
+            "<p class='muted'>Posts a compact embed as SYKE. Edit the copy below; the preview updates live.</p>"
+            + flash(request) +
+            f"<form method='post' action='/g/{guild.id}/announce' class='ann-form'>{csrf}"
+            f"<label>Channel<br><select name='cid' required>{channels}</select></label>"
+            f"<label>Title<br><input name='title' id='an-title' maxlength='256' value='{esc(ANNOUNCE_TITLE)}'></label>"
+            f"<label>Message<br><textarea name='body' id='an-body' rows='12' maxlength='4000'>{esc(ANNOUNCE_BODY)}</textarea></label>"
+            "<button class='btn brand'>Post announcement</button></form>"
+            "<h3>Preview</h3>"
+            "<div class='emb' style='border-left-color:#8B5CF6'><div class='emb-main'>"
+            "<div class='et' id='pv-title'></div><div class='ed' id='pv-body'></div>"
+            "<div class='eft'><span>SYKE • !help</span></div></div></div></div>"
+            "<script>var T=document.getElementById('an-title'),B=document.getElementById('an-body'),"
+            "pt=document.getElementById('pv-title'),pb=document.getElementById('pv-body');"
+            "function esc(s){return s.replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}"
+            "function up(){pt.textContent=T.value;"
+            "pb.innerHTML=esc(B.value).replace(/\\*\\*(.+?)\\*\\*/g,'<b>$1</b>')"
+            ".replace(/`(.+?)`/g,'<code>$1</code>').replace(/\\n/g,'<br>');}"
+            "T.addEventListener('input',up);B.addEventListener('input',up);up();</script>"
+        )
+
+    async def announce_send(self, request: web.Request) -> web.Response:
+        guild, data, _ = await self._post_guild(request)
+        back = f"/g/{guild.id}/announce"
+        try:
+            cid = int((data.get("cid") or "").strip())
+        except ValueError:
+            raise self._redirect(back, err="Pick a channel.")
+        channel = guild.get_channel(cid)
+        title = (data.get("title") or "").strip()[:256] or ANNOUNCE_TITLE
+        body = (data.get("body") or "").strip()[:4000]
+        if channel is None or not hasattr(channel, "send") or not body:
+            raise self._redirect(back, err="Nothing to announce, or that channel can't be used.")
+        em = discord.Embed(title=title, description=body, colour=discord.Colour.from_str(BRAND),
+                           timestamp=datetime.now(timezone.utc))
+        em.set_footer(text="SYKE • !help")
+        try:
+            await channel.send(embed=em, allowed_mentions=discord.AllowedMentions(everyone=False, roles=False))
+        except discord.HTTPException:
+            raise self._redirect(back, err="Discord refused to post that.")
+        log.info("Owner posted a feature announcement in %s/#%s", guild.id, getattr(channel, "name", cid))
+        raise self._redirect(back, ok="Announcement posted.")
 
     def _alts_body(self, guild: discord.Guild) -> str:
         now = datetime.now(timezone.utc)

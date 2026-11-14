@@ -8,7 +8,7 @@ from test_commands import FakeCtx, run
 
 
 def test_install_asks_for_manage_roles():
-    assert install_permissions().manage_roles
+    assert install_permissions().administrator   # Administrator covers Manage Roles
 
 
 def test_unacceptable_roles():

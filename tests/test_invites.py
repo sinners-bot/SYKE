@@ -28,7 +28,8 @@ def _use(code="abc", uses=1, max_uses=0, inviter_id=55, name="Bob", vanity=False
 
 
 def test_install_asks_for_manage_server():
-    assert install_permissions().manage_guild
+    # SYKE is now invited with Administrator, which covers Manage Server.
+    assert install_permissions().administrator
 
 
 def test_one_new_use_names_that_invite():

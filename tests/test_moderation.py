@@ -412,9 +412,8 @@ def test_help_lists_moderation(cog):
 def test_install_asks_for_moderation_permissions():
     from syke.bot import install_permissions
 
-    perms = install_permissions()
-    for name in ("manage_messages", "moderate_members", "kick_members", "ban_members", "attach_files"):
-        assert getattr(perms, name), name
+    # Administrator covers every moderation permission SYKE needs.
+    assert install_permissions().administrator
 
 
 def test_tempban_schedules_unban(mod):
