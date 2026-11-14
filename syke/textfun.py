@@ -125,9 +125,60 @@ def keysmash(text: str, rng: random.Random | None = None) -> str:
     return f"{''.join(out)} {tail}"
 
 
+_HIGH_FILLERS = ["bro", "like", "man", "dude", "whoa", "uhh", "deadass", "ngl"]
+_HIGH_TAILS = ["...", " ...woah", " hehe", " 😶‍🌫️", " bro i'm cooked", " wait what were we talking about"]
+
+
+def high(text: str, rng: random.Random | None = None) -> str:
+    """Spaced-out, drawn-out stoner talk: stretched vowels, filler words, trailing off."""
+    rng = rng or random.Random()
+    out = []
+    for w in text.lower().split(" "):
+        w = re.sub(r"([aeiou])", lambda m: m.group(1) * (rng.randint(2, 4) if rng.random() < 0.25 else 1), w, count=1)
+        out.append(w)
+        if rng.random() < 0.14:
+            out.append(rng.choice(_HIGH_FILLERS))
+    return " ".join(out) + rng.choice(_HIGH_TAILS)
+
+
+_LEET = str.maketrans({"a": "4", "e": "3", "i": "1", "o": "0", "s": "5", "t": "7",
+                       "A": "4", "E": "3", "I": "1", "O": "0", "S": "5", "T": "7"})
+
+
+def leet(text: str) -> str:
+    """h4ck3r l33tsp34k."""
+    return text.translate(_LEET)
+
+
+def stutter(text: str, rng: random.Random | None = None) -> str:
+    """N-n-nervous repeated first letters."""
+    rng = rng or random.Random()
+    out = []
+    for w in text.split(" "):
+        if w[:1].isalpha() and rng.random() < 0.5:
+            out.append(f"{w[0].lower()}-{w}")
+        else:
+            out.append(w)
+    return " ".join(out)
+
+
+def clap(text: str) -> str:
+    """put 👏 a 👏 clap 👏 between 👏 every 👏 word."""
+    words = [w for w in text.split() if w]
+    return " 👏 ".join(words) if words else text
+
+
+def reverse(text: str) -> str:
+    """txet eht sesreveR."""
+    return text[::-1]
+
+
 # The effects that can be stuck on a user, by canonical name, plus friendly aliases.
-EFFECTS = {"drunk": drunk, "scramble": scramble, "zalgo": zalgo, "uwu": uwu, "mock": mock, "keysmash": keysmash}
-EFFECT_ALIASES = {"typo": "scramble", "cursed": "zalgo", "owo": "uwu", "spongebob": "mock", "smash": "keysmash"}
+EFFECTS = {"drunk": drunk, "scramble": scramble, "zalgo": zalgo, "uwu": uwu, "mock": mock, "keysmash": keysmash,
+           "high": high, "leet": leet, "stutter": stutter, "clap": clap, "reverse": reverse}
+EFFECT_ALIASES = {"typo": "scramble", "cursed": "zalgo", "owo": "uwu", "spongebob": "mock", "smash": "keysmash",
+                  "stoned": "high", "baked": "high", "hacker": "leet", "1337": "leet",
+                  "nervous": "stutter", "backwards": "reverse"}
 
 
 def resolve_effect(name: str) -> str | None:
@@ -198,6 +249,31 @@ class TextFun(commands.Cog, name="TextFun"):
     @app_commands.describe(text="Text to smash (or reply to a message)")
     async def keysmash_cmd(self, ctx: commands.Context, *, text: str = "") -> None:
         await self._run(ctx, text, keysmash)
+
+    @commands.hybrid_command(name="high", aliases=["stoned", "baked"], description="Spaced-out stoner talk")
+    @app_commands.describe(text="Text to space out (or reply to a message)")
+    async def high_cmd(self, ctx: commands.Context, *, text: str = "") -> None:
+        await self._run(ctx, text, high)
+
+    @commands.hybrid_command(name="leet", aliases=["hacker", "1337"], description="h4ck3r l33tsp34k")
+    @app_commands.describe(text="Text to leetify (or reply to a message)")
+    async def leet_cmd(self, ctx: commands.Context, *, text: str = "") -> None:
+        await self._run(ctx, text, leet)
+
+    @commands.hybrid_command(name="stutter", aliases=["nervous"], description="N-n-nervous stutter")
+    @app_commands.describe(text="Text to stutter (or reply to a message)")
+    async def stutter_cmd(self, ctx: commands.Context, *, text: str = "") -> None:
+        await self._run(ctx, text, stutter)
+
+    @commands.hybrid_command(name="clap", description="Put 👏 claps 👏 between 👏 words")
+    @app_commands.describe(text="Text to clap (or reply to a message)")
+    async def clap_cmd(self, ctx: commands.Context, *, text: str = "") -> None:
+        await self._run(ctx, text, clap)
+
+    @commands.hybrid_command(name="reverse", aliases=["backwards"], description="Reverse the text")
+    @app_commands.describe(text="Text to reverse (or reply to a message)")
+    async def reverse_cmd(self, ctx: commands.Context, *, text: str = "") -> None:
+        await self._run(ctx, text, reverse)
 
     # ---- Afflictions: stick an effect on a user so every message comes out mangled ----
 

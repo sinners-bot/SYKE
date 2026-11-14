@@ -8,7 +8,23 @@ import pytest
 
 from syke.bot import Syke
 from syke.config import load_settings
-from syke.textfun import TextFun, clean_source, drunk, keysmash, mock, resolve_effect, scramble, uwu, zalgo
+from syke.textfun import (
+    EFFECTS,
+    TextFun,
+    clap,
+    clean_source,
+    drunk,
+    high,
+    keysmash,
+    leet,
+    mock,
+    resolve_effect,
+    reverse,
+    scramble,
+    stutter,
+    uwu,
+    zalgo,
+)
 from test_commands import run
 
 
@@ -63,11 +79,30 @@ def test_clean_source_strips_pings():
     assert len(clean_source("x" * 1000)) <= 400
 
 
+def test_leet_reverse_clap():
+    assert leet("ate toast") == "473 70457"
+    assert reverse("abc") == "cba"
+    assert clap("one two three") == "one 👏 two 👏 three"
+
+
+def test_high_and_stutter_change_text():
+    import random
+    out = high("i am completely normal right now", random.Random(1))
+    assert isinstance(out, str) and out != "i am completely normal right now"
+    st = stutter("never nervous", random.Random(1))
+    assert "-" in st
+
+
 def test_resolve_effect():
     assert resolve_effect("zalgo") == "zalgo"
     assert resolve_effect("owo") == "uwu"          # alias
     assert resolve_effect("SMASH") == "keysmash"   # case-insensitive alias
+    assert resolve_effect("stoned") == "high"      # new drug/high alias
+    assert resolve_effect("hacker") == "leet"
     assert resolve_effect("nope") is None
+    # Every registered effect resolves to itself and is callable.
+    for name, fn in EFFECTS.items():
+        assert resolve_effect(name) == name and callable(fn)
 
 
 def test_storage_effects_roundtrip(tcog):
