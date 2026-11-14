@@ -147,6 +147,14 @@ CREATE TABLE IF NOT EXISTS temp_bans (
     moderator_id INTEGER NOT NULL,
     PRIMARY KEY (guild_id, user_id)
 );
+CREATE TABLE IF NOT EXISTS effects (
+    guild_id     INTEGER NOT NULL,
+    user_id      INTEGER NOT NULL,
+    effect       TEXT NOT NULL,
+    moderator_id INTEGER NOT NULL DEFAULT 0,
+    created_at   REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id)
+);
 """
 
 
@@ -519,6 +527,35 @@ class Storage:
             )
             self._conn.commit()
         return active
+
+    def set_effect(self, guild_id: int, user_id: int, effect: str, moderator_id: int) -> None:
+        """Afflict a user with a persistent chat effect (replacing any current one)."""
+        self._write(
+            "INSERT INTO effects (guild_id, user_id, effect, moderator_id, created_at) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(guild_id, user_id) DO UPDATE SET effect = excluded.effect, "
+            "moderator_id = excluded.moderator_id, created_at = excluded.created_at",
+            (guild_id, user_id, effect, moderator_id, time.time()),
+        )
+
+    def clear_effect(self, guild_id: int, user_id: int) -> str | None:
+        """Lift a user's effect; returns the effect that was active, or None."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT effect FROM effects WHERE guild_id = ? AND user_id = ?", (guild_id, user_id),
+            ).fetchone()
+            if row is None:
+                return None
+            self._conn.execute("DELETE FROM effects WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
+            self._conn.commit()
+            return row[0]
+
+    def get_effect(self, guild_id: int, user_id: int) -> str | None:
+        rows = self._read("SELECT effect FROM effects WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
+        return rows[0][0] if rows else None
+
+    def list_effects(self, guild_id: int) -> list[tuple[int, str]]:
+        return [(r[0], r[1]) for r in
+                self._read("SELECT user_id, effect FROM effects WHERE guild_id = ?", (guild_id,))]
 
     def restrictions(self, guild_id: int, user_id: int | None = None) -> list[tuple]:
         """`(user_id, kind, expires_at, reason, moderator_id, created_at)` rows, soonest expiry first."""

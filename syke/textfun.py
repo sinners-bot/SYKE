@@ -16,6 +16,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from .expressions import notice
+from .moderation import moderator
 
 MAX_IN = 400       # cap input so outputs stay sane
 MAX_OUT = 1800     # Discord-safe output cap
@@ -124,9 +125,22 @@ def keysmash(text: str, rng: random.Random | None = None) -> str:
     return f"{''.join(out)} {tail}"
 
 
+# The effects that can be stuck on a user, by canonical name, plus friendly aliases.
+EFFECTS = {"drunk": drunk, "scramble": scramble, "zalgo": zalgo, "uwu": uwu, "mock": mock, "keysmash": keysmash}
+EFFECT_ALIASES = {"typo": "scramble", "cursed": "zalgo", "owo": "uwu", "spongebob": "mock", "smash": "keysmash"}
+
+
+def resolve_effect(name: str) -> str | None:
+    name = (name or "").lower().strip()
+    if name in EFFECTS:
+        return name
+    return EFFECT_ALIASES.get(name)
+
+
 class TextFun(commands.Cog, name="TextFun"):
     def __init__(self, bot) -> None:
         self.bot = bot
+        self._hooks: dict[int, discord.Webhook] = {}   # channel_id -> reusable webhook
 
     async def _source(self, ctx: commands.Context, text: str) -> str | None:
         """The text to mangle: what they typed, or the message they replied to."""
@@ -184,6 +198,107 @@ class TextFun(commands.Cog, name="TextFun"):
     @app_commands.describe(text="Text to smash (or reply to a message)")
     async def keysmash_cmd(self, ctx: commands.Context, *, text: str = "") -> None:
         await self._run(ctx, text, keysmash)
+
+    # ---- Afflictions: stick an effect on a user so every message comes out mangled ----
+
+    @commands.hybrid_command(name="afflict", aliases=["curse"],
+                             description="Make every message a user sends come out with a chat effect")
+    @app_commands.describe(member="Who to afflict", effect="drunk, scramble, zalgo, uwu, mock or keysmash")
+    @moderator("manage_messages")
+    async def afflict_cmd(self, ctx: commands.Context, member: discord.Member, effect: str) -> None:
+        eff = resolve_effect(effect)
+        if eff is None:
+            await ctx.reply(embed=notice("Unknown effect",
+                                         "Pick one: `drunk`, `scramble`, `zalgo`, `uwu`, `mock`, `keysmash`."),
+                            ephemeral=True)
+            return
+        if member.bot:
+            await ctx.reply(embed=notice("Can't do that", "Bots can't be afflicted."), ephemeral=True)
+            return
+        self.bot.storage.set_effect(ctx.guild.id, member.id, eff, ctx.author.id)
+        p = self.bot.display_prefix(ctx.guild.id)
+        extra = ""
+        if ctx.guild.me is not None and not ctx.channel.permissions_for(ctx.guild.me).manage_webhooks:
+            extra = "\n\n⚠️ I need **Manage Webhooks** (and Manage Messages) to rewrite their messages."
+        await ctx.reply(embed=notice("Afflicted 😈",
+                                     f"Every message {member.mention} sends will now come out **{eff}**'d. "
+                                     f"Undo with `{p}cure {member.display_name}`.{extra}"))
+
+    @commands.hybrid_command(name="cure", aliases=["uncurse"], description="Remove a user's chat effect")
+    @app_commands.describe(member="Who to cure")
+    @moderator("manage_messages")
+    async def cure_cmd(self, ctx: commands.Context, member: discord.Member) -> None:
+        had = self.bot.storage.clear_effect(ctx.guild.id, member.id)
+        if had:
+            await ctx.reply(embed=notice("Cured", f"{member.mention} is back to normal (was **{had}**)."))
+        else:
+            await ctx.reply(embed=notice("Nothing to cure", f"{member.mention} has no active effect."),
+                            ephemeral=True)
+
+    @commands.hybrid_command(name="afflicted", description="List users with an active chat effect")
+    @moderator("manage_messages")
+    async def afflicted_cmd(self, ctx: commands.Context) -> None:
+        rows = self.bot.storage.list_effects(ctx.guild.id)
+        if not rows:
+            await ctx.reply(embed=notice("All clear", "No one is afflicted right now."), ephemeral=True)
+            return
+        lines = "\n".join(f"<@{uid}> — **{eff}**" for uid, eff in rows)
+        await ctx.reply(embed=notice("Afflicted users", lines), ephemeral=True)
+
+    async def _webhook_for(self, channel: discord.TextChannel) -> discord.Webhook | None:
+        """A reusable SYKE webhook in `channel` for reposting rewritten messages."""
+        cached = self._hooks.get(channel.id)
+        if cached is not None:
+            return cached
+        me = channel.guild.me
+        if me is None or not channel.permissions_for(me).manage_webhooks:
+            return None
+        try:
+            for h in await channel.webhooks():
+                if h.token and getattr(h.user, "id", None) == self.bot.user.id:
+                    self._hooks[channel.id] = h
+                    return h
+            hook = await channel.create_webhook(name="SYKE")
+        except discord.HTTPException:
+            return None
+        self._hooks[channel.id] = hook
+        return hook
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        if message.guild is None or message.author.bot or message.webhook_id:
+            return
+        content = message.content or ""
+        if not content.strip():
+            return  # nothing to rewrite (attachment/sticker-only) — leave it alone
+        prefix = self.bot.display_prefix(message.guild.id)
+        if content.startswith(prefix):
+            return  # don't mangle command invocations
+        effect = self.bot.storage.get_effect(message.guild.id, message.author.id)
+        fn = EFFECTS.get(effect) if effect else None
+        if fn is None:
+            return
+        # Webhooks live on the parent; threads are addressed via thread=.
+        parent = message.channel.parent if isinstance(message.channel, discord.Thread) else message.channel
+        thread = message.channel if isinstance(message.channel, discord.Thread) else discord.utils.MISSING
+        me = message.guild.me
+        if me is None or not message.channel.permissions_for(me).manage_messages:
+            return
+        hook = await self._webhook_for(parent)
+        if hook is None:
+            return
+        out = fn(clean_source(content))[:MAX_OUT]
+        if not out:
+            return
+        if message.attachments:
+            out = (out + "\n" + "\n".join(a.url for a in message.attachments))[:MAX_OUT]
+        try:
+            await message.delete()
+            await hook.send(out, username=message.author.display_name[:80],
+                            avatar_url=getattr(getattr(message.author, "display_avatar", None), "url", None),
+                            thread=thread, allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException:
+            pass
 
 
 async def setup(bot) -> None:

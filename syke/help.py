@@ -73,7 +73,8 @@ CATALOG: list[Category] = [
     Category(
         "games", "🎮", "Fun & Games", EVERYONE,
         "Little games and text toys to mess around with. Reply to a message or pass your own text.",
-        ["guess", "drunk", "scramble", "zalgo", "uwu", "mock", "keysmash"],
+        ["guess", "drunk", "scramble", "zalgo", "uwu", "mock", "keysmash",
+         "afflict", "cure", "afflicted"],
         {
             "guess": "\"Who said this?\" — SYKE quotes a real message and you guess the author. "
                      "`guess top` shows the best guessers.",
@@ -83,6 +84,10 @@ CATALOG: list[Category] = [
             "uwu": "Twanslates the text into uwu-speak, wiw faces and aww.",
             "mock": "aLtErNaTiNg mOcKiNg CaPs, SpongeBob style.",
             "keysmash": "Letters collapse into keyboard mash the further along they go.",
+            "afflict": "Stick an effect on someone (Manage Messages): every message they send is rewritten in that "
+                       "effect, reposted as them via webhook. `afflict @user zalgo`.",
+            "cure": "Remove a user's active affliction and let them type normally again.",
+            "afflicted": "List everyone who currently has a chat effect stuck on them.",
         },
     ),
     Category(
