@@ -431,6 +431,15 @@ padding:2px 10px;font-size:12px;color:var(--muted);}
 .ann-form select,.ann-form input,.ann-form textarea{width:100%;background:#1e1e26;border:1px solid var(--line);
 border-radius:8px;color:var(--text);padding:9px 11px;font:inherit;font-size:15px;margin-top:4px;}
 .ann-form textarea{resize:vertical;line-height:1.5;}
+.dmgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;margin-top:14px;}
+.dmcard{display:flex;align-items:center;gap:10px;background:var(--panel2);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;color:var(--text);}
+.dmcard:hover{border-color:var(--brand);text-decoration:none;background:#22222c;}
+.dmcard img{width:40px;height:40px;border-radius:50%;flex:none;}
+.dmn{font-weight:600;}
+.dmhead{display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--line);background:#1a1a22;}
+.dmhead img{width:36px;height:36px;border-radius:50%;}
+.dm-pane{height:calc(100vh - 56px - 61px);height:calc(100dvh - 56px - 61px);}
 .btn{display:inline-block;background:var(--panel2);border:1px solid var(--line);color:var(--text);
 border-radius:8px;padding:7px 12px;font-size:14px;cursor:pointer;}
 .btn:hover{border-color:var(--brand);text-decoration:none;}
@@ -671,6 +680,7 @@ def layout(title: str, body: str, *, user: Optional[tuple[int, str]] = None, wid
         f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
         f"<title>{esc(title)} · SYKE</title><style>{STYLE}</style>{head_extra}</head><body>"
         f"<header><span class='brand'>SYKE</span> <a class='btn sm' href='/'>Servers</a>"
+        f" <a class='btn sm' href='/dms'>DMs</a>"
         f"<span class='sp'></span>{nav}</header>{inner}</body></html>"
     )
     return web.Response(text=page, content_type="text/html")
@@ -722,6 +732,8 @@ class WebDashboard:
         a("/g/{gid}", self.server)
         a("/g/{gid}/emojis", self.server_emojis)
         a("/g/{gid}/u/{uid}", self.member_profile)
+        a("/dms", self.dms_page)
+        a("/dm/{uid}", self.dm_view)
         a("/g/{gid}/alts", self.alt_scan)
         a("/g/{gid}/announce", self.announce_page)
         p("/g/{gid}/announce", self.announce_send)
@@ -729,6 +741,7 @@ class WebDashboard:
         a("/g/{gid}/c/{cid}/messages", self.channel_messages)
         a("/g/{gid}/c/{cid}/m/{mid}/reactions", self.message_reactions)
         a("/g/{gid}/c/{cid}/media", self.channel_media)
+        a("/g/{gid}/c/{cid}/media/page", self.channel_media_page)
         a("/g/{gid}/c/{cid}/ws", self.channel_ws)
         p("/g/{gid}/c/{cid}/say", self.say)
         p("/g/{gid}/mod", self.moderate)
@@ -1519,6 +1532,84 @@ class WebDashboard:
         guild = self._guild_or_404(request)
         return layout(f"Alt scan · {guild.name}", self._alts_body(guild), user=user)
 
+    def _dm_channels(self) -> list:
+        """DM channels the bot currently has open (cached this session)."""
+        out = []
+        for ch in getattr(self.bot, "private_channels", []) or []:
+            if getattr(ch, "recipient", None) is not None and hasattr(ch, "history"):
+                out.append(ch)
+        out.sort(key=lambda c: (getattr(c.recipient, "name", "") or "").lower())
+        return out
+
+    async def dms_page(self, request: web.Request) -> web.Response:
+        user = self._user(request)
+        if user is None:
+            raise web.HTTPFound("/login")
+        dms = self._dm_channels()
+        cards = []
+        for ch in dms:
+            u = ch.recipient
+            av = getattr(getattr(u, "display_avatar", None), "url", "")
+            name = getattr(u, "global_name", None) or getattr(u, "name", None) or f"User {u.id}"
+            cards.append(f"<a class='dmcard' href='/dm/{u.id}'><img src='{esc(av)}' alt='' loading='lazy'>"
+                         f"<div><div class='dmn'>{esc(name)}</div>"
+                         f"<div class='muted'>@{esc(getattr(u, 'name', ''))} · {u.id}</div></div></a>")
+        body = (
+            "<div class='prof'><h1>💬 Direct messages</h1>"
+            "<p class='muted'>Conversations users have had with SYKE in its DMs. "
+            "Discord only lets a bot see DM threads it has open, so this shows the ones SYKE currently has.</p>"
+            + (f"<div class='dmgrid'>{''.join(cards)}</div>" if cards
+               else "<div class='note'>No open DM conversations right now.</div>")
+            + "</div>"
+        )
+        return layout("Direct messages", body, user=user)
+
+    async def dm_view(self, request: web.Request) -> web.Response:
+        user = self._user(request)
+        if user is None:
+            raise web.HTTPFound("/login")
+        try:
+            uid = int(request.match_info["uid"])
+        except ValueError:
+            raise web.HTTPNotFound(text="bad user id")
+        channel = next((c for c in self._dm_channels() if c.recipient.id == uid), None)
+        if channel is None:
+            member = self.bot.get_user(uid)
+            if member is not None:
+                with contextlib.suppress(discord.HTTPException):
+                    channel = member.dm_channel or await member.create_dm()
+        if channel is None:
+            raise web.HTTPNotFound(text="No DM with that user")
+        u = channel.recipient
+        name = getattr(u, "global_name", None) or getattr(u, "name", None) or f"User {uid}"
+        av = getattr(getattr(u, "display_avatar", None), "url", "")
+        messages = await self._dm_messages_html(channel)
+        body = (
+            f"<div class='dmhead'><a class='btn sm' href='/dms'>← DMs</a>"
+            f"<img src='{esc(av)}' alt=''><div><div class='dmn'>{esc(name)}</div>"
+            f"<div class='muted'>@{esc(getattr(u, 'name', ''))} · {uid}</div></div></div>"
+            f"<div class='dc-msgs dm-pane' id='messages'>{messages}</div>"
+            "<script>document.querySelectorAll('time[data-ts]').forEach(function(e){"
+            "var d=new Date(+e.dataset.ts*1000);e.textContent=d.toLocaleDateString()+' '+"
+            "d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});});"
+            "var p=document.getElementById('messages');if(p)p.scrollTop=p.scrollHeight;</script>"
+        )
+        return layout(f"DM · {name}", body, user=user, wide=True)
+
+    async def _dm_messages_html(self, channel) -> str:
+        try:
+            msgs = [m async for m in channel.history(limit=MESSAGES_SHOWN)]
+        except (discord.HTTPException, AttributeError):
+            return "<div class='dc-empty'>Couldn't load this conversation.</div>"
+        msgs.reverse()
+        if not msgs:
+            return "<div class='dc-empty'>No messages in this DM.</div>"
+        html, prev = [], None
+        for m in msgs:
+            html.append(self._one_message(m, prev))
+            prev = m
+        return "".join(html)
+
     async def announce_page(self, request: web.Request) -> web.Response:
         user = self._user(request)
         if user is None:
@@ -1819,43 +1910,97 @@ class WebDashboard:
             "if(d.toDateString()===n.toDateString())return'Today '+t;"
             "if(d.toDateString()===y.toDateString())return'Yesterday '+t;return d.toLocaleDateString();}"
             "document.querySelectorAll('time[data-ts]').forEach(function(e){e.textContent=fmt(+e.dataset.ts);});"
+            # Infinite scroll through the channel's full media history.
+            "var G=document.getElementById('mediagrid');"
+            "function stampIn(el){el.querySelectorAll('time[data-ts]').forEach(function(e){"
+            "if(!e.textContent)e.textContent=fmt(+e.dataset.ts);});}"
+            "async function more(){if(!G||G.dataset.done==='1'||G.dataset.loading==='1')return;"
+            "G.dataset.loading='1';try{"
+            "var u=location.pathname+'/page'+(G.dataset.oldest?('?before='+G.dataset.oldest):'');"
+            "var r=await fetch(u);var j=await r.json();"
+            "if(j.tiles){var t=document.createElement('div');t.innerHTML=j.tiles;"
+            "while(t.firstChild){G.appendChild(t.firstChild);}stampIn(G);}"
+            "G.dataset.oldest=j.oldest||'';if(j.done||!j.oldest)G.dataset.done='1';"
+            "var em=document.getElementById('media-empty');"
+            "if(em&&(G.children.length>0||G.dataset.done==='1')){if(G.children.length===0)"
+            "em.textContent='No media in this channel.';else em.remove();}"
+            "}catch(e){}G.dataset.loading='0';"
+            "if(G.dataset.done!=='1'&&(G.children.length===0||G.scrollHeight<=G.clientHeight+40))more();}"
+            "if(G){G.addEventListener('scroll',function(){"
+            "if(G.scrollHeight-G.scrollTop-G.clientHeight<500)more();});"
+            "if(G.dataset.done!=='1'&&(G.children.length===0||G.scrollHeight<=G.clientHeight+40))more();}"
             + SIDEBAR_JS + "</script>"
         )
         return layout(f"#{channel.name} · media", body, user=user, wide=True)
+
+    def _media_tiles(self, m) -> list[str]:
+        """Tile HTML for every piece of media in one message (attachments + embed images)."""
+        ts = int(m.created_at.timestamp())
+        who = esc(m.author.display_name)
+        cap = f"<span class='cap'>{who} · <time data-ts='{ts}'></time></span>"
+        tiles = []
+        for a in m.attachments:
+            ct = a.content_type or ""
+            if ct.startswith("image"):
+                tiles.append(f"<a class='tile' href='{esc(a.url)}' target='_blank' rel='noreferrer'>"
+                             f"<img src='{esc(a.url)}' loading='lazy' alt=''>{cap}</a>")
+            elif ct.startswith("video"):
+                tiles.append(f"<a class='tile' href='{esc(a.url)}' target='_blank' rel='noreferrer'>"
+                             f"<video src='{esc(a.url)}#t=0.1' preload='metadata' muted></video>"
+                             f"<span class='play'>▶</span>{cap}</a>")
+            else:
+                kb = f"{a.size // 1024} KB" if getattr(a, "size", 0) else ""
+                tiles.append(f"<a class='tile file' href='{esc(a.url)}' target='_blank' rel='noreferrer'>"
+                             f"📎 {esc(a.filename)}<br><span class='muted'>{kb} · {who}</span></a>")
+        for e in m.embeds:
+            url = getattr(getattr(e, "thumbnail", None), "url", None) or getattr(getattr(e, "image", None), "url", None)
+            if url:
+                tiles.append(f"<a class='tile' href='{esc(getattr(e, 'url', None) or url)}' target='_blank' "
+                             f"rel='noreferrer'><img src='{esc(url)}' loading='lazy' alt=''>{cap}</a>")
+        return tiles
+
+    async def _media_scan(self, channel, before: int | None = None) -> tuple[list[str], int | None, bool]:
+        """Scan one window of history for media. Returns (tiles, oldest_message_id, exhausted)."""
+        kwargs = {"limit": MEDIA_SCAN}
+        if before is not None:
+            kwargs["before"] = discord.Object(id=before)
+        tiles: list[str] = []
+        oldest: int | None = None
+        count = 0
+        async for m in channel.history(**kwargs):
+            count += 1
+            oldest = m.id
+            tiles.extend(self._media_tiles(m))
+        return tiles, oldest, count < MEDIA_SCAN
 
     async def _media_html(self, channel) -> str:
         if not channel.permissions_for(channel.guild.me).read_message_history:
             return "<div class='dc-empty'>SYKE can't read this channel, so it can't show its media.</div>"
         try:
-            tiles = []
-            async for m in channel.history(limit=MEDIA_SCAN):
-                ts = int(m.created_at.timestamp())
-                who = esc(m.author.display_name)
-                for a in m.attachments:
-                    ct = a.content_type or ""
-                    cap = f"<span class='cap'>{who} · <time data-ts='{ts}'></time></span>"
-                    if ct.startswith("image"):
-                        tiles.append(f"<a class='tile' href='{esc(a.url)}' target='_blank' rel='noreferrer'>"
-                                     f"<img src='{esc(a.url)}' loading='lazy' alt=''>{cap}</a>")
-                    elif ct.startswith("video"):
-                        tiles.append(f"<a class='tile' href='{esc(a.url)}' target='_blank' rel='noreferrer'>"
-                                     f"<video src='{esc(a.url)}#t=0.1' preload='metadata' muted></video>"
-                                     f"<span class='play'>▶</span>{cap}</a>")
-                    else:
-                        kb = f"{a.size // 1024} KB" if getattr(a, "size", 0) else ""
-                        tiles.append(f"<a class='tile file' href='{esc(a.url)}' target='_blank' rel='noreferrer'>"
-                                     f"📎 {esc(a.filename)}<br><span class='muted'>{kb} · {who}</span></a>")
-                for e in m.embeds:
-                    url = getattr(getattr(e, "thumbnail", None), "url", None) or getattr(getattr(e, "image", None), "url", None)
-                    if url:
-                        tiles.append(f"<a class='tile' href='{esc(getattr(e, 'url', None) or url)}' target='_blank' "
-                                     f"rel='noreferrer'><img src='{esc(url)}' loading='lazy' alt=''>"
-                                     f"<span class='cap'>{who} · <time data-ts='{ts}'></time></span></a>")
+            tiles, oldest, done = await self._media_scan(channel)
         except discord.HTTPException:
             return "<div class='dc-empty'>Couldn't load media just now.</div>"
-        if not tiles:
-            return (f"<div class='dc-empty'>No media in the last {MEDIA_SCAN} messages of this channel.</div>")
-        return f"<div class='media-grid'>{''.join(tiles)}</div>"
+        empty = ("<div class='dc-empty' id='media-empty'>No media found yet — scanning older messages…</div>"
+                 if not tiles and not done
+                 else ("<div class='dc-empty'>No media in this channel.</div>" if not tiles else ""))
+        attrs = (f"data-oldest='{oldest if oldest else ''}' data-done='{'1' if done else '0'}' "
+                 "data-loading='0'")
+        return f"<div class='media-grid' id='mediagrid' {attrs}>{''.join(tiles)}</div>{empty}"
+
+    async def channel_media_page(self, request: web.Request) -> web.Response:
+        """Next window of media for infinite scroll: JSON {tiles, oldest, done}."""
+        user = self._user(request)
+        if user is None:
+            raise web.HTTPForbidden(text="login required")
+        guild = self._guild_or_404(request)
+        channel = self._channel_or_404(request, guild)
+        before_raw = request.query.get("before")
+        before = int(before_raw) if before_raw and before_raw.isdigit() else None
+        try:
+            tiles, oldest, done = await self._media_scan(channel, before)
+        except discord.HTTPException:
+            return web.json_response({"tiles": "", "oldest": None, "done": True})
+        return web.json_response({"tiles": "".join(tiles), "oldest": oldest, "done": done})
 
     async def channel_messages(self, request: web.Request) -> web.Response:
         """Message list HTML. ?before=<message_id> pages older history; otherwise the latest."""

@@ -490,6 +490,39 @@ def test_embed_html_empty_is_skipped(dash):
     assert web._embed_html(_embed(), guild, {}) == ""
 
 
+def _dm_channel(uid, name, history):
+    async def hist(limit=50, before=None):
+        for m in history:
+            yield m
+    return types.SimpleNamespace(
+        recipient=types.SimpleNamespace(id=uid, name=name, global_name=name.title(),
+                                        display_avatar=types.SimpleNamespace(url=f"https://cdn/{uid}.png")),
+        history=hist)
+
+
+def test_dm_channels_filter_and_sort(dash):
+    web, bot, guild = dash
+    monkey = [_dm_channel(2, "bob", []), _dm_channel(1, "ada", []),
+              types.SimpleNamespace(recipient=None)]   # non-DM channel ignored
+    saved = web.bot
+    web.bot = types.SimpleNamespace(private_channels=monkey)
+    try:
+        got = web._dm_channels()
+    finally:
+        web.bot = saved
+    assert [c.recipient.id for c in got] == [1, 2]   # real DMs only, sorted by name (ada, bob)
+
+
+async def test_dm_messages_render(dash):
+    web, bot, guild = dash
+    ch = _dm_channel(7, "ada", [
+        _fake_message(1, 7, "Ada", "hey SYKE", 1_700_000_000),
+        _fake_message(2, 999, "SYKE", "hey Ada", 1_700_000_050),
+    ])
+    html = await web._dm_messages_html(ch)
+    assert "hey SYKE" in html and "hey Ada" in html
+
+
 def test_install_permissions_requires_administrator():
     from syke.bot import install_permissions
     assert install_permissions().administrator is True
@@ -531,6 +564,43 @@ async def test_announce_posts_embed(dash):
         kwargs = guild.get_channel(10).sent_kwargs[-1]
         em = kwargs.get("embed")
         assert em is not None and em.title == "Big news" and "we shipped stuff" in em.description
+
+
+def _img_msg(mid, url):
+    m = _fake_message(mid, 7, "Ada", "", 1_700_000_000 + mid)
+    m.attachments = [types.SimpleNamespace(url=url, content_type="image/png", filename="a.png", size=1024)]
+    return m
+
+
+async def test_media_scan_pages_through_full_history(dash, monkeypatch):
+    web, bot, guild = dash
+    import syke.web as webmod
+    monkeypatch.setattr(webmod, "MEDIA_SCAN", 2)      # tiny window to force paging
+    ch = guild.get_channel(10)
+    ch._history = [_img_msg(i, f"https://cdn/{i}.png") for i in (1, 2, 3, 4, 5)]
+    tiles, oldest, done = await web._media_scan(ch)                 # newest window: 5,4
+    assert len(tiles) == 2 and oldest == 4 and done is False
+    tiles2, oldest2, done2 = await web._media_scan(ch, before=oldest)   # 3,2
+    assert len(tiles2) == 2 and oldest2 == 2 and done2 is False
+    tiles3, _, done3 = await web._media_scan(ch, before=oldest2)        # 1 (end)
+    assert len(tiles3) == 1 and done3 is True                      # exhausted history
+
+
+async def test_media_html_has_infinite_scroll_scaffold(dash):
+    web, bot, guild = dash
+    ch = guild.get_channel(10)
+    ch._history = [_img_msg(1, "https://cdn/1.png")]
+    html = await web._media_html(ch)
+    assert "id='mediagrid'" in html and "data-oldest='1'" in html and "data-done='1'" in html
+    assert "https://cdn/1.png" in html
+
+
+async def test_media_page_endpoint_returns_json(dash):
+    async with serving(dash) as (cl, web, bot, guild):
+        guild.get_channel(10)._history = [_img_msg(1, "https://cdn/1.png")]
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        j = await (await cl.get(f"/g/{guild.id}/c/10/media/page")).json()
+        assert "https://cdn/1.png" in j["tiles"] and j["done"] is True and j["oldest"] == 1
 
 
 def test_dashboard_css_is_mobile_friendly():
