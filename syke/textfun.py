@@ -173,9 +173,34 @@ def reverse(text: str) -> str:
     return text[::-1]
 
 
+# Earnest, affirming slogans — the gag is "forced wholesomeness," never punching down at anyone.
+_WOKE = [
+    "✊ trans rights are human rights",
+    "🏳️‍⚧️ trans people are beautiful and valid",
+    "🏳️‍🌈 love is love",
+    "be kind, stay inclusive 💕",
+    "no human is illegal 🌍",
+    "protect and uplift marginalized voices 💪",
+    "check your privilege 🙏",
+    "respect everyone's pronouns 💞",
+    "diversity is our strength",
+    "spread love, not hate ✨",
+    "all bodies are good bodies",
+    "kindness is free, use it generously",
+]
+
+
+def woke(text: str, rng: random.Random | None = None) -> str:
+    """Tack an earnest, politically-correct slogan onto whatever they said."""
+    rng = rng or random.Random()
+    slogan = rng.choice(_WOKE)
+    extra = f" {rng.choice(_WOKE)}" if rng.random() < 0.3 else ""
+    return f"{text} — {slogan}{extra}"
+
+
 # The effects that can be stuck on a user, by canonical name, plus friendly aliases.
 EFFECTS = {"drunk": drunk, "scramble": scramble, "zalgo": zalgo, "uwu": uwu, "mock": mock, "keysmash": keysmash,
-           "high": high, "leet": leet, "stutter": stutter, "clap": clap, "reverse": reverse}
+           "high": high, "leet": leet, "stutter": stutter, "clap": clap, "reverse": reverse, "woke": woke}
 EFFECT_ALIASES = {"typo": "scramble", "cursed": "zalgo", "owo": "uwu", "spongebob": "mock", "smash": "keysmash",
                   "stoned": "high", "baked": "high", "hacker": "leet", "1337": "leet",
                   "nervous": "stutter", "backwards": "reverse"}
@@ -274,6 +299,11 @@ class TextFun(commands.Cog, name="TextFun"):
     @app_commands.describe(text="Text to reverse (or reply to a message)")
     async def reverse_cmd(self, ctx: commands.Context, *, text: str = "") -> None:
         await self._run(ctx, text, reverse)
+
+    @commands.hybrid_command(name="woke", description="Add an earnest politically-correct slogan")
+    @app_commands.describe(text="Text to wokeify (or reply to a message)")
+    async def woke_cmd(self, ctx: commands.Context, *, text: str = "") -> None:
+        await self._run(ctx, text, woke)
 
     # ---- Afflictions: stick an effect on a user so every message comes out mangled ----
 

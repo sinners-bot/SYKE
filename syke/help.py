@@ -74,7 +74,7 @@ CATALOG: list[Category] = [
         "games", "🎮", "Fun & Games", EVERYONE,
         "Little games and text toys to mess around with. Reply to a message or pass your own text.",
         ["guess", "drunk", "high", "scramble", "zalgo", "uwu", "mock", "keysmash",
-         "leet", "stutter", "clap", "reverse", "afflict", "cure", "afflicted"],
+         "leet", "stutter", "clap", "reverse", "woke", "afflict", "cure", "afflicted"],
         {
             "guess": "\"Who said this?\" — SYKE quotes a real message and you guess the author. "
                      "`guess top` shows the best guessers.",
@@ -89,9 +89,10 @@ CATALOG: list[Category] = [
             "stutter": "n-nervous repeated first letters.",
             "clap": "Puts 👏 a 👏 clap 👏 between 👏 every 👏 word.",
             "reverse": "Reverses the whole message, sdrawkcab.",
+            "woke": "Tacks an earnest, wholesome, politically-correct slogan onto whatever they said.",
             "afflict": "Stick an effect on someone (Manage Messages): every message they send is rewritten in that "
                        "effect, reposted as them via webhook. Effects: drunk, high, scramble, zalgo, uwu, mock, "
-                       "keysmash, leet, stutter, clap, reverse. `afflict @user high`.",
+                       "keysmash, leet, stutter, clap, reverse, woke. `afflict @user woke`.",
             "cure": "Remove a user's active affliction and let them type normally again.",
             "afflicted": "List everyone who currently has a chat effect stuck on them.",
         },

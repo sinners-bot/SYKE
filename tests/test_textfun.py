@@ -85,6 +85,15 @@ def test_leet_reverse_clap():
     assert clap("one two three") == "one 👏 two 👏 three"
 
 
+def test_woke_appends_affirming_slogan():
+    import random
+
+    from syke.textfun import woke
+    out = woke("i love mondays", random.Random(0))
+    assert out.startswith("i love mondays — ")   # keeps their text, adds a slogan
+    assert out != "i love mondays"
+
+
 def test_high_and_stutter_change_text():
     import random
     out = high("i am completely normal right now", random.Random(1))
