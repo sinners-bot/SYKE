@@ -375,6 +375,34 @@ def public_text(text: object, limit: int) -> str:
     return cleaned[: limit - 1].rstrip() + "…"
 
 
+WOKE_PROMPT = """You rewrite a single Discord message to be wholesome, inclusive and kind, while keeping \
+the person's voice, energy, casualness and format. Transform ANY hateful, bigoted or crude content into \
+its warm, affirming OPPOSITE:
+- Swap slurs and insults for friendly words (a racial slur -> "friend"/"homie"; a slur for a group -> the \
+respectful name for that group, e.g. the t-slur -> "trans people").
+- Flip hostile sentiment to loving, supportive sentiment, especially about any group of people \
+("I hate X" -> "I love X").
+- Keep casual swearing if it's there, just make it positive (e.g. "fucking hate trannies" -> \
+"i fucking love trans people").
+- Same rough length, same tone, same language. No commentary, hashtags, quotes, or @mentions.
+If the message is already kind, return it as-is (maybe a touch warmer).
+Reply with JSON only: {"text": "<rewritten message>"}"""
+
+
+async def woke_rewrite(settings: Settings, text: str, timeout: float = 8.0) -> str | None:
+    """Rewrite a message into a kind, inclusive version — slurs to friendly words, hate to love."""
+    if settings.ai_provider == "none" or not (text or "").strip():
+        return None
+    try:
+        data = await _complete(settings, WOKE_PROMPT, text[:500], temperature=0.6, timeout=timeout)
+    except Exception:
+        return None
+    out = (data or {}).get("text")
+    if isinstance(out, str) and out.strip():
+        return out.strip()[:1800]
+    return None
+
+
 async def _complete(settings: Settings, system: str, user: str, temperature: float, timeout: float) -> dict:
     if settings.ai_provider == "openai":
         reply = await _call_openai(settings, system, user, temperature, timeout)

@@ -94,6 +94,27 @@ def test_woke_appends_affirming_slogan():
     assert out != "i love mondays"
 
 
+def test_apply_woke_uses_ai_then_falls_back(tcog, monkeypatch):
+    from syke import ai
+    from syke.textfun import woke, mock
+
+    # With AI available, the woke effect uses the rewrite.
+    async def fake_rewrite(settings, text, timeout=8.0):
+        return "i love everyone"
+    monkeypatch.setattr(ai, "woke_rewrite", fake_rewrite)
+    assert run(tcog._apply(woke, "i hate everyone")) == "i love everyone"
+
+    # Non-semantic effects never call AI — mechanical transform only.
+    assert run(tcog._apply(mock, "hello")) == "hElLo"
+
+    # Without AI (rewrite returns None), woke falls back to the slogan transform.
+    async def no_ai(settings, text, timeout=8.0):
+        return None
+    monkeypatch.setattr(ai, "woke_rewrite", no_ai)
+    out = run(tcog._apply(woke, "whatever"))
+    assert out.startswith("whatever — ")
+
+
 def test_high_and_stutter_change_text():
     import random
     out = high("i am completely normal right now", random.Random(1))

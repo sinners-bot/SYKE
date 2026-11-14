@@ -89,7 +89,8 @@ CATALOG: list[Category] = [
             "stutter": "n-nervous repeated first letters.",
             "clap": "Puts 👏 a 👏 clap 👏 between 👏 every 👏 word.",
             "reverse": "Reverses the whole message, sdrawkcab.",
-            "woke": "Tacks an earnest, wholesome, politically-correct slogan onto whatever they said.",
+            "woke": "AI-rewrites the message to be kind and inclusive — slurs become friendly words, hate flips "
+                    "to love (e.g. \"I hate X\" → \"I love X\"). Falls back to an affirming slogan without AI.",
             "afflict": "Stick an effect on someone (Manage Messages): every message they send is rewritten in that "
                        "effect, reposted as them via webhook. Effects: drunk, high, scramble, zalgo, uwu, mock, "
                        "keysmash, leet, stutter, clap, reverse, woke. `afflict @user woke`.",

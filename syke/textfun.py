@@ -15,6 +15,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from . import ai
 from .expressions import notice
 from .moderation import moderator
 
@@ -235,6 +236,14 @@ class TextFun(commands.Cog, name="TextFun"):
                 return clean_source(msg.content)
         return None
 
+    async def _apply(self, fn, text: str) -> str:
+        """Apply an effect. The semantic 'woke' effect uses AI when available, else the slogan."""
+        if fn is woke:
+            rewritten = await ai.woke_rewrite(self.bot.settings, text)
+            if rewritten:
+                return rewritten[:MAX_OUT]
+        return fn(text)[:MAX_OUT]
+
     async def _run(self, ctx: commands.Context, text: str, fn) -> None:
         src = await self._source(ctx, text)
         if not src:
@@ -242,7 +251,7 @@ class TextFun(commands.Cog, name="TextFun"):
                                          "Reply to a message or type some text to mangle."),
                             ephemeral=True)
             return
-        out = fn(src)[:MAX_OUT] or "…"
+        out = (await self._apply(fn, src)) or "…"
         await ctx.reply(out, mention_author=False, allowed_mentions=discord.AllowedMentions.none())
 
     @commands.hybrid_command(name="drunk", description="Slur text like they've had a few")
@@ -393,7 +402,7 @@ class TextFun(commands.Cog, name="TextFun"):
         hook = await self._webhook_for(parent)
         if hook is None:
             return
-        out = fn(clean_source(content))[:MAX_OUT]
+        out = (await self._apply(fn, clean_source(content)))
         if not out:
             return
         if message.attachments:
