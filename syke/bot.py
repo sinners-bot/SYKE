@@ -44,6 +44,7 @@ from .moderation import Moderation, help_lines as moderation_help, pretty as pre
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
 from .scanner import Scanner, to_msg
 from .security import Security
+from .textfun import TextFun
 from .ship import read_ship, ship_embed, voice_sample
 from .showcase import ShowcaseView, tour_page
 from .storage import Storage
@@ -352,6 +353,7 @@ class Syke(commands.Bot):
         await self.add_cog(Moderation(self))
         await self.add_cog(AutoMod(self))
         await self.add_cog(Security(self))
+        await self.add_cog(TextFun(self))
         await self.add_cog(Community(self))
         await self.add_cog(DashboardCog(self))
         if self.settings.web_enabled:

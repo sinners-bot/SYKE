@@ -20,6 +20,7 @@ from syke.help import (
 )
 from syke.moderation import Moderation
 from syke.security import Security
+from syke.textfun import TextFun
 from test_commands import run
 
 
@@ -29,7 +30,7 @@ def bot(tmp_path):
     b = Syke(settings)
     b._connection.user = types.SimpleNamespace(id=999, mention="<@999>", name="SYKE")
     names = []
-    for cog in (SykeCommands(b), Moderation(b), AutoMod(b), Security(b), Community(b), DashboardCog(b)):
+    for cog in (SykeCommands(b), Moderation(b), AutoMod(b), Security(b), TextFun(b), Community(b), DashboardCog(b)):
         run(b.add_cog(cog))
         names.append(cog.qualified_name)
     yield b

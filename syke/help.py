@@ -72,10 +72,18 @@ CATALOG: list[Category] = [
     ),
     Category(
         "games", "🎮", "Fun & Games", EVERYONE,
-        "Little games to play with the server.",
-        ["guess"],
-        {"guess": "\"Who said this?\" — SYKE quotes a real message and you guess the author. "
-                  "`guess top` shows the best guessers."},
+        "Little games and text toys to mess around with. Reply to a message or pass your own text.",
+        ["guess", "drunk", "scramble", "zalgo", "uwu", "mock", "keysmash"],
+        {
+            "guess": "\"Who said this?\" — SYKE quotes a real message and you guess the author. "
+                     "`guess top` shows the best guessers.",
+            "drunk": "Slurs the text like they've had a few — doubled letters, dropped letters, the odd *hic*.",
+            "scramble": "Shuffles the middle of each word but keeps the first and last letter — still readable, barely.",
+            "zalgo": "Corrupts the text into c̸u̷r̶s̵e̴d̷ glitch text.",
+            "uwu": "Twanslates the text into uwu-speak, wiw faces and aww.",
+            "mock": "aLtErNaTiNg mOcKiNg CaPs, SpongeBob style.",
+            "keysmash": "Letters collapse into keyboard mash the further along they go.",
+        },
     ),
     Category(
         "emoji", "😀", "Emojis & Stickers", EMOJIS,
