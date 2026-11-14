@@ -583,9 +583,14 @@ border-radius:6px;color:var(--text);font-size:13px;}
 .media-grid{flex:1;overflow-y:auto;padding:14px 16px;display:grid;gap:8px;align-content:start;
 grid-template-columns:repeat(auto-fill,minmax(150px,1fr));}
 .tile{position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;background:#000;display:block;}
-.tile img,.tile video{width:100%;height:100%;object-fit:cover;display:block;}
-.tile .cap{position:absolute;left:0;right:0;bottom:0;padding:4px 6px;font-size:11px;color:#fff;
-background:linear-gradient(transparent,rgba(0,0,0,.8));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.tile img,.tile video,.tile canvas{width:100%;height:100%;object-fit:cover;display:block;background:#17171d;}
+.tile .cap{position:absolute;left:0;right:0;bottom:0;padding:5px 7px;font-size:11px;color:#fff;display:flex;
+align-items:center;gap:5px;background:linear-gradient(transparent,rgba(0,0,0,.85));white-space:nowrap;
+overflow:hidden;text-overflow:ellipsis;}
+.tile .capav{width:16px;height:16px;border-radius:50%;flex:none;}
+.tile .gifbadge{position:absolute;top:6px;left:6px;font-size:10px;font-weight:700;letter-spacing:.04em;
+background:rgba(0,0,0,.72);color:#fff;border-radius:4px;padding:1px 5px;pointer-events:none;}
+.tile.gif:hover .gifbadge{background:var(--brand);}
 .tile .play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:30px;
 color:#fff;text-shadow:0 1px 4px #000;pointer-events:none;}
 .tile.file{aspect-ratio:auto;background:#2b2d31;padding:10px;color:var(--text);font-size:13px;}
@@ -1910,10 +1915,16 @@ class WebDashboard:
             "if(d.toDateString()===n.toDateString())return'Today '+t;"
             "if(d.toDateString()===y.toDateString())return'Yesterday '+t;return d.toLocaleDateString();}"
             "document.querySelectorAll('time[data-ts]').forEach(function(e){e.textContent=fmt(+e.dataset.ts);});"
+            # Freeze GIFs: paint their first frame to a canvas so they don't all autoplay.
+            "function paintGifs(root){(root||document).querySelectorAll('.tile.gif[data-gif]:not([data-painted])')"
+            ".forEach(function(a){a.setAttribute('data-painted','1');var c=a.querySelector('canvas');if(!c)return;"
+            "var img=new Image();img.onload=function(){c.width=img.naturalWidth||300;c.height=img.naturalHeight||300;"
+            "try{c.getContext('2d').drawImage(img,0,0,c.width,c.height);}catch(e){}};img.src=a.dataset.gif;});}"
+            "paintGifs(document);"
             # Infinite scroll through the channel's full media history.
             "var G=document.getElementById('mediagrid');"
             "function stampIn(el){el.querySelectorAll('time[data-ts]').forEach(function(e){"
-            "if(!e.textContent)e.textContent=fmt(+e.dataset.ts);});}"
+            "if(!e.textContent)e.textContent=fmt(+e.dataset.ts);});paintGifs(el);}"
             "async function more(){if(!G||G.dataset.done==='1'||G.dataset.loading==='1')return;"
             "G.dataset.loading='1';try{"
             "var u=location.pathname+'/page'+(G.dataset.oldest?('?before='+G.dataset.oldest):'');"
@@ -1933,17 +1944,30 @@ class WebDashboard:
         )
         return layout(f"#{channel.name} · media", body, user=user, wide=True)
 
+    @staticmethod
+    def _is_gif(url: str, ct: str = "") -> bool:
+        return ct == "image/gif" or (url or "").split("?")[0].lower().endswith(".gif")
+
+    def _image_tile(self, url: str, open_url: str, cap: str, is_gif: bool) -> str:
+        if is_gif:
+            # Freeze GIFs: show a static first frame (painted to a canvas by JS); click to open/play.
+            return (f"<a class='tile gif' href='{esc(open_url)}' target='_blank' rel='noreferrer' "
+                    f"data-gif='{esc(url)}'><canvas></canvas><span class='gifbadge'>GIF</span>{cap}</a>")
+        return (f"<a class='tile' href='{esc(open_url)}' target='_blank' rel='noreferrer'>"
+                f"<img src='{esc(url)}' loading='lazy' alt=''>{cap}</a>")
+
     def _media_tiles(self, m) -> list[str]:
         """Tile HTML for every piece of media in one message (attachments + embed images)."""
         ts = int(m.created_at.timestamp())
         who = esc(m.author.display_name)
-        cap = f"<span class='cap'>{who} · <time data-ts='{ts}'></time></span>"
+        av = esc(getattr(getattr(m.author, "display_avatar", None), "url", ""))
+        cap = (f"<span class='cap'><img class='capav' src='{av}' alt=''>{who} · "
+               f"<time data-ts='{ts}'></time></span>")
         tiles = []
         for a in m.attachments:
             ct = a.content_type or ""
             if ct.startswith("image"):
-                tiles.append(f"<a class='tile' href='{esc(a.url)}' target='_blank' rel='noreferrer'>"
-                             f"<img src='{esc(a.url)}' loading='lazy' alt=''>{cap}</a>")
+                tiles.append(self._image_tile(a.url, a.url, cap, self._is_gif(a.url, ct)))
             elif ct.startswith("video"):
                 tiles.append(f"<a class='tile' href='{esc(a.url)}' target='_blank' rel='noreferrer'>"
                              f"<video src='{esc(a.url)}#t=0.1' preload='metadata' muted></video>"
@@ -1955,8 +1979,8 @@ class WebDashboard:
         for e in m.embeds:
             url = getattr(getattr(e, "thumbnail", None), "url", None) or getattr(getattr(e, "image", None), "url", None)
             if url:
-                tiles.append(f"<a class='tile' href='{esc(getattr(e, 'url', None) or url)}' target='_blank' "
-                             f"rel='noreferrer'><img src='{esc(url)}' loading='lazy' alt=''>{cap}</a>")
+                gif = self._is_gif(url) or getattr(e, "type", "") == "gifv"
+                tiles.append(self._image_tile(url, getattr(e, "url", None) or url, cap, gif))
         return tiles
 
     async def _media_scan(self, channel, before: int | None = None) -> tuple[list[str], int | None, bool]:

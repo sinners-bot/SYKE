@@ -572,6 +572,26 @@ def _img_msg(mid, url):
     return m
 
 
+def test_media_tiles_show_sender_and_freeze_gifs(dash):
+    web, bot, guild = dash
+    # A plain image: normal <img> tile with the sender's name in the caption.
+    png = _fake_message(1, 7, "Ada", "", 1_700_000_000)
+    png.attachments = [types.SimpleNamespace(url="https://cdn/x.png", content_type="image/png",
+                                             filename="x.png", size=2048)]
+    tiles = web._media_tiles(png)
+    assert len(tiles) == 1
+    assert "<img src='https://cdn/x.png'" in tiles[0] and "class='tile gif'" not in tiles[0]
+    assert "Ada" in tiles[0] and "capav" in tiles[0]        # sender name + avatar in caption
+    # A GIF attachment: frozen poster (canvas + GIF badge), NOT an auto-animating <img>.
+    gif = _fake_message(2, 8, "Bo", "", 1_700_000_100)
+    gif.attachments = [types.SimpleNamespace(url="https://cdn/y.gif", content_type="image/gif",
+                                             filename="y.gif", size=4096)]
+    gtiles = web._media_tiles(gif)
+    assert "class='tile gif'" in gtiles[0] and "<canvas>" in gtiles[0] and "GIF" in gtiles[0]
+    assert "data-gif='https://cdn/y.gif'" in gtiles[0]
+    assert "<img src='https://cdn/y.gif'" not in gtiles[0]   # the gif does not auto-play as an <img>
+
+
 async def test_media_scan_pages_through_full_history(dash, monkeypatch):
     web, bot, guild = dash
     import syke.web as webmod
