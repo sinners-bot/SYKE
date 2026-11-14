@@ -435,7 +435,9 @@ form.inline{display:inline;}
 h1{font-size:22px;margin:0 0 4px;}h2{font-size:17px;margin:22px 0 10px;}
 @media(max-width:760px){.cols{grid-template-columns:1fr;}}
 /* Discord-like channel view */
-.dc{display:flex;height:calc(100vh - 56px);}
+.dc{display:flex;height:calc(100vh - 56px);height:calc(100dvh - 56px);position:relative;}
+.dc-burger{display:none;cursor:pointer;background:none;border:none;color:var(--text);font-size:22px;line-height:1;padding:0 6px 0 0;margin:0;}
+.dc-backdrop{display:none;}
 .dc-side{width:240px;flex:0 0 240px;background:#17171d;border-right:1px solid var(--line);overflow-y:auto;padding:8px 6px;}
 .dc-side .srv{font-weight:700;padding:6px 8px;border-bottom:1px solid var(--line);margin-bottom:6px;display:block;color:var(--text);}
 .dc-cat{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:12px 8px 2px;font-weight:700;}
@@ -582,6 +584,31 @@ mark{background:#f5b30155;color:#ffe08a;border-radius:2px;padding:0 1px;}
 .mrow .mn{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px;}
 .mrow .mbot{font-size:8px;background:var(--brand);color:#fff;border-radius:3px;padding:0 3px;margin-left:4px;}
 @media(max-width:900px){.dc-members{display:none;}}
+/* Phone layout: channel list becomes a slide-in drawer, media fits the screen. */
+@media(max-width:820px){
+  .dc-burger{display:inline-flex;align-items:center;}
+  .dc-side{position:absolute;top:0;bottom:0;left:0;z-index:30;width:80%;max-width:300px;flex-basis:80%;
+    transform:translateX(-100%);transition:transform .22s ease;box-shadow:6px 0 24px #000a;}
+  .dc.show-side .dc-side{transform:none;}
+  .dc.show-side .dc-backdrop{display:block;position:absolute;inset:0;z-index:20;background:#0008;}
+  .dc-head{padding:10px 12px;flex-wrap:wrap;gap:8px;position:sticky;top:0;z-index:10;}
+  .dc-head .topic{display:none;}
+  .ch-search{order:3;flex:1 1 100%;}
+  .ch-search input{width:100%;font-size:16px;}
+  .dc-msgs{padding:12px 10px 18px;}
+  .m{gap:10px;padding:2px 2px;}
+  .m .av,.m .av img{width:36px;flex-basis:36px;height:36px;}
+  .att img,.att-media{max-width:100%;}
+  .att-audio audio{width:100%;}
+  .emb,.cv-box,.fwd,.rx-panel,.att-file{max-width:100%;}
+  .cv-gallery img{max-width:46%;}
+  .dc-input textarea{font-size:16px;}
+  .prof{padding:18px 14px;}
+  .prof-grid{grid-template-columns:repeat(auto-fit,minmax(130px,1fr));}
+  .heat{height:70px;}
+  .wrap{padding:14px;}
+  header{padding:10px 14px;gap:10px;}
+}
 /* Profile page */
 .prof{max-width:720px;margin:0 auto;padding:24px 20px;}
 .prof-top{display:flex;gap:18px;align-items:center;}
@@ -1003,7 +1030,10 @@ class WebDashboard:
         tabs = (f"<div class='ch-tabs'>"
                 f"<a class='{'on' if active == 'chat' else ''}' href='{base}'>Chat</a>"
                 f"<a class='{'on' if active == 'media' else ''}' href='{base}/media'>Media</a></div>")
-        return (f"<div class='dc-head'><span class='hash'>#</span> {esc(channel.name)}{topic_html}{search}{tabs}</div>")
+        burger = ("<button class='dc-burger' type='button' aria-label='Channels' "
+                  "onclick=\"this.closest('.dc').classList.toggle('show-side')\">☰</button>")
+        return (f"<div class='dc-head'>{burger}<span class='hash'>#</span> "
+                f"{esc(channel.name)}{topic_html}{search}{tabs}</div>")
 
     def _highlight(self, text: str, query: str) -> str:
         safe = esc(text)
@@ -1337,7 +1367,9 @@ class WebDashboard:
         flash_html = flash(request)
         members = self._member_list(guild)
         body = (
-            f"<div class='dc'>{sidebar}<div class='dc-main'>{head}"
+            f"<div class='dc'>{sidebar}"
+            "<div class='dc-backdrop' onclick=\"this.closest('.dc').classList.remove('show-side')\"></div>"
+            f"<div class='dc-main'>{head}"
             f"<div class='dc-msgs' id='messages'>{flash_html}{messages}</div>{inp}</div>{members}</div>"
             "<script>"
             "function fmt(s){var d=new Date(s*1000),n=new Date(),"
@@ -1691,7 +1723,9 @@ class WebDashboard:
         grid = await self._media_html(channel)
         head = self._channel_header(guild, channel, "media")
         body = (
-            f"<div class='dc'>{sidebar}<div class='dc-main'>{head}{grid}</div></div>"
+            f"<div class='dc'>{sidebar}"
+            "<div class='dc-backdrop' onclick=\"this.closest('.dc').classList.remove('show-side')\"></div>"
+            f"<div class='dc-main'>{head}{grid}</div></div>"
             "<script>function fmt(s){var d=new Date(s*1000),n=new Date(),"
             "t=d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),y=new Date(n.getTime()-864e5);"
             "if(d.toDateString()===n.toDateString())return'Today '+t;"

@@ -483,6 +483,18 @@ def test_embed_html_empty_is_skipped(dash):
     assert web._embed_html(_embed(), guild, {}) == ""
 
 
+def test_dashboard_css_is_mobile_friendly():
+    from syke.web import STYLE
+    assert "@media(max-width:820px)" in STYLE            # phone breakpoint exists
+    assert ".dc-burger" in STYLE and ".dc.show-side .dc-side" in STYLE  # slide-in channel drawer
+
+
+def test_channel_header_has_drawer_toggle(dash):
+    web, bot, guild = dash
+    h = web._channel_header(guild, guild.get_channel(10), "chat")
+    assert "dc-burger" in h and "show-side" in h          # hamburger toggles the sidebar
+
+
 def test_hour_histogram_and_peak_window():
     from datetime import datetime, timezone
 
