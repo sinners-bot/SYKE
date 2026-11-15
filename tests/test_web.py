@@ -629,10 +629,22 @@ def test_memory_body_lists_gifs_and_stickers(dash):
     voice = Voice(chain=None, gifs=["https://tenor.com/view/a-gif-1", "https://tenor.com/view/b-gif-2"])
     g = types.SimpleNamespace(id=42, name="G",
                               stickers=[types.SimpleNamespace(id=5, name="wave", url="https://cdn/s.png")])
-    html = web._memory_body(g, voice)
+    req = types.SimpleNamespace(query={})
+    html = web._memory_body(g, voice, 777, req)
     assert "GIFs (2)" in html and "tenor.com/view/a-gif-1" in html and "data-gif=" in html
     assert "class='tile gif'" in html                       # gifs are frozen posters, not autoplaying
+    assert "class='rm'" in html and "memory/remove" in html  # each tile has a remove (✕) control
+    assert "giflabel" in html                                # tenor view-links fall back to a label
     assert "Stickers (1)" in html and "https://cdn/s.png" in html and "wave" in html
+
+
+def test_gif_image_url_resolves_only_loadable_links():
+    from syke.web import gif_image_url, gif_label
+    assert gif_image_url("https://tenor.com/view/happy-dance-gif-12345") is None   # page link, not an image
+    assert gif_image_url("https://media.tenor.com/abc/x.gif") == "https://media.tenor.com/abc/x.gif"
+    assert gif_image_url("https://giphy.com/gifs/cat-aBcD123456") == \
+        "https://media.giphy.com/media/aBcD123456/giphy.gif"
+    assert gif_label("https://tenor.com/view/happy-dance-gif-12345") == "dance happy"
 
 
 def test_dashboard_css_is_mobile_friendly():

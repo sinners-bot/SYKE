@@ -897,7 +897,8 @@ class Syke(commands.Bot):
     async def recent_stickers(self, message: discord.Message, limit: int = YAP_STICKER_SCAN) -> list:
         """Guild stickers members have posted in this channel lately (so SYKE can send them back)."""
         guild = message.guild
-        by_id = {s.id: s for s in getattr(guild, "stickers", ()) or ()}
+        blocked = self.blocked_stickers(guild.id)
+        by_id = {s.id: s for s in getattr(guild, "stickers", ()) or () if s.id not in blocked}
         if not by_id:
             return []
         history = getattr(message.channel, "history", None)
@@ -913,12 +914,47 @@ class Syke(commands.Bot):
             return []
         return list(seen.values())
 
+    def blocked_gifs(self, guild_id: int) -> set[str]:
+        """GIF links an admin removed from this server's memory."""
+        return set(self.storage.get_config(guild_id, "yap_memory").get("gifs") or ())
+
+    def blocked_stickers(self, guild_id: int) -> set[int]:
+        """Sticker ids an admin removed from this server's memory."""
+        raw = self.storage.get_config(guild_id, "yap_memory").get("stickers") or ()
+        out = set()
+        for s in raw:
+            try:
+                out.add(int(s))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def remembered_gifs(self, guild_id: int, voice: Voice) -> list[str]:
+        """The server's GIFs with the removed ones filtered out."""
+        blocked = self.blocked_gifs(guild_id)
+        return [g for g in (voice.gifs or []) if g not in blocked]
+
+    def block_memory(self, guild_id: int, *, gif: str | None = None, sticker: int | None = None) -> None:
+        """Drop a GIF or sticker from a server's yap memory for good."""
+        cfg = self.storage.get_config(guild_id, "yap_memory")
+        if gif is not None:
+            gifs = list(cfg.get("gifs") or [])
+            if gif not in gifs:
+                gifs.append(gif)
+            self.storage.update_config(guild_id, "yap_memory", gifs=gifs)
+        if sticker is not None:
+            ids = list(cfg.get("stickers") or [])
+            if sticker not in ids:
+                ids.append(sticker)
+            self.storage.update_config(guild_id, "yap_memory", stickers=ids)
+
     async def yap_gif(self, message: discord.Message, text: str, voice: Voice) -> str | None:
         """A GIF the server uses that fits what's being talked about (no chance roll)."""
-        if not (voice.gifs or []):
+        pool = self.remembered_gifs(message.guild.id, voice)
+        if not pool:
             return None
         chat = " ".join(t.text for t in await self.recent_chat(message, YAP_CONTEXT // 2))
-        return pick_gif(voice.gifs[:40], f"{text} {message.content or ''} {chat}")
+        return pick_gif(pool[:40], f"{text} {message.content or ''} {chat}")
 
     def _text_with_emoji(self, guild, voice: Voice, text: str) -> str:
         """Maybe append a server emoji members use (stays part of the text form)."""

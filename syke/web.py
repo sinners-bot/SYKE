@@ -25,8 +25,39 @@ from aiohttp import web
 
 from . import web_auth as auth
 from .moderation import KINDS, human_duration, parse_duration
+from .yap import gif_keywords
 
 log = logging.getLogger("syke.web")
+
+# Giphy page links carry the media id as the last token; Tenor "view" links don't expose a
+# usable direct-media URL without the API, so those fall back to a labelled tile.
+_GIPHY_ID = re.compile(r"giphy\.com/(?:gifs|embed|media)/(?:.*-)?([A-Za-z0-9]{6,})", re.IGNORECASE)
+_GIF_DIRECT_HOSTS = ("media.tenor.co", "c.tenor.com", "media.tenor.com", "media.giphy.com",
+                     "i.giphy.com", "media0.giphy.com", "media1.giphy.com", "media2.giphy.com",
+                     "media3.giphy.com", "media4.giphy.com")
+
+
+def gif_image_url(url: str) -> str | None:
+    """Best directly-loadable image URL for a mined GIF link, or None if we only have a page link.
+
+    A bare ``tenor.com/view/...`` link is an HTML page, not an image, so painting it to a canvas
+    yields a black box; for those we return None and the UI shows a labelled placeholder instead.
+    """
+    low = (url or "").lower()
+    if low.endswith((".gif", ".webp", ".mp4")):
+        return url
+    if any(h in low for h in _GIF_DIRECT_HOSTS):
+        return url
+    m = _GIPHY_ID.search(url or "")
+    if m:
+        return f"https://media.giphy.com/media/{m.group(1)}/giphy.gif"
+    return None
+
+
+def gif_label(url: str) -> str:
+    """A short readable name for a GIF from its slug, e.g. 'happy dance'."""
+    words = [w for w in sorted(gif_keywords(url or "")) if w][:4]
+    return " ".join(words) or "GIF"
 
 MESSAGES_SHOWN = 60
 STORED_PREVIEW = 40
@@ -584,6 +615,12 @@ border-radius:6px;color:var(--text);font-size:13px;}
 grid-template-columns:repeat(auto-fill,minmax(150px,1fr));}
 .media-grid.mem{flex:none;overflow:visible;padding:0;margin-top:8px;
 grid-template-columns:repeat(auto-fill,minmax(120px,1fr));}
+.tile-wrap{position:relative;}
+.tile-wrap .rm{position:absolute;top:4px;right:4px;margin:0;z-index:2;}
+.rmx{width:24px;height:24px;line-height:1;padding:0;border:0;border-radius:50%;cursor:pointer;
+background:rgba(0,0,0,.65);color:#fff;font-size:13px;opacity:0;transition:opacity .12s;}
+.tile-wrap:hover .rmx,.rmx:focus{opacity:1;}
+.rmx:hover{background:#dc2626;}
 .tile{position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;background:#000;display:block;}
 .tile img,.tile video,.tile canvas{width:100%;height:100%;object-fit:cover;display:block;background:#17171d;}
 .tile .cap{position:absolute;left:0;right:0;bottom:0;padding:5px 7px;font-size:11px;color:#fff;display:flex;
@@ -593,6 +630,9 @@ overflow:hidden;text-overflow:ellipsis;}
 .tile .gifbadge{position:absolute;top:6px;left:6px;font-size:10px;font-weight:700;letter-spacing:.04em;
 background:rgba(0,0,0,.72);color:#fff;border-radius:4px;padding:1px 5px;pointer-events:none;}
 .tile.gif:hover .gifbadge{background:var(--brand);}
+.tile .giflabel{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+text-align:center;padding:10px;font-size:12px;font-weight:600;color:#c9c9d4;background:#17171d;
+text-transform:capitalize;word-break:break-word;}
 .tile .play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:30px;
 color:#fff;text-shadow:0 1px 4px #000;pointer-events:none;}
 .tile.file{aspect-ratio:auto;background:#2b2d31;padding:10px;color:var(--text);font-size:13px;}
@@ -743,6 +783,7 @@ class WebDashboard:
         a("/dm/{uid}", self.dm_view)
         a("/g/{gid}/alts", self.alt_scan)
         a("/g/{gid}/memory", self.memory_page)
+        p("/g/{gid}/memory/remove", self.memory_remove)
         a("/g/{gid}/announce", self.announce_page)
         p("/g/{gid}/announce", self.announce_send)
         a("/g/{gid}/c/{cid}", self.channel)
@@ -1625,42 +1666,80 @@ class WebDashboard:
             raise web.HTTPFound("/login")
         guild = self._guild_or_404(request)
         voice = await self.bot.server_voice(guild.id)
-        return layout(f"SYKE's memory · {guild.name}", self._memory_body(guild, voice), user=user)
+        return layout(f"SYKE's memory · {guild.name}",
+                      self._memory_body(guild, voice, user[0], request), user=user)
 
-    def _memory_body(self, guild: discord.Guild, voice) -> str:
+    def _memory_body(self, guild: discord.Guild, voice, user_id: int, request) -> str:
+        csrf = self._hidden_csrf(user_id)
+
+        def rm(kind: str, value: str) -> str:
+            # A small ✕ overlay that drops this item from memory for good.
+            return (f"<form method='post' action='/g/{guild.id}/memory/remove' class='rm'>{csrf}"
+                    f"<input type='hidden' name='kind' value='{kind}'>"
+                    f"<input type='hidden' name='value' value='{esc(value)}'>"
+                    "<button class='rmx' title='Remove from memory' "
+                    "onclick='return confirm(\"Remove this from SYKE\\u2019s memory?\")'>✕</button></form>")
+
         secs = [f"<div class='muted'><a href='/g/{guild.id}'>← {esc(guild.name)}</a></div>"
                 "<h1>🧠 What SYKE remembers here</h1>"
                 "<p class='muted'>The GIFs and stickers SYKE has picked up from this server — what it can drop "
-                "into a yap.</p>"]
+                "into a yap. Hit ✕ on any tile to make SYKE forget it.</p>"
+                + flash(request)]
         # GIFs mined from chat — frozen posters, click to open.
-        gifs = (voice.gifs or [])[:60]
+        gifs = self.bot.remembered_gifs(guild.id, voice)[:60]
         if gifs:
-            tiles = "".join(
-                f"<a class='tile gif' href='{esc(g)}' target='_blank' rel='noreferrer' data-gif='{esc(g)}'>"
-                f"<canvas></canvas><span class='gifbadge'>GIF</span></a>" for g in gifs)
+            def gif_tile(g: str) -> str:
+                img = gif_image_url(g)
+                data_img = f" data-img='{esc(img)}'" if img else ""
+                return ("<div class='tile-wrap'>"
+                        f"<a class='tile gif' href='{esc(g)}' target='_blank' rel='noreferrer' "
+                        f"data-gif='{esc(g)}'{data_img}>"
+                        f"<canvas></canvas><span class='giflabel'>{esc(gif_label(g))}</span>"
+                        f"<span class='gifbadge'>GIF</span></a>" + rm('gif', g) + "</div>")
+            tiles = "".join(gif_tile(g) for g in gifs)
             secs.append(f"<div class='prof-sec'><h3>GIFs ({len(gifs)})</h3>"
                         f"<div class='media-grid mem'>{tiles}</div></div>")
         else:
             secs.append("<div class='prof-sec'><h3>GIFs</h3><div class='note'>No GIFs remembered yet — "
                         "SYKE picks these up as people post them.</div></div>")
-        # Stickers SYKE can repost: the server's own sticker set.
-        stickers = list(getattr(guild, "stickers", []) or [])
+        # Stickers SYKE can repost: the server's own sticker set, minus removed ones.
+        blocked = self.bot.blocked_stickers(guild.id)
+        stickers = [s for s in (getattr(guild, "stickers", []) or []) if s.id not in blocked]
         if stickers:
             st = "".join(
+                "<div class='tile-wrap'>"
                 f"<a class='tile' href='{esc(getattr(s, 'url', ''))}' target='_blank' rel='noreferrer'>"
                 f"<img src='{esc(getattr(s, 'url', ''))}' loading='lazy' alt='{esc(getattr(s, 'name', ''))}'>"
-                f"<span class='cap'>{esc(getattr(s, 'name', ''))}</span></a>" for s in stickers)
+                f"<span class='cap'>{esc(getattr(s, 'name', ''))}</span></a>{rm('sticker', str(s.id))}</div>"
+                for s in stickers)
             secs.append(f"<div class='prof-sec'><h3>Stickers ({len(stickers)})</h3>"
                         f"<div class='media-grid mem'>{st}</div></div>")
         else:
             secs.append("<div class='prof-sec'><h3>Stickers</h3>"
-                        "<div class='note'>This server has no stickers for SYKE to use.</div></div>")
+                        "<div class='note'>No stickers for SYKE to use.</div></div>")
         body = ("<div class='prof'>" + "".join(secs) + "</div>"
-                "<script>document.querySelectorAll('.tile.gif[data-gif]').forEach(function(a){"
-                "var c=a.querySelector('canvas');if(!c)return;var img=new Image();img.onload=function(){"
-                "c.width=img.naturalWidth||300;c.height=img.naturalHeight||300;"
-                "try{c.getContext('2d').drawImage(img,0,0,c.width,c.height);}catch(e){}};img.src=a.dataset.gif;});</script>")
+                "<script>document.querySelectorAll('.tile.gif').forEach(function(a){"
+                "var c=a.querySelector('canvas'),lab=a.querySelector('.giflabel'),src=a.dataset.img;"
+                # No direct image (e.g. a tenor.com/view page link) -> keep the readable label.
+                "if(!src){if(c)c.style.display='none';return;}"
+                "var img=new Image();img.onload=function(){c.width=img.naturalWidth||300;"
+                "c.height=img.naturalHeight||300;try{c.getContext('2d').drawImage(img,0,0,c.width,c.height);"
+                "if(lab)lab.style.display='none';}catch(e){}};"
+                "img.onerror=function(){if(c)c.style.display='none';};img.src=src;});</script>")
         return body
+
+    async def memory_remove(self, request: web.Request) -> web.Response:
+        guild, data, _ = await self._post_guild(request)
+        back = f"/g/{guild.id}/memory"
+        kind = (data.get("kind") or "").strip()
+        value = (data.get("value") or "").strip()
+        if kind == "gif" and value:
+            self.bot.block_memory(guild.id, gif=value)
+            raise self._redirect(back, ok="GIF removed from memory.")
+        if kind == "sticker" and value.isdigit():
+            self.bot.block_memory(guild.id, sticker=int(value))
+            raise self._redirect(back, ok="Sticker removed from memory.")
+        raise self._redirect(back, err="Nothing to remove.")
 
     async def announce_page(self, request: web.Request) -> web.Response:
         user = self._user(request)
