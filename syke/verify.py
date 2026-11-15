@@ -85,6 +85,7 @@ def explain(prefix: str, settings: VerifySettings, *, role: str, remove: str, ch
         f"An admin can run `{prefix}verify @member` for them, "
         f"or `{prefix}verify @member @Role` to grant a role of their choosing. "
         f"`{prefix}verify take @Unverified` also removes a role when they pass. "
+        f"`{prefix}verify staff @Role` lets a role verify others without **Manage Server**. "
         f"`{prefix}verify message <text>` changes the panel (`reset` restores it). "
         f"`{prefix}verify off` turns the gate off.\n\n"
         f"**Role:** {role}\n"

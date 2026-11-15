@@ -404,3 +404,35 @@ def _send(box):
     async def send(**kwargs):
         box.append(kwargs)
     return send
+
+
+def test_verifier_role_can_verify_without_manage_server(cog):
+    verified = _role(5, "Verified")
+    helper_role = _role(9, "Helper")
+    channel = Chan()
+    guild = _guild([verified, helper_role], channel)
+
+    # Admin sets the verified role and designates Helper as a verifier role.
+    admin = Person(uid=1, admin=True)
+    actx = _ctx(guild, admin, channel)
+    run(cog.verify_role.callback(cog, actx, verified))
+    run(cog.verify_staff.callback(cog, actx, helper_role))
+    assert 9 in cog.bot.storage.get_config(42, "verify_roles")["roles"]
+
+    # A non-admin holding the verifier role can verify someone else.
+    helper = Person(uid=2, admin=False)
+    helper.roles = [helper_role]
+    target = Person(uid=3)
+    hctx = _ctx(guild, helper, channel)
+    run(cog.verify.callback(cog, hctx, target))
+    assert any(r.id == 5 for r in target.roles)            # target got the verified role
+
+    # But a verifier still can't pick a custom role (admin-only).
+    run(cog.verify.callback(cog, hctx, Person(uid=8), helper_role))
+    assert hctx.replies[-1].title == "Admins only"
+
+    # A non-admin without the role can't verify others at all.
+    rando = Person(uid=4, admin=False)
+    rctx = _ctx(guild, rando, channel)
+    run(cog.verify.callback(cog, rctx, Person(uid=9)))
+    assert rctx.replies[-1].title == "Admins only"

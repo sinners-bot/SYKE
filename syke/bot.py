@@ -2006,10 +2006,17 @@ class SykeCommands(commands.Cog, name="SYKE"):
         assert ctx.guild is not None
         target = member or ctx.author
         admin = is_admin(self.bot, ctx.author)
+        verifier = admin or self._is_verifier(ctx.guild.id, ctx.author)
         other = target.id != ctx.author.id
-        if (other or role is not None) and not admin:
+        # Choosing a custom role stays admin-only (no privilege escalation); verifying
+        # someone else is allowed for admins and anyone with a configured verifier role.
+        if role is not None and not admin:
             await ctx.reply(embed=staff_only(self.p(ctx), other=other), ephemeral=True)
             return
+        if other and not verifier:
+            await ctx.reply(embed=staff_only(self.p(ctx), other=True), ephemeral=True)
+            return
+        admin = verifier  # verifiers act as staff for the rest of this flow
         if getattr(target, "bot", False):
             await ctx.reply(embed=bots_stay_out(), ephemeral=True)
             return
@@ -2039,6 +2046,40 @@ class SykeCommands(commands.Cog, name="SYKE"):
     async def verify_take(self, ctx: commands.Context, role: discord.Role | None = None) -> None:
         assert ctx.guild is not None
         await ctx.reply(embed=set_remove_role(self.bot, ctx.guild, role, prefix=self.p(ctx)), ephemeral=True)
+
+    @verify.command(name="staff", aliases=["verifiers"],
+                    description="Let a role verify others without Manage Server (toggle)")
+    @app_commands.describe(role="Role to allow/disallow as a verifier. Leave empty to list them.")
+    @admin()
+    async def verify_staff(self, ctx: commands.Context, role: discord.Role | None = None) -> None:
+        assert ctx.guild is not None
+        gid = ctx.guild.id
+        roles = list(self.bot.storage.get_config(gid, "verify_roles").get("roles", []))
+        if role is None:
+            if not roles:
+                body = (f"No verifier roles set. `{self.p(ctx)}verify staff @Role` lets that role run "
+                        f"`{self.p(ctx)}verify @member` without **Manage Server**.")
+            else:
+                body = "Roles that can verify others: " + ", ".join(f"<@&{r}>" for r in roles)
+            await ctx.reply(embed=discord.Embed(title="Verifier roles", description=body, colour=BRAND),
+                            ephemeral=True)
+            return
+        if role.id in roles:
+            roles.remove(role.id)
+            msg = f"{role.mention} can no longer verify others."
+        else:
+            roles.append(role.id)
+            msg = (f"{role.mention} can now run `{self.p(ctx)}verify @member` without Manage Server "
+                   f"(they still can't pick a custom role).")
+        self.bot.storage.update_config(gid, "verify_roles", roles=roles)
+        await ctx.reply(embed=discord.Embed(title="Saved ✅", description=msg, colour=BRAND), ephemeral=True)
+
+    def _is_verifier(self, guild_id: int, member) -> bool:
+        roles = self.bot.storage.get_config(guild_id, "verify_roles").get("roles", [])
+        if not roles:
+            return False
+        have = {getattr(r, "id", None) for r in getattr(member, "roles", [])}
+        return any(rid in have for rid in roles)
 
     @verify.command(name="channel", description="Only allow verification in one channel")
     @app_commands.describe(channel="The channel members must verify in")
