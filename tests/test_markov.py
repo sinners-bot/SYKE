@@ -198,8 +198,8 @@ def test_collect_skips_commands(lab):
 def yap_message(mid, channel_id=1):
     sent: list[str] = []
 
-    async def send(text):
-        sent.append(text)
+    async def send(content=None, **kwargs):
+        sent.append(content)
 
     return types.SimpleNamespace(
         id=mid, content="anyone here", guild=types.SimpleNamespace(id=42),

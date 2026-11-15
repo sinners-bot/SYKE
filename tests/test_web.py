@@ -623,6 +623,18 @@ async def test_media_page_endpoint_returns_json(dash):
         assert "https://cdn/1.png" in j["tiles"] and j["done"] is True and j["oldest"] == 1
 
 
+def test_memory_body_lists_gifs_and_stickers(dash):
+    web, bot, guild = dash
+    from syke.yap import Voice
+    voice = Voice(chain=None, gifs=["https://tenor.com/view/a-gif-1", "https://tenor.com/view/b-gif-2"])
+    g = types.SimpleNamespace(id=42, name="G",
+                              stickers=[types.SimpleNamespace(id=5, name="wave", url="https://cdn/s.png")])
+    html = web._memory_body(g, voice)
+    assert "GIFs (2)" in html and "tenor.com/view/a-gif-1" in html and "data-gif=" in html
+    assert "class='tile gif'" in html                       # gifs are frozen posters, not autoplaying
+    assert "Stickers (1)" in html and "https://cdn/s.png" in html and "wave" in html
+
+
 def test_dashboard_css_is_mobile_friendly():
     from syke.web import STYLE
     assert "@media(max-width:820px)" in STYLE            # phone breakpoint exists

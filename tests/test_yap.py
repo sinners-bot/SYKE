@@ -96,19 +96,22 @@ def _seed_voice(bot, gid, **kw):
     bot._voices[gid] = (time.monotonic(), Voice(chain=None, **kw))
 
 
-async def test_yap_extras_appends_available_emoji(cog, monkeypatch):
+async def test_yap_text_mode_only(cog, monkeypatch):
+    # No sticker/gif roll -> a single text message, emoji inline (still just "text").
     monkeypatch.setattr(botmod, "YAP_EMOJI_CHANCE", 1.0)
     monkeypatch.setattr(botmod, "YAP_STICKER_CHANCE", 0.0)
     monkeypatch.setattr(botmod, "YAP_GIF_CHANCE", 0.0)
     guild = types.SimpleNamespace(id=42, emojis=[types.SimpleNamespace(id=111)], stickers=[])
     _seed_voice(cog.bot, 42, emojis=["<:pepe:111>", "<:gone:999>"], gifs=[])
-    msg = _message(guild, _channel())
-    content, stickers = await cog.bot.yap_extras(msg, "hello")
-    assert content == "hello <:pepe:111>"   # only the emoji still on the server is used
-    assert stickers == []
+    ch = _channel()
+    await cog.bot._send_yap(_message(guild, ch), "hello", reply_to=False)
+    assert len(ch.sent) == 1                                 # exactly one message
+    content, kwargs = ch.sent[0]
+    assert content == "hello <:pepe:111>"                    # only the still-available emoji
+    assert "stickers" not in kwargs                          # no sticker alongside
 
 
-async def test_yap_extras_sends_recent_sticker(cog, monkeypatch):
+async def test_yap_sticker_only(cog, monkeypatch):
     monkeypatch.setattr(botmod, "YAP_EMOJI_CHANCE", 0.0)
     monkeypatch.setattr(botmod, "YAP_STICKER_CHANCE", 1.0)
     monkeypatch.setattr(botmod, "YAP_GIF_CHANCE", 0.0)
@@ -116,37 +119,14 @@ async def test_yap_extras_sends_recent_sticker(cog, monkeypatch):
     guild = types.SimpleNamespace(id=42, emojis=[], stickers=[sticker])
     past = [types.SimpleNamespace(stickers=[types.SimpleNamespace(id=900)])]
     _seed_voice(cog.bot, 42, emojis=[], gifs=[])
-    msg = _message(guild, _channel(past))
-    content, stickers = await cog.bot.yap_extras(msg, "hey")
-    assert content == "hey"
-    assert stickers == [sticker]
+    ch = _channel(past)
+    await cog.bot._send_yap(_message(guild, ch), "hey", reply_to=False)
+    assert len(ch.sent) == 1                                 # one message, nothing else
+    content, kwargs = ch.sent[0]
+    assert content is None and kwargs.get("stickers") == [sticker]   # sticker only, no text
 
 
-async def test_yap_extras_never_appends_gif(cog, monkeypatch):
-    monkeypatch.setattr(botmod, "YAP_EMOJI_CHANCE", 0.0)
-    monkeypatch.setattr(botmod, "YAP_STICKER_CHANCE", 0.0)
-    guild = types.SimpleNamespace(id=42, emojis=[], stickers=[])
-    _seed_voice(cog.bot, 42, emojis=[], gifs=["https://tenor.com/view/x-gif-1"])
-    msg = _message(guild, _channel())
-    content, stickers = await cog.bot.yap_extras(msg, "lol")
-    assert content == "lol"      # GIFs no longer ride along with the text
-    assert stickers == []
-
-
-async def test_contextual_gif_fits_the_conversation(cog, monkeypatch):
-    monkeypatch.setattr(botmod, "YAP_GIF_CHANCE", 1.0)
-    gifs = ["https://tenor.com/view/happy-dance-gif-1", "https://tenor.com/view/sad-cat-gif-2"]
-    _seed_voice(cog.bot, 42, emojis=[], gifs=gifs)
-    guild = types.SimpleNamespace(id=42, emojis=[], stickers=[])
-    msg = _message(guild, _channel())
-    msg.content = "i am so happy today"
-    assert await cog.bot.contextual_gif(msg, "yeah good vibes") == gifs[0]   # picks the fitting one
-    # Nothing in the pool matches -> no gif forced.
-    msg.content = "quarterly spreadsheet numbers"
-    assert await cog.bot.contextual_gif(msg, "boring meeting") is None
-
-
-async def test_send_yap_sends_gif_as_separate_message(cog, monkeypatch):
+async def test_yap_gif_only(cog, monkeypatch):
     monkeypatch.setattr(botmod, "YAP_EMOJI_CHANCE", 0.0)
     monkeypatch.setattr(botmod, "YAP_STICKER_CHANCE", 0.0)
     monkeypatch.setattr(botmod, "YAP_GIF_CHANCE", 1.0)
@@ -157,11 +137,24 @@ async def test_send_yap_sends_gif_as_separate_message(cog, monkeypatch):
     msg = _message(guild, ch)
     msg.content = "so happy right now"
     await cog.bot._send_yap(msg, "happy energy", reply_to=False)
-    sent = [c for c, _ in ch.sent]
-    assert sent == ["happy energy", gifs[0]]   # text first, GIF as its own follow-up message
+    assert len(ch.sent) == 1                                 # just the GIF, no separate text
+    content, kwargs = ch.sent[0]
+    assert content == gifs[0] and "stickers" not in kwargs
 
 
-async def test_send_yap_passes_stickers_to_reply(cog, monkeypatch):
+async def test_yap_gif_fits_context(cog):
+    from syke.yap import Voice
+    gifs = ["https://tenor.com/view/happy-dance-gif-1", "https://tenor.com/view/sad-cat-gif-2"]
+    voice = Voice(chain=None, gifs=gifs)
+    guild = types.SimpleNamespace(id=42, emojis=[], stickers=[])
+    msg = _message(guild, _channel())
+    msg.content = "i am so happy today"
+    assert await cog.bot.yap_gif(msg, "yeah good vibes", voice) == gifs[0]
+    msg.content = "quarterly spreadsheet numbers"
+    assert await cog.bot.yap_gif(msg, "boring meeting", voice) is None
+
+
+async def test_yap_sticker_only_reply(cog, monkeypatch):
     monkeypatch.setattr(botmod, "YAP_EMOJI_CHANCE", 0.0)
     monkeypatch.setattr(botmod, "YAP_STICKER_CHANCE", 1.0)
     monkeypatch.setattr(botmod, "YAP_GIF_CHANCE", 0.0)
@@ -172,5 +165,5 @@ async def test_send_yap_passes_stickers_to_reply(cog, monkeypatch):
     msg = _message(guild, _channel(past))
     await cog.bot._send_yap(msg, "yo", reply_to=True)
     content, kwargs = msg.replies[-1]
-    assert content == "yo" and kwargs.get("stickers") == [sticker]
+    assert content is None and kwargs.get("stickers") == [sticker]   # sticker reply, no text
     assert kwargs.get("mention_author") is False

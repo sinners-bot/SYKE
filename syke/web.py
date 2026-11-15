@@ -582,6 +582,8 @@ border-radius:6px;color:var(--text);font-size:13px;}
 .ch-tabs a.on{background:#2d2d3a;color:#fff;}
 .media-grid{flex:1;overflow-y:auto;padding:14px 16px;display:grid;gap:8px;align-content:start;
 grid-template-columns:repeat(auto-fill,minmax(150px,1fr));}
+.media-grid.mem{flex:none;overflow:visible;padding:0;margin-top:8px;
+grid-template-columns:repeat(auto-fill,minmax(120px,1fr));}
 .tile{position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;background:#000;display:block;}
 .tile img,.tile video,.tile canvas{width:100%;height:100%;object-fit:cover;display:block;background:#17171d;}
 .tile .cap{position:absolute;left:0;right:0;bottom:0;padding:5px 7px;font-size:11px;color:#fff;display:flex;
@@ -740,6 +742,7 @@ class WebDashboard:
         a("/dms", self.dms_page)
         a("/dm/{uid}", self.dm_view)
         a("/g/{gid}/alts", self.alt_scan)
+        a("/g/{gid}/memory", self.memory_page)
         a("/g/{gid}/announce", self.announce_page)
         p("/g/{gid}/announce", self.announce_send)
         a("/g/{gid}/c/{cid}", self.channel)
@@ -934,6 +937,7 @@ class WebDashboard:
             f"{esc(getattr(guild.owner, 'display_name', guild.owner_id))} · "
             f"<a href='/g/{guild.id}/emojis'>{emoji_count} emojis</a> · "
             f"<a href='/g/{guild.id}/alts'>🔎 Alt &amp; raid scan</a> · "
+            f"<a href='/g/{guild.id}/memory'>🧠 Memory</a> · "
             f"<a href='/g/{guild.id}/announce'>📣 Announce features</a></div>"
             f"<div class='grid' style='margin-top:14px'>{settings_form}{mod}{danger}</div>"
             f"<h2>Channels</h2><table>{''.join(rows) or '<tr><td>No text channels</td></tr>'}</table>"
@@ -1614,6 +1618,49 @@ class WebDashboard:
             html.append(self._one_message(m, prev))
             prev = m
         return "".join(html)
+
+    async def memory_page(self, request: web.Request) -> web.Response:
+        user = self._user(request)
+        if user is None:
+            raise web.HTTPFound("/login")
+        guild = self._guild_or_404(request)
+        voice = await self.bot.server_voice(guild.id)
+        return layout(f"SYKE's memory · {guild.name}", self._memory_body(guild, voice), user=user)
+
+    def _memory_body(self, guild: discord.Guild, voice) -> str:
+        secs = [f"<div class='muted'><a href='/g/{guild.id}'>← {esc(guild.name)}</a></div>"
+                "<h1>🧠 What SYKE remembers here</h1>"
+                "<p class='muted'>The GIFs and stickers SYKE has picked up from this server — what it can drop "
+                "into a yap.</p>"]
+        # GIFs mined from chat — frozen posters, click to open.
+        gifs = (voice.gifs or [])[:60]
+        if gifs:
+            tiles = "".join(
+                f"<a class='tile gif' href='{esc(g)}' target='_blank' rel='noreferrer' data-gif='{esc(g)}'>"
+                f"<canvas></canvas><span class='gifbadge'>GIF</span></a>" for g in gifs)
+            secs.append(f"<div class='prof-sec'><h3>GIFs ({len(gifs)})</h3>"
+                        f"<div class='media-grid mem'>{tiles}</div></div>")
+        else:
+            secs.append("<div class='prof-sec'><h3>GIFs</h3><div class='note'>No GIFs remembered yet — "
+                        "SYKE picks these up as people post them.</div></div>")
+        # Stickers SYKE can repost: the server's own sticker set.
+        stickers = list(getattr(guild, "stickers", []) or [])
+        if stickers:
+            st = "".join(
+                f"<a class='tile' href='{esc(getattr(s, 'url', ''))}' target='_blank' rel='noreferrer'>"
+                f"<img src='{esc(getattr(s, 'url', ''))}' loading='lazy' alt='{esc(getattr(s, 'name', ''))}'>"
+                f"<span class='cap'>{esc(getattr(s, 'name', ''))}</span></a>" for s in stickers)
+            secs.append(f"<div class='prof-sec'><h3>Stickers ({len(stickers)})</h3>"
+                        f"<div class='media-grid mem'>{st}</div></div>")
+        else:
+            secs.append("<div class='prof-sec'><h3>Stickers</h3>"
+                        "<div class='note'>This server has no stickers for SYKE to use.</div></div>")
+        body = ("<div class='prof'>" + "".join(secs) + "</div>"
+                "<script>document.querySelectorAll('.tile.gif[data-gif]').forEach(function(a){"
+                "var c=a.querySelector('canvas');if(!c)return;var img=new Image();img.onload=function(){"
+                "c.width=img.naturalWidth||300;c.height=img.naturalHeight||300;"
+                "try{c.getContext('2d').drawImage(img,0,0,c.width,c.height);}catch(e){}};img.src=a.dataset.gif;});</script>")
+        return body
 
     async def announce_page(self, request: web.Request) -> web.Response:
         user = self._user(request)

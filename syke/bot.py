@@ -913,46 +913,49 @@ class Syke(commands.Bot):
             return []
         return list(seen.values())
 
-    async def yap_extras(self, message: discord.Message, text: str) -> tuple[str, list]:
-        """Maybe dress a yap with a server emoji or a recently-used sticker (GIFs go separately)."""
-        guild = message.guild
-        voice = await self.server_voice(guild.id)
-        content, stickers = text, []
-        # A custom emoji members use, that SYKE can still post here.
+    async def yap_gif(self, message: discord.Message, text: str, voice: Voice) -> str | None:
+        """A GIF the server uses that fits what's being talked about (no chance roll)."""
+        if not (voice.gifs or []):
+            return None
+        chat = " ".join(t.text for t in await self.recent_chat(message, YAP_CONTEXT // 2))
+        return pick_gif(voice.gifs[:40], f"{text} {message.content or ''} {chat}")
+
+    def _text_with_emoji(self, guild, voice: Voice, text: str) -> str:
+        """Maybe append a server emoji members use (stays part of the text form)."""
         available = {e.id for e in getattr(guild, "emojis", ()) or ()}
         pool = [e for e in (voice.emojis or []) if emoji_id(e) in available][:12]
         if pool and not CUSTOM_EMOJI_TAG.search(text) and random.random() < YAP_EMOJI_CHANCE:
-            content = f"{content} {random.choice(pool)}"
-        # A sticker someone used recently (its own attachment, not glued to the text).
-        if random.random() < YAP_STICKER_CHANCE:
-            found = await self.recent_stickers(message)
-            if found:
-                stickers = [random.choice(found)]
-        return content, stickers
-
-    async def contextual_gif(self, message: discord.Message, text: str) -> str | None:
-        """A GIF the server uses that fits what's being talked about — sent as its own message."""
-        voice = await self.server_voice(message.guild.id)
-        if not (voice.gifs or []) or random.random() >= YAP_GIF_CHANCE:
-            return None
-        chat = " ".join(t.text for t in await self.recent_chat(message, YAP_CONTEXT // 2))
-        context = f"{text} {message.content or ''} {chat}"
-        return pick_gif(voice.gifs[:40], context)
+            return f"{text} {random.choice(pool)}"
+        return text
 
     async def _send_yap(self, message: discord.Message, text: str, *, reply_to: bool) -> None:
-        """Send a yap line (with an optional emoji/sticker), then a fitting GIF as its own message."""
-        content, stickers = await self.yap_extras(message, text)
-        kwargs = {"stickers": stickers} if stickers else {}
-        with contextlib.suppress(discord.HTTPException):
+        """Send a yap as exactly ONE of: a sticker, a GIF, or text — never combined."""
+        guild = message.guild
+        voice = await self.server_voice(guild.id)
+        roll = random.random()
+        sticker = gif = None
+        if roll < YAP_STICKER_CHANCE:
+            found = await self.recent_stickers(message)
+            if found:
+                sticker = random.choice(found)
+        elif roll < YAP_STICKER_CHANCE + YAP_GIF_CHANCE:
+            gif = await self.yap_gif(message, text, voice)
+        am = discord.AllowedMentions.none()
+
+        async def deliver(**kwargs):
             if reply_to:
-                await message.reply(content, mention_author=False, **kwargs)
+                await message.reply(mention_author=False, allowed_mentions=am, **kwargs)
             else:
-                await message.channel.send(content, **kwargs)
+                await message.channel.send(allowed_mentions=am, **kwargs)
+
+        with contextlib.suppress(discord.HTTPException):
+            if sticker is not None:
+                await deliver(stickers=[sticker])
+            elif gif is not None:
+                await deliver(content=gif)
+            else:
+                await deliver(content=self._text_with_emoji(guild, voice, text))
             self.remember_yap(message.channel.id, text)
-        gif = await self.contextual_gif(message, text)
-        if gif:
-            with contextlib.suppress(discord.HTTPException):
-                await message.channel.send(gif)
 
     def is_command_text(self, guild_id: int, text: str) -> bool:
         if dollar_tldr(text):
