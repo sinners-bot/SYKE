@@ -351,6 +351,7 @@ class Syke(commands.Bot):
         self._started = time.time()
         self.app_public: bool | None = None
         self.web = None
+        self._strip_runner = None
         self.add_check(self.channel_check)
 
     async def setup_hook(self) -> None:
@@ -368,9 +369,17 @@ class Syke(commands.Bot):
             try:
                 from .web import WebDashboard
                 self.web = WebDashboard(self)
+                self._attach_strip_api(self.web.app)
                 await self.web.start()
             except Exception:
                 log.exception("Owner web dashboard failed to start; the bot keeps running")
+        elif self.settings.strip_api_secret:
+            try:
+                from .strip_api import start_standalone
+                self._strip_runner = await start_standalone(self.storage, self.settings.strip_api_secret,
+                                                            self.settings.web_port)
+            except Exception:
+                log.exception("Strip API failed to start; the bot keeps running")
         self.add_view(ProfileView(self.load_card))
         self.add_view(ShowcaseView(self.tour_prefix, self.invite_url()))
         self.add_view(VerifyView())
@@ -389,6 +398,17 @@ class Syke(commands.Bot):
         except discord.HTTPException:
             log.exception("Slash command sync failed; prefix commands still work")
 
+    def _attach_strip_api(self, app) -> None:
+        """Serve THE STRIP game API from the dashboard's web server (if a secret is configured)."""
+        if not self.settings.strip_api_secret:
+            return
+        try:
+            from .strip_api import StripAPI
+            StripAPI(self.storage, self.settings.strip_api_secret).add_routes(app)
+            log.info("Strip API enabled at /strip/api")
+        except Exception:
+            log.exception("Strip API failed to load; the dashboard keeps running")
+
     async def get_context(self, origin, *, cls=None):
         return await super().get_context(origin, cls=cls or SykeContext)
 
@@ -396,6 +416,9 @@ class Syke(commands.Bot):
         if self.web is not None:
             with contextlib.suppress(Exception):
                 await self.web.close()
+        if self._strip_runner is not None:
+            with contextlib.suppress(Exception):
+                await self._strip_runner.cleanup()
         await super().close()
 
     async def on_guild_join(self, guild: discord.Guild) -> None:
