@@ -42,7 +42,9 @@ log = logging.getLogger("syke.economy")
 CASH = "💵"
 CHIP = "🪙"
 BANK_EMOJI = "🏦"
-CONFIG_KEY = "economy"          # per-guild config blob: {"open": bool}
+CONFIG_KEY = "economy"          # per-guild config blob: {"open": bool, "happy_until": ts, "happy_mult": x}
+HOUSE_KEY = "strip_house"       # global owner settings, stored under guild id 0: {"banned": [...], "maintenance": bool}
+HAPPY_MAX = 5.0
 
 # Fallbacks for SYKE's own emoji set (used until/unless the custom ones upload).
 EMOJI_FALLBACK = {"cash": CASH, "chip": CHIP, "bank": BANK_EMOJI, "coin": "🪙", "cards": "🃏",
@@ -145,13 +147,14 @@ def work_shift(rng: random.Random) -> tuple[str, int]:
     return rng.choice(WORK_JOBS), rng.randint(WORK_LOW, WORK_HIGH)
 
 
-def hustle(rng: random.Random) -> tuple[int, str]:
-    """A risky earn: (delta, flavor). Delta can be negative on a bust, 0 on a flop."""
+def hustle(rng: random.Random, luck: float = 0.0, safe: bool = False) -> tuple[int, str]:
+    """A risky earn: (delta, flavor). Delta can be negative on a bust, 0 on a flop.
+    `luck` raises the win chance; `safe` turns a bust into a flop."""
     roll = rng.random()
-    if roll < 0.55:
+    if roll < 0.55 + luck:
         amt = rng.randint(90, 280)
         return amt, rng.choice(HUSTLE_WINS).format(amt=fmt(amt))
-    if roll < 0.80:
+    if safe or roll < 0.80 + luck / 2:
         return 0, rng.choice(HUSTLE_FLOPS)
     loss = rng.randint(40, 130)
     return -loss, rng.choice(HUSTLE_BUSTS).format(amt=fmt(loss))
@@ -242,6 +245,19 @@ async def render(fn, *args, filename: str, **kwargs) -> discord.File | None:
     return discord.File(io.BytesIO(data), filename=filename)
 
 
+class NotTheHouse(commands.CheckFailure):
+    """Raised when someone who isn't a SYKE owner tries a House command."""
+
+
+def house_only():
+    """Only SYKE's owners (SYKE_OWNER_IDS) run the House."""
+    async def predicate(ctx: commands.Context) -> bool:
+        if ctx.author.id in ctx.bot.settings.owner_ids:
+            return True
+        raise NotTheHouse("Only SYKE's owners can run the House.")
+    return commands.check(predicate)
+
+
 # ── The cog ────────────────────────────────────────────────────────────────
 class Economy(commands.Cog, name="Economy"):
     """THE STRIP: wallets, earning, the cash cage, and the casino."""
@@ -299,6 +315,41 @@ class Economy(commands.Cog, name="Economy"):
     def _open(self, guild_id: int) -> bool:
         return bool(self.bot.storage.get_config(guild_id, CONFIG_KEY).get("open"))
 
+    def house(self) -> dict:
+        """The owner's global settings (bans, casino maintenance)."""
+        return self.bot.storage.get_config(0, HOUSE_KEY)
+
+    def banned(self, user_id: int) -> bool:
+        return user_id in (self.house().get("banned") or [])
+
+    def happy(self, guild_id: int) -> float:
+        """Earnings multiplier while a happy hour is running in this server (1.0 otherwise)."""
+        cfg = self.bot.storage.get_config(guild_id, CONFIG_KEY)
+        if cfg.get("happy_until", 0) > time.time():
+            return float(cfg.get("happy_mult", 1.0))
+        return 1.0
+
+    def buffs(self, guild_id: int, user_id: int) -> dict[str, float]:
+        return self.bot.storage.econ_buffs(guild_id, user_id, time.time())
+
+    async def _free(self, ctx, w: dict) -> bool:
+        """Jailed players can't earn or gamble. Replies and returns False if they're locked up."""
+        if w.get("jail_until", 0) > time.time():
+            await ctx.reply(embed=embed("🚔 You're in jail",
+                                        f"Out <t:{int(w['jail_until'])}:R>. Post bail with `{self.p(ctx)}bail`, "
+                                        "or get a friend to.", WARN), ephemeral=True)
+            return False
+        return True
+
+    async def _casino(self, ctx, w: dict) -> bool:
+        """Shared gate for casino games: casino not under maintenance, player not jailed."""
+        if self.house().get("maintenance"):
+            await ctx.reply(embed=embed("🚧 Casino closed for maintenance",
+                                        "The tables are being polished. Earning still works — back soon.", WARN),
+                            ephemeral=True)
+            return False
+        return await self._free(ctx, w)
+
     def p(self, ctx) -> str:
         return self.bot.display_prefix(ctx.guild.id)
 
@@ -328,6 +379,10 @@ class Economy(commands.Cog, name="Economy"):
             await ctx.reply(embed=embed(f"{self.e('slots')} The Strip is dark",
                                         f"The neon's off here. An admin can light it up with "
                                         f"`{self.p(ctx)}economy on`.", WARN), ephemeral=True)
+            return None
+        if self.banned(ctx.author.id):
+            await ctx.reply(embed=embed("🚫 You've been 86'd",
+                                        "The House has banned you from the Strip.", WARN), ephemeral=True)
             return None
         return self.bot.storage.econ_touch(ctx.guild.id, ctx.author.id, STARTING_CASH)
 
@@ -367,7 +422,7 @@ class Economy(commands.Cog, name="Economy"):
         return self.bot.storage.econ_adjust(guild_id, user_id, chips=chips)
 
     # -- balance --
-    @commands.hybrid_command(name="balance", aliases=["bal", "wallet"],
+    @commands.hybrid_command(name="balance", with_app_command=False, aliases=["bal", "wallet"],
                              description="Your Players Club card: cash, chips, bank and net worth")
     @app_commands.describe(member="Whose card to check (defaults to you)")
     async def balance(self, ctx: commands.Context, member: discord.Member | None = None) -> None:
@@ -394,7 +449,7 @@ class Economy(commands.Cog, name="Economy"):
         await self.send(ctx, e, image)
 
     # -- daily --
-    @commands.hybrid_command(name="daily", description="Claim your daily cash (build a streak for more)")
+    @commands.hybrid_command(name="daily", with_app_command=False, description="Claim your daily cash (build a streak for more)")
     async def daily(self, ctx: commands.Context) -> None:
         w = await self._guard(ctx)
         if w is None:
@@ -407,7 +462,7 @@ class Economy(commands.Cog, name="Economy"):
                                         f"Come back <t:{ready}:R>.", WARN), ephemeral=True)
             return
         streak = next_streak(w["daily_at"], now, w["streak"])
-        amount = daily_reward(streak)
+        amount = int(daily_reward(streak) * self.happy(ctx.guild.id))
         self.bot.storage.econ_adjust(ctx.guild.id, ctx.author.id, cash=amount,
                                      daily_at=now, streak=streak)
         body = f"You picked up {self.money(amount)}."
@@ -416,10 +471,10 @@ class Economy(commands.Cog, name="Economy"):
         await ctx.reply(embed=embed(f"{self.e('cash')} Daily collected", body, OK))
 
     # -- work --
-    @commands.hybrid_command(name="work", aliases=["shift"], description="Clock a shift on the Strip for cash")
+    @commands.hybrid_command(name="work", with_app_command=False, aliases=["shift"], description="Clock a shift on the Strip for cash")
     async def work(self, ctx: commands.Context) -> None:
         w = await self._guard(ctx)
-        if w is None:
+        if w is None or not await self._free(ctx, w):
             return
         now = time.time()
         if w["work_at"] and now - w["work_at"] < WORK_COOLDOWN:
@@ -428,31 +483,44 @@ class Economy(commands.Cog, name="Economy"):
                                         f"You're beat. Next shift <t:{ready}:R>.", WARN),
                             ephemeral=True)
             return
-        did, amount = work_shift(self.rng)
+        did, base = work_shift(self.rng)
+        from .stripworld import WORK_BUFFS
+        boost = self.happy(ctx.guild.id)
+        perks = []
+        for buff in self.buffs(ctx.guild.id, ctx.author.id):
+            if buff in WORK_BUFFS:
+                boost *= WORK_BUFFS[buff]
+                perks.append(buff)
+        amount = int(base * boost)
         self.bot.storage.econ_adjust(ctx.guild.id, ctx.author.id, cash=amount, work_at=now)
-        await ctx.reply(embed=embed("Shift done 🧾", f"You {did} and earned {self.money(amount)}.", OK))
+        extra = f" *(×{boost:.2f} boost)*" if boost > 1 else ""
+        await ctx.reply(embed=embed("Shift done 🧾", f"You {did} and earned {self.money(amount)}.{extra}", OK))
 
     # -- hustle --
-    @commands.hybrid_command(name="hustle", aliases=["grind"],
+    @commands.hybrid_command(name="hustle", with_app_command=False, aliases=["grind"],
                              description="Try a risky hustle — could pay off, could backfire")
     async def hustle_cmd(self, ctx: commands.Context) -> None:
         w = await self._guard(ctx)
-        if w is None:
+        if w is None or not await self._free(ctx, w):
             return
         now = time.time()
-        if w["hustle_at"] and now - w["hustle_at"] < HUSTLE_COOLDOWN:
-            ready = int(w["hustle_at"] + HUSTLE_COOLDOWN)
+        buffs = self.buffs(ctx.guild.id, ctx.author.id)
+        cooldown = HUSTLE_COOLDOWN / (2 if "chill" in buffs else 1)
+        if w["hustle_at"] and now - w["hustle_at"] < cooldown:
+            ready = int(w["hustle_at"] + cooldown)
             await ctx.reply(embed=embed("Lay low a bit",
                                         f"Too hot right now. Try again <t:{ready}:R>.", WARN),
                             ephemeral=True)
             return
-        delta, flavor = hustle(self.rng)
+        delta, flavor = hustle(self.rng, luck=0.15 if "lucky" in buffs else 0.0, safe="foresight" in buffs)
+        if delta > 0:
+            delta = int(delta * self.happy(ctx.guild.id))
         self.bot.storage.econ_adjust(ctx.guild.id, ctx.author.id, cash=delta, hustle_at=now)
         colour = OK if delta > 0 else WARN
         await ctx.reply(embed=embed("Hustle", flavor.replace(CASH, self.e("cash")), colour))
 
     # -- pay --
-    @commands.hybrid_command(name="pay", aliases=["give"], description="Send cash to someone (small tax applies)")
+    @commands.hybrid_command(name="pay", with_app_command=False, aliases=["give"], description="Send cash to someone (small tax applies)")
     @app_commands.describe(member="Who to pay", amount="How much (a number, or 'all'/'half')")
     async def pay(self, ctx: commands.Context, member: discord.Member, amount: str) -> None:
         w = await self._guard(ctx)
@@ -482,7 +550,7 @@ class Economy(commands.Cog, name="Economy"):
                                     f"(after {self.money(tax)} tax).", OK))
 
     # -- bank --
-    @commands.hybrid_command(name="deposit", aliases=["dep"], description="Move cash into your bank")
+    @commands.hybrid_command(name="deposit", with_app_command=False, aliases=["dep"], description="Move cash into your bank")
     @app_commands.describe(amount="How much (a number, or 'all'/'half')")
     async def deposit(self, ctx: commands.Context, amount: str) -> None:
         w = await self._guard(ctx)
@@ -496,7 +564,7 @@ class Economy(commands.Cog, name="Economy"):
         self.bot.storage.econ_adjust(ctx.guild.id, ctx.author.id, cash=-value, bank=value)
         await ctx.reply(embed=embed(f"{self.e('bank')} Deposited", f"Banked {self.money(value)}.", OK))
 
-    @commands.hybrid_command(name="withdraw", aliases=["wd"], description="Take cash out of your bank")
+    @commands.hybrid_command(name="withdraw", with_app_command=False, aliases=["wd"], description="Take cash out of your bank")
     @app_commands.describe(amount="How much (a number, or 'all'/'half')")
     async def withdraw(self, ctx: commands.Context, amount: str) -> None:
         w = await self._guard(ctx)
@@ -511,7 +579,7 @@ class Economy(commands.Cog, name="Economy"):
         await ctx.reply(embed=embed(f"{self.e('cash')} Withdrew", f"Took out {self.money(value)}.", OK))
 
     # -- the cash cage: cash <-> chips, free --
-    @commands.hybrid_command(name="chips", aliases=["cage", "buychips"],
+    @commands.hybrid_command(name="chips", with_app_command=False, aliases=["cage", "buychips"],
                              description="The cash cage: swap cash for chips (free) — e.g. chips 500")
     @app_commands.describe(action="An amount of cash to swap for chips — or 'buy'/'cash' then an amount",
                            amount="The amount, when you picked buy or cash")
@@ -544,7 +612,7 @@ class Economy(commands.Cog, name="Economy"):
         await ctx.reply(embed=embed(f"{self.e('chip')} Chips bought",
                                     f"{self.money(value)} cash → {self.money(got, 'chip')} chips. No fee.", OK))
 
-    @commands.hybrid_command(name="cashout", aliases=["cashin"], description="Swap your chips back into cash (free)")
+    @commands.hybrid_command(name="cashout", with_app_command=False, aliases=["cashin"], description="Swap your chips back into cash (free)")
     @app_commands.describe(amount="How many chips (a number, or 'all'/'half'; default all)")
     async def cashout(self, ctx: commands.Context, amount: str = "all") -> None:
         w = await self._guard(ctx)
@@ -564,11 +632,11 @@ class Economy(commands.Cog, name="Economy"):
                                     f"{self.money(value, 'chip')} chips → {self.money(got)} cash. No fee.", OK))
 
     # -- casino: quick games --
-    @commands.hybrid_command(name="slots", aliases=["slot"], description="Pull the neon slots")
+    @commands.hybrid_command(name="slots", with_app_command=False, aliases=["slot"], description="Pull the neon slots")
     @app_commands.describe(bet="How many chips to bet (number, or 'all'/'half')")
     async def slots(self, ctx: commands.Context, bet: str) -> None:
         w = await self._guard(ctx)
-        if w is None:
+        if w is None or not await self._casino(ctx, w):
             return
         placed = await self._place_bet(ctx, w, bet)
         if placed is None:
@@ -589,12 +657,12 @@ class Economy(commands.Cog, name="Economy"):
         body += f"\nChips: {self.money(after['chips'], 'chip')}{self._cage_note(converted)}"
         await self.send(ctx, self.casino_embed(f"{self.e('slots')} Slots", body, colour, image), image)
 
-    @commands.hybrid_command(name="flip", aliases=["coinflip", "cf"],
+    @commands.hybrid_command(name="flip", with_app_command=False, aliases=["coinflip", "cf"],
                              description="Coinflip for chips — heads or tails (pays 1.95×)")
     @app_commands.describe(side="heads or tails", bet="How many chips to bet")
     async def flip(self, ctx: commands.Context, side: str, bet: str) -> None:
         w = await self._guard(ctx)
-        if w is None:
+        if w is None or not await self._casino(ctx, w):
             return
         pick = side.strip().lower()
         if pick in ("h", "head", "heads"):
@@ -620,12 +688,12 @@ class Economy(commands.Cog, name="Economy"):
         body += f"\nChips: {self.money(after['chips'], 'chip')}{self._cage_note(converted)}"
         await self.send(ctx, self.casino_embed(f"{self.e('coin')} Coin flip", body, colour, image), image)
 
-    @commands.hybrid_command(name="roulette", aliases=["roul"],
+    @commands.hybrid_command(name="roulette", with_app_command=False, aliases=["roul"],
                              description="Spin the wheel: a number (0-36) or red/black/even/odd/low/high")
     @app_commands.describe(space="A number 0-36, or red/black/even/odd/low/high", bet="Chips to bet")
     async def roulette(self, ctx: commands.Context, space: str, bet: str) -> None:
         w = await self._guard(ctx)
-        if w is None:
+        if w is None or not await self._casino(ctx, w):
             return
         if not valid_roulette_space(space):
             await ctx.reply(embed=embed("Pick a space",
@@ -670,12 +738,12 @@ class Economy(commands.Cog, name="Economy"):
             return shoe, True
         return shoe, False
 
-    @commands.hybrid_command(name="blackjack", aliases=["bj", "21"],
+    @commands.hybrid_command(name="blackjack", with_app_command=False, aliases=["bj", "21"],
                              description="Sit down at the blackjack table — real Vegas Strip rules")
     @app_commands.describe(bet="How many chips to bet (number, or 'all'/'half')")
     async def blackjack(self, ctx: commands.Context, bet: str) -> None:
         w = await self._guard(ctx)
-        if w is None:
+        if w is None or not await self._casino(ctx, w):
             return
         if self._busy(ctx):
             await self._already_playing(ctx)
@@ -691,12 +759,12 @@ class Economy(commands.Cog, name="Economy"):
         view.message = await self.send(ctx, e, image, view)
 
     # -- casino: hi-lo --
-    @commands.hybrid_command(name="hilo", aliases=["hl", "higherlower"],
+    @commands.hybrid_command(name="hilo", with_app_command=False, aliases=["hl", "higherlower"],
                              description="Higher or lower? Build a multiplier, cash out before you miss")
     @app_commands.describe(bet="How many chips to bet (number, or 'all'/'half')")
     async def hilo(self, ctx: commands.Context, bet: str) -> None:
         w = await self._guard(ctx)
-        if w is None:
+        if w is None or not await self._casino(ctx, w):
             return
         if self._busy(ctx):
             await self._already_playing(ctx)
@@ -711,7 +779,7 @@ class Economy(commands.Cog, name="Economy"):
         view.message = await self.send(ctx, e, image, view)
 
     # -- leaderboard --
-    @commands.hybrid_command(name="rich", aliases=["baltop", "richest"],
+    @commands.hybrid_command(name="rich", with_app_command=False, aliases=["baltop", "richest"],
                              description="Richest on the Strip")
     async def rich(self, ctx: commands.Context) -> None:
         w = await self._guard(ctx)
@@ -751,8 +819,9 @@ class Economy(commands.Cog, name="Economy"):
         p = self.p(ctx)
         await ctx.reply(embed=embed(f"{self.e('slots')} The Strip is OPEN",
                                     f"The neon's on. Everyone starts with {self.money(STARTING_CASH)}.\n"
-                                    f"Earn with `{p}daily` and `{p}work`, then hit the casino: "
-                                    f"`{p}blackjack`, `{p}slots`, `{p}roulette`, `{p}hilo`, `{p}flip`.", OK))
+                                    f"**Earn** `{p}daily` `{p}work` `{p}hustle` · **Casino** `{p}blackjack` "
+                                    f"`{p}roulette` `{p}slots` `{p}hilo`\n**Shop** `{p}shop` · **Crime** `{p}rob` "
+                                    f"`{p}crime` `{p}heist` · **Property** `{p}property` — own a storefront.", OK))
 
     @economy.command(name="off", aliases=["close"], description="Close the Strip (balances are kept)")
     @moderator("manage_guild")
@@ -801,6 +870,245 @@ class Economy(commands.Cog, name="Economy"):
         self.bot.storage.econ_reset(ctx.guild.id, member.id)
         await ctx.reply(embed=embed("Reset", f"{member.mention}'s wallet is wiped.", WARN))
 
+    # -- the House: SYKE owners run the economy everywhere --
+    def _where(self, ctx, server: str | None) -> int | None:
+        if server and server.strip().isdigit():
+            return int(server)
+        return ctx.guild.id if ctx.guild else None
+
+    def _server_name(self, gid: int) -> str:
+        g = self.bot.get_guild(gid)
+        return f"**{g.name}**" if g else f"server `{gid}`"
+
+    async def _need_server(self, ctx) -> None:
+        await ctx.reply(embed=embed("Which server?", "You're in DMs — add the server ID at the end.", WARN),
+                        ephemeral=True)
+
+    @commands.hybrid_group(name="house", fallback="status", case_insensitive=True,
+                           description="SYKE owners: run the economy in every server")
+    @app_commands.default_permissions(administrator=True)
+    @house_only()
+    async def house_cmd(self, ctx: commands.Context) -> None:
+        g = self.bot.storage.econ_global()
+        h = self.house()
+        opened = sum(1 for cfg in self.bot.storage.configs(CONFIG_KEY).values() if cfg.get("open"))
+        lines = [f"**{g['players']:,}** players in **{g['servers']}** servers · Strip open in **{opened}**",
+                 f"{self.money(g['cash'])} cash · {self.money(g['chips'], 'chip')} chips · "
+                 f"{self.money(g['bank'], 'bank')} banked",
+                 f"Casino: {'🚧 **maintenance**' if h.get('maintenance') else '🟢 open'} · "
+                 f"86'd players: **{len(h.get('banned') or [])}**"]
+        if ctx.guild:
+            mult = self.happy(ctx.guild.id)
+            lines.append(f"Here: {'🟢 open' if self._open(ctx.guild.id) else '🔴 closed'}"
+                         + (f" · 🍸 happy hour ×{mult:g}" if mult > 1 else ""))
+        p = self.p(ctx) if ctx.guild else "!"
+        lines.append(f"\n`{p}house give/take/set/peek/reset <user>` · `open`/`close`/`wipe` · `ban`/`unban` · "
+                     f"`jail`/`free` · `happyhour <x> [hours]` · `maintenance on/off`\n"
+                     "*Add a server ID at the end to act on another server.*")
+        await ctx.reply(embed=embed("🎩 The House", "\n".join(lines), BRAND), ephemeral=True)
+
+    @house_cmd.command(name="give", description="Add cash, chips or bank to anyone's wallet")
+    @app_commands.describe(user="Who", amount="How much (negative takes)", currency="cash, chips or bank",
+                           server="Server ID (defaults to this one)")
+    @house_only()
+    async def house_give(self, ctx: commands.Context, user: discord.User, amount: int, currency: str = "cash",
+                         server: str | None = None) -> None:
+        gid = self._where(ctx, server)
+        cur = currency.strip().lower()
+        cur = "chips" if cur.startswith("chip") else cur
+        if gid is None:
+            await self._need_server(ctx)
+            return
+        if cur not in ("cash", "chips", "bank") or amount == 0:
+            await ctx.reply(embed=embed("Check that", "Currency is `cash`, `chips` or `bank`; amount can't be 0.",
+                                        WARN), ephemeral=True)
+            return
+        self.bot.storage.econ_touch(gid, user.id, STARTING_CASH)
+        w = self.bot.storage.econ_adjust(gid, user.id, **{cur: amount})
+        kind = {"cash": "cash", "chips": "chip", "bank": "bank"}[cur]
+        await ctx.reply(embed=embed("🎩 Done", f"{'Gave' if amount > 0 else 'Took'} {user.mention} "
+                                    f"{self.money(abs(amount), kind)} {cur} in {self._server_name(gid)}. "
+                                    f"They now have {self.money(w[cur], kind)}.", OK), ephemeral=True)
+
+    @house_cmd.command(name="take", description="Remove cash, chips or bank from anyone's wallet")
+    @app_commands.describe(user="Who", amount="How much", currency="cash, chips or bank",
+                           server="Server ID (defaults to this one)")
+    @house_only()
+    async def house_take(self, ctx: commands.Context, user: discord.User, amount: int, currency: str = "cash",
+                         server: str | None = None) -> None:
+        await self.house_give.callback(self, ctx, user, -abs(amount), currency, server)
+
+    @house_cmd.command(name="set", description="Set someone's cash, chips or bank to an exact amount")
+    @app_commands.describe(user="Who", currency="cash, chips or bank", amount="New balance",
+                           server="Server ID (defaults to this one)")
+    @house_only()
+    async def house_set(self, ctx: commands.Context, user: discord.User, currency: str, amount: int,
+                        server: str | None = None) -> None:
+        gid = self._where(ctx, server)
+        cur = currency.strip().lower()
+        cur = "chips" if cur.startswith("chip") else cur
+        if gid is None:
+            await self._need_server(ctx)
+            return
+        if cur not in ("cash", "chips", "bank") or amount < 0:
+            await ctx.reply(embed=embed("Check that", "Currency is `cash`, `chips` or `bank`; amount ≥ 0.", WARN),
+                            ephemeral=True)
+            return
+        self.bot.storage.econ_touch(gid, user.id, STARTING_CASH)
+        self.bot.storage.econ_set(gid, user.id, **{cur: amount})
+        await ctx.reply(embed=embed("🎩 Set", f"{user.mention}'s {cur} is now **{amount:,}** in "
+                                    f"{self._server_name(gid)}.", OK), ephemeral=True)
+
+    @house_cmd.command(name="peek", description="Look at anyone's wallet, items and timers")
+    @app_commands.describe(user="Who", server="Server ID (defaults to this one)")
+    @house_only()
+    async def house_peek(self, ctx: commands.Context, user: discord.User, server: str | None = None) -> None:
+        gid = self._where(ctx, server)
+        if gid is None:
+            await self._need_server(ctx)
+            return
+        w = self.bot.storage.econ_wallet(gid, user.id)
+        items = self.bot.storage.econ_items(gid, user.id)
+        now = time.time()
+        lines = [f"{self.money(w['cash'])} cash · {self.money(w['chips'], 'chip')} chips · "
+                 f"{self.money(w['bank'], 'bank')} bank · net **{self._net(w):,}**",
+                 f"Rank #{self.bot.storage.econ_rank(gid, user.id) or '—'} · streak {w['streak']}"]
+        if w["jail_until"] > now:
+            lines.append(f"🚔 Jailed until <t:{int(w['jail_until'])}:t>")
+        if items:
+            lines.append("Items: " + ", ".join(f"{k}×{n}" for k, n in items.items()))
+        if self.banned(user.id):
+            lines.append("🚫 86'd from the Strip")
+        await ctx.reply(embed=embed(f"🎩 {user.display_name} in {self._server_name(gid).strip('*')}",
+                                    "\n".join(lines), BRAND), ephemeral=True)
+
+    @house_cmd.command(name="reset", description="Wipe one player's wallet")
+    @app_commands.describe(user="Who", server="Server ID (defaults to this one)")
+    @house_only()
+    async def house_reset(self, ctx: commands.Context, user: discord.User, server: str | None = None) -> None:
+        gid = self._where(ctx, server)
+        if gid is None:
+            await self._need_server(ctx)
+            return
+        self.bot.storage.econ_reset(gid, user.id)
+        await ctx.reply(embed=embed("🎩 Reset", f"{user.mention}'s wallet in {self._server_name(gid)} is wiped.",
+                                    WARN), ephemeral=True)
+
+    @house_cmd.command(name="wipe", description="Wipe a whole server's economy (wallets, items, property)")
+    @app_commands.describe(confirm="Type 'confirm' to really do it", server="Server ID (defaults to this one)")
+    @house_only()
+    async def house_wipe(self, ctx: commands.Context, confirm: str = "", server: str | None = None) -> None:
+        gid = self._where(ctx, server)
+        if gid is None:
+            await self._need_server(ctx)
+            return
+        if confirm.strip().lower() != "confirm":
+            await ctx.reply(embed=embed("Are you sure?", f"This erases every wallet, item and storefront in "
+                                        f"{self._server_name(gid)}. Run it again with `confirm`.", WARN),
+                            ephemeral=True)
+            return
+        n = self.bot.storage.econ_reset_guild(gid)
+        shops = self.bot.storage.econ_reset_shops(gid)
+        await ctx.reply(embed=embed("🎩 Wiped", f"Cleared {n} wallet(s) and {shops} storefront(s) in "
+                                    f"{self._server_name(gid)}.", WARN), ephemeral=True)
+
+    @house_cmd.command(name="open", description="Open the Strip in a server")
+    @app_commands.describe(server="Server ID (defaults to this one)")
+    @house_only()
+    async def house_open(self, ctx: commands.Context, server: str | None = None) -> None:
+        await self._house_toggle(ctx, server, True)
+
+    @house_cmd.command(name="close", description="Close the Strip in a server (balances kept)")
+    @app_commands.describe(server="Server ID (defaults to this one)")
+    @house_only()
+    async def house_close(self, ctx: commands.Context, server: str | None = None) -> None:
+        await self._house_toggle(ctx, server, False)
+
+    async def _house_toggle(self, ctx, server: str | None, state: bool) -> None:
+        gid = self._where(ctx, server)
+        if gid is None:
+            await self._need_server(ctx)
+            return
+        self.bot.storage.update_config(gid, CONFIG_KEY, open=state)
+        await ctx.reply(embed=embed("🎩 Done", f"The Strip is now {'open 🟢' if state else 'closed 🔴'} in "
+                                    f"{self._server_name(gid)}.", OK), ephemeral=True)
+
+    @house_cmd.command(name="ban", aliases=["86"], description="86 someone: ban them from the Strip everywhere")
+    @app_commands.describe(user="Who to ban")
+    @house_only()
+    async def house_ban(self, ctx: commands.Context, user: discord.User) -> None:
+        banned = list(self.house().get("banned") or [])
+        if user.id not in banned:
+            banned.append(user.id)
+        self.bot.storage.update_config(0, HOUSE_KEY, banned=banned)
+        await ctx.reply(embed=embed("🚫 86'd", f"{user.mention} is banned from the Strip in every server.", WARN),
+                        ephemeral=True)
+
+    @house_cmd.command(name="unban", description="Let an 86'd player back on the Strip")
+    @app_commands.describe(user="Who to let back in")
+    @house_only()
+    async def house_unban(self, ctx: commands.Context, user: discord.User) -> None:
+        banned = [u for u in (self.house().get("banned") or []) if u != user.id]
+        self.bot.storage.update_config(0, HOUSE_KEY, banned=banned)
+        await ctx.reply(embed=embed("🎩 Welcome back", f"{user.mention} can play again.", OK), ephemeral=True)
+
+    @house_cmd.command(name="jail", description="Throw someone in jail for N minutes")
+    @app_commands.describe(user="Who", minutes="How long", server="Server ID (defaults to this one)")
+    @house_only()
+    async def house_jail(self, ctx: commands.Context, user: discord.User, minutes: int,
+                         server: str | None = None) -> None:
+        gid = self._where(ctx, server)
+        if gid is None:
+            await self._need_server(ctx)
+            return
+        until = time.time() + max(1, minutes) * 60
+        self.bot.storage.econ_touch(gid, user.id, STARTING_CASH)
+        self.bot.storage.econ_adjust(gid, user.id, jail_until=until)
+        await ctx.reply(embed=embed("🚔 Locked up", f"{user.mention} is jailed until <t:{int(until)}:t>.", WARN),
+                        ephemeral=True)
+
+    @house_cmd.command(name="free", description="Release someone from jail")
+    @app_commands.describe(user="Who", server="Server ID (defaults to this one)")
+    @house_only()
+    async def house_free(self, ctx: commands.Context, user: discord.User, server: str | None = None) -> None:
+        gid = self._where(ctx, server)
+        if gid is None:
+            await self._need_server(ctx)
+            return
+        self.bot.storage.econ_adjust(gid, user.id, jail_until=0)
+        await ctx.reply(embed=embed("🔓 Released", f"{user.mention} walks free.", OK), ephemeral=True)
+
+    @house_cmd.command(name="happyhour", aliases=["boost"], description="Multiply everyone's earnings for a while")
+    @app_commands.describe(multiplier="e.g. 2 for double (1 ends it)", hours="How long (default 1)",
+                           server="Server ID (defaults to this one)")
+    @house_only()
+    async def house_happy(self, ctx: commands.Context, multiplier: float, hours: float = 1.0,
+                          server: str | None = None) -> None:
+        gid = self._where(ctx, server)
+        if gid is None:
+            await self._need_server(ctx)
+            return
+        mult = max(1.0, min(HAPPY_MAX, multiplier))
+        if mult <= 1.0:
+            self.bot.storage.update_config(gid, CONFIG_KEY, happy_until=None, happy_mult=None)
+            await ctx.reply(embed=embed("🍸 Last call", f"Happy hour is over in {self._server_name(gid)}.", OK),
+                            ephemeral=True)
+            return
+        until = time.time() + max(0.1, min(hours, 72)) * 3600
+        self.bot.storage.update_config(gid, CONFIG_KEY, happy_until=until, happy_mult=mult)
+        await ctx.reply(embed=embed("🍸 Happy hour!", f"Earnings ×{mult:g} in {self._server_name(gid)} until "
+                                    f"<t:{int(until)}:t> — daily, work, hustles, crime and chat.", OK))
+
+    @house_cmd.command(name="maintenance", description="Close every casino table (earning keeps working)")
+    @app_commands.describe(state="on or off")
+    @house_only()
+    async def house_maintenance(self, ctx: commands.Context, state: str) -> None:
+        on = state.strip().lower() in ("on", "true", "yes", "1", "close", "closed")
+        self.bot.storage.update_config(0, HOUSE_KEY, maintenance=on)
+        await ctx.reply(embed=embed("🚧 Maintenance on" if on else "🎰 Casino reopened",
+                                    "Every casino table is closed." if on else "The tables are live again.",
+                                    WARN if on else OK), ephemeral=True)
+
     # -- passive: a tiny trickle for being active --
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -818,7 +1126,8 @@ class Economy(commands.Cog, name="Economy"):
             return
         self._chat_at[key] = now
         self.bot.storage.econ_touch(message.guild.id, message.author.id, STARTING_CASH)
-        self.bot.storage.econ_adjust(message.guild.id, message.author.id, cash=CHAT_REWARD)
+        self.bot.storage.econ_adjust(message.guild.id, message.author.id,
+                                     cash=int(CHAT_REWARD * self.happy(message.guild.id)))
 
 
 # ── interactive tables ─────────────────────────────────────────────────────

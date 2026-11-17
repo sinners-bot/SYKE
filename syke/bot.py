@@ -41,6 +41,8 @@ from .automod import AutoMod, help_lines as automod_help
 from .community import Community, help_lines as community_help
 from .dashboard import DashboardCog
 from .economy import Economy
+from .stripworld import StripWorld
+from .strip_slash import StripSlash
 from .moderation import Moderation, help_lines as moderation_help, pretty as pretty_permission
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
 from .scanner import Scanner, to_msg
@@ -359,6 +361,8 @@ class Syke(commands.Bot):
         await self.add_cog(TextFun(self))
         await self.add_cog(Community(self))
         await self.add_cog(Economy(self))
+        await self.add_cog(StripWorld(self))
+        await self.add_cog(StripSlash(self))
         await self.add_cog(DashboardCog(self))
         if self.settings.web_enabled:
             try:
@@ -1241,6 +1245,8 @@ class Syke(commands.Bot):
             embed = notice("Which channel?", f"I couldn't find `{err.argument}`. Mention it like `#general`.")
         elif isinstance(err, (commands.MissingRequiredArgument, commands.BadArgument)):
             embed = notice("Not quite", f"Usage: {usage}")
+        elif isinstance(err, (commands.CheckFailure, app_commands.CheckFailure)):
+            embed = notice("Not so fast", str(err) or "You can't use that here.")
         else:
             log.error("Command %s failed", ctx.command, exc_info=err)
             embed = notice("Experiment failed 💥", "Something went wrong while judging. Try again in a moment.")

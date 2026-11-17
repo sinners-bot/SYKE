@@ -39,6 +39,10 @@ class Category:
     commands: list[str] = field(default_factory=list)
     # Optional richer text / examples for a command, keyed by its name.
     details: dict[str, str] = field(default_factory=dict)
+    # Optional grouping for the category page: [(heading, [command, ...]), ...].
+    sections: list[tuple[str, list[str]]] = field(default_factory=list)
+    # Commands whose access differs from the category's (e.g. an admin command among everyone's).
+    access_of: dict[str, str] = field(default_factory=dict)
 
 
 # Every top-level command/group name belongs to exactly one category.
@@ -177,31 +181,70 @@ CATALOG: list[Category] = [
         },
     ),
     Category(
-        "economy", "💸", "THE STRIP (Economy)", EVERYONE,
-        "A neon Vegas economy: earn cash, hit the casino — blackjack, slots, roulette, Hi-Lo — and climb the rich list.",
-        ["balance", "daily", "work", "hustle", "pay", "deposit", "withdraw",
-         "chips", "cashout", "blackjack", "slots", "roulette", "hilo", "flip", "rich", "economy"],
+        "economy", "💸", "The Strip", EVERYONE,
+        "A neon Vegas economy: earn, shop, scheme and own a storefront.",
+        ["daily", "work", "hustle", "pay", "balance", "deposit", "withdraw", "rich",
+         "shop", "buy", "use", "inventory", "pawn", "rob", "crime", "heist", "jail", "bail",
+         "property", "cashup", "economy", "house"],
         {
             "balance": "Your Players Club card — cash, chips, bank, net worth and tier (Bronze up to Black). "
                        "@mention someone to see theirs.",
+            "daily": "Claim your daily cash — claim on consecutive days to build a streak for bigger payouts.",
+            "work": "Clock a themed shift on the Strip for cash. Hourly cooldown. Food and a fresh set of nails "
+                    "boost your pay.",
+            "hustle": "A risky earn: usually pays, sometimes flops, occasionally backfires.",
+            "pay": "Send cash to another member. A small tax is skimmed off the top.",
+            "deposit": "Bank your cash. Money in the bank can't be robbed — cash on hand can.",
+            "rich": "The leaderboard — richest net worth on the Strip.",
+            "shop": "Every storefront sells something: scratchers and padlocks at the General Store, food buffs at "
+                    "the Golden Dragon, luck from Madame Rose, rare vinyl at Dead Air Records, a custom name colour "
+                    "at Sherwin Williams. `shop <store>` looks inside one.",
+            "buy": "Buy an item with cash: `buy padlock`, `buy scratch 5`. The store's owner gets 10% of the sale.",
+            "use": "Use an item: `use scratch`, `use crate`, `use lomein`. Paint jobs take a colour: "
+                   "`use paintjob #ff3ea5`.",
+            "pawn": "Sell items back at Pawn Deals for 40% (records for 80% of their value). `pawn crate all`.",
+            "rob": "Lift 10–30% of someone's cash on hand (the bank is safe). Padlocks stop you cold. Get caught and "
+                   "you pay them a fine and go to jail for 30 minutes.",
+            "crime": "A solo job: 400–1,200 cash if it works, a fine and 20–45 minutes in jail if it doesn't.",
+            "heist": "Hit an owned storefront's register for half of what's in it. Trip the alarm and you pay the "
+                     "owner damages and do 45 minutes.",
+            "jail": "See who's locked up. Jailed players can't earn or gamble until they're out.",
+            "bail": "Post bail at Bail Bonds — for yourself or a friend. Costs more the longer the sentence left.",
+            "property": "11 storefronts per server, one owner each. Buy one and it earns every hour into its register "
+                        "(holds a day's takings), plus 10% of every sale inside. `property buy/upgrade/sell`.",
+            "cashup": "Empty the registers of every storefront you own — before someone heists them.",
+            "economy": "Admins: `economy on`/`off` opens or closes the Strip, plus `give`/`take`/`reset` wallets.",
+            "house": "SYKE owners: run the economy in any server — `give`/`take`/`set`/`peek`/`reset` wallets, "
+                     "`open`/`close`/`wipe` servers, `ban` (86) players, `jail`/`free`, `happyhour <x> [hours]` "
+                     "and `maintenance on/off` for the casino.",
+        },
+        sections=[("Earn", ["daily", "work", "hustle", "pay"]),
+                  ("Wallet", ["balance", "deposit", "withdraw", "rich"]),
+                  ("Shops", ["shop", "buy", "use", "inventory", "pawn"]),
+                  ("Crime", ["rob", "crime", "heist", "jail", "bail"]),
+                  ("Property", ["property", "cashup"]),
+                  ("Admin", ["economy", "house"])],
+        access_of={"economy": ADMIN, "house": OWNER},
+    ),
+    Category(
+        "casino", "🎰", "Casino", EVERYONE,
+        "Real Vegas tables. Bets top up from your cash automatically.",
+        ["blackjack", "roulette", "slots", "hilo", "flip", "chips", "cashout"],
+        {
             "blackjack": "A real Vegas Strip table: 6-deck shoe, blackjack pays 3:2, dealer stands on all 17s. "
                          "Hit, stand, double down, split any pair (10s included, up to 4 hands), insurance / "
                          "even money and late surrender — all with buttons.",
+            "roulette": "Bet a number (0-36) or red/black/even/odd/low/high on a single-zero wheel.",
+            "slots": "Pull the neon slots. Three-of-a-kind pays big; two cherries pays small.",
             "hilo": "Higher or lower than the current card? Every right call grows your multiplier — cash out "
                     "before you miss. Aces high, ties lose.",
-            "cashout": "Swap chips back into cash at the cage. Free, 1:1. Defaults to all your chips.",
-            "daily": "Claim your daily cash — claim on consecutive days to build a streak for bigger payouts.",
-            "work": "Clock a themed shift on the Strip for cash. Hourly cooldown.",
-            "hustle": "A risky earn: usually pays, sometimes flops, occasionally backfires.",
-            "pay": "Send cash to another member. A small tax is skimmed off the top.",
+            "flip": "Coinflip for chips — call `heads` or `tails`. Pays 1.95×.",
             "chips": "The cash cage — `chips 500` swaps cash for chips, free and 1:1. You rarely need it: "
                      "any bet tops itself up from your cash automatically.",
-            "slots": "Pull the neon slots with chips. Three-of-a-kind pays big; two cherries pays small.",
-            "flip": "Coinflip for chips — call `heads` or `tails`.",
-            "roulette": "Bet a number (0-36) or red/black/even/odd/low/high.",
-            "rich": "The leaderboard — richest net worth on the Strip.",
-            "economy": "Admins: `economy on`/`off` opens or closes the Strip, plus `give`/`take`/`reset` wallets.",
+            "cashout": "Swap chips back into cash at the cage. Free, 1:1. Defaults to all your chips.",
         },
+        sections=[("Tables", ["blackjack", "roulette", "slots", "hilo", "flip"]),
+                  ("Cash cage", ["chips", "cashout"])],
     ),
     Category(
         "meta", "ℹ️", "About & Account", EVERYONE,
@@ -218,6 +261,89 @@ CATALOG: list[Category] = [
     ),
 ]
 
+# Compact titles, one-line blurbs and sections for the menu (detailed text above stays for `help <cmd>`).
+LAYOUT: dict[str, tuple[str, str, list[tuple[str, list[str]]]]] = {
+    "profile": ("Profile", "SYKE's read on people, from what they post.", []),
+    "ai": ("AI", "Talk to SYKE — or let it join the chat.", []),
+    "games": ("Fun", "Games and text toys. Reply to a message or pass text.", [
+        ("Games", ["guess"]),
+        ("Text effects", ["drunk", "high", "scramble", "zalgo", "uwu", "mock", "keysmash", "leet", "stutter",
+                          "clap", "reverse", "woke"]),
+        ("Afflictions", ["afflict", "cure", "afflicted"])]),
+    "emoji": ("Emojis", "Grow your emoji and sticker collection.", []),
+    "mod": ("Moderation", "Every action is logged as a numbered case.", [
+        ("Warnings", ["warn", "warnings", "history", "delwarn", "clearwarns"]),
+        ("Timeouts & bans", ["timeout", "untimeout", "kick", "ban", "unban", "tempban", "softban"]),
+        ("Channels", ["purge", "slowmode", "lock", "unlock"]),
+        ("Restrictions", ["restrict", "unrestrict", "restrictions", "modlog"])]),
+    "automod": ("Automod", "Rules enforced on every message. Mods are never caught.", []),
+    "security": ("Security", "Anti-nuke and anti-raid. Off until you turn it on.", []),
+    "setup": ("Setup", "Verification, welcomes and what SYKE reads.", [
+        ("Members", ["verify", "welcome", "awards"]),
+        ("Reading", ["track", "untrack", "channels", "rescan", "collect"]),
+        ("Server", ["prefix", "timezone", "dashboard", "demo", "sample"])]),
+    "meta": ("About", "SYKE itself, and your data.", [
+        ("SYKE", ["help", "about", "invite", "showcase", "diagnose", "inviter"]),
+        ("Your data", ["scanme", "optout", "optin"]),
+        ("Owners", ["servers"])]),
+}
+# Sections rendered as a single line of command names (they all work the same way).
+INLINE_SECTIONS = {"Text effects"}
+ACCESS_OF = {"afflict": MODERATOR, "cure": MODERATOR, "afflicted": MODERATOR, "yap": ADMIN, "servers": OWNER,
+             "verify": EVERYONE}
+
+BRIEF = {
+    "profile": "Full personality report", "iq": "IQ estimate", "aura": "Aura reading",
+    "ship": "How well two people match", "top": "Trait leaderboard", "tldr": "Catch up on the chat",
+    "mimic": "Talk like someone", "dexify": "Dramatic… pedro… pauses",
+    "ask": "Ask SYKE anything", "yap": "Let SYKE chime into chats",
+    "guess": "Who said it?", "afflict": "Stick an effect on someone", "cure": "Remove an effect",
+    "afflicted": "Who's afflicted",
+    "emoji": "Add, steal or manage emojis", "sticker": "Add, steal or manage stickers",
+    "steal": "Steal from a replied message",
+    "warn": "Warn a member", "warnings": "Someone's warnings", "history": "Full mod record",
+    "delwarn": "Delete a warning", "clearwarns": "Clear all warnings",
+    "timeout": "Time someone out", "untimeout": "End a timeout", "kick": "Kick a member",
+    "ban": "Ban, even if they left", "unban": "Unban by ID", "tempban": "Ban for a set time",
+    "softban": "Ban + unban to wipe messages",
+    "purge": "Bulk-delete messages", "slowmode": "Set slowmode", "lock": "Lock a channel",
+    "unlock": "Unlock a channel",
+    "restrict": "Block images, links, reactions…", "unrestrict": "Lift restrictions",
+    "restrictions": "Who's restricted", "modlog": "Set the mod-log channel",
+    "automod": "Overview and settings", "filter": "Word and slur blacklist", "links": "Invite and link control",
+    "antispam": "Floods, mentions and caps",
+    "antinuke": "Stop rogue admins", "antiraid": "Stop join raids", "raidmode": "Lock the gate now",
+    "verify": "Verify members", "welcome": "Welcome message", "awards": "Weekly chat awards",
+    "track": "Let SYKE read a channel", "untrack": "Stop reading a channel",
+    "channels": "Settings and watched channels", "rescan": "Re-read watched channels",
+    "collect": "Read older history", "prefix": "Change the prefix", "timezone": "Server timezone",
+    "dashboard": "Every setting, with buttons", "demo": "Add fake test members", "sample": "A demo member's report",
+    "daily": "Daily cash and streak", "work": "Clock a shift", "hustle": "Risky quick cash", "pay": "Send cash",
+    "balance": "Players Club card", "deposit": "Bank it (robber-proof)", "withdraw": "Take cash out",
+    "rich": "Richest on the Strip",
+    "shop": "Browse the storefronts", "buy": "Buy an item", "use": "Use an item", "inventory": "Items and buffs",
+    "pawn": "Sell at Pawn Deals",
+    "rob": "Rob someone's pocket cash", "crime": "Solo job: cash or jail", "heist": "Hit a store's register",
+    "jail": "Who's locked up", "bail": "Post bail",
+    "property": "Own a storefront", "cashup": "Empty your registers",
+    "economy": "Open, close, manage wallets", "house": "Run the economy anywhere",
+    "blackjack": "Vegas rules, pays 3:2", "roulette": "European wheel", "slots": "Neon slots",
+    "hilo": "Higher or lower", "flip": "Coinflip, pays 1.95×", "chips": "Cash → chips, free",
+    "cashout": "Chips → cash, free",
+    "help": "This menu", "about": "Bot stats", "invite": "Add SYKE to a server", "showcase": "Feature tour",
+    "diagnose": "Fix prefix problems", "inviter": "Who invited someone", "scanme": "Count your older messages",
+    "optout": "Stop SYKE reading you", "optin": "Opt back in", "servers": "Every server using SYKE",
+}
+
+for _cat in CATALOG:
+    if _cat.key in LAYOUT:
+        _cat.title, _cat.blurb, _sections = LAYOUT[_cat.key]
+        if _sections and not _cat.sections:
+            _cat.sections = _sections
+    for _name, _level in ACCESS_OF.items():
+        if _name in _cat.commands and _level != _cat.access:
+            _cat.access_of.setdefault(_name, _level)
+
 CATEGORY_BY_KEY = {c.key: c for c in CATALOG}
 # command name -> category, for quick lookup and the coverage test.
 CATEGORY_OF: dict[str, Category] = {name: c for c in CATALOG for name in c.commands}
@@ -232,42 +358,59 @@ def _sig(cmd: commands.Command) -> str:
 
 
 def _short(cmd: commands.Command, cat: Category) -> str:
-    """Best one-line description for a command."""
-    curated = cat.details.get(cmd.name)
-    if curated:
-        # First sentence of the curated text keeps the list tidy.
-        first = curated.split(". ")[0].rstrip(".")
-        return first
-    return (cmd.description or cmd.short_doc or "").strip() or "—"
+    """A few words for the compact menu."""
+    if cmd.name in BRIEF:
+        return BRIEF[cmd.name]
+    text = (cmd.description or cmd.short_doc or "").strip() or "—"
+    return text.split(" — ")[0].split(". ")[0][:44]
 
 
 def _line(cmd: commands.Command, cat: Category, prefix: str) -> str:
-    # One tight line per command: `!name <args>` — short description.
-    sig = _sig(cmd)
-    head = f"`{prefix}{cmd.qualified_name}{(' ' + sig) if sig else ''}`"
-    return f"{head} — {_short(cmd, cat)}"
+    lock = " 🔒" if cmd.name in cat.access_of else ""
+    return f"`{cmd.qualified_name}` {_short(cmd, cat)}{lock}"
+
+
+def _live(bot, names: list[str]) -> list[commands.Command]:
+    out = []
+    for name in names:
+        cmd = bot.get_command(name)
+        if cmd is not None and not getattr(cmd, "hidden", False):
+            out.append(cmd)
+    return out
 
 
 def category_embed(bot, cat: Category, prefix: str) -> discord.Embed:
-    lines = []
-    for name in cat.commands:
-        cmd = bot.get_command(name)
-        if cmd is None or getattr(cmd, "hidden", False):
+    e = embed(f"{cat.emoji} {cat.title}", cat.blurb)
+    sections = cat.sections or [("", cat.commands)]
+    for heading, names in sections:
+        cmds = _live(bot, names)
+        if not cmds:
             continue
-        lines.append(_line(cmd, cat, prefix))
-    e = embed(f"{cat.emoji} {cat.title}", f"{cat.blurb}\n\n" + "\n".join(lines))
-    e.set_footer(text=f"{cat.access}  •  {prefix}help <command> for full details")
+        if heading in INLINE_SECTIONS:
+            value = " ".join(f"`{c.name}`" for c in cmds)
+        else:
+            value = "\n".join(_line(c, cat, prefix) for c in cmds)
+        if heading:
+            e.add_field(name=heading, value=value[:1024], inline=False)
+        else:
+            e.description = f"{cat.blurb}\n\n{value}"
+    note = "  •  🔒 = " + " / ".join(sorted(set(cat.access_of.values()))) if cat.access_of else ""
+    e.set_footer(text=f"{cat.access}{note}  •  {prefix}help <command> for usage")
     return e
 
 
 def overview_embed(bot, prefix: str, version: str) -> discord.Embed:
-    # Compact: one short line per category. The dropdown drills into each.
-    lines = [f"{c.emoji} **{c.title}** — {c.blurb}" for c in CATALOG]
-    body = (f"Pick a category below, or `{prefix}help <command>` for one command's details. "
-            f"Prefix: `{prefix}` (slash works too).\n\n" + "\n".join(lines))
-    e = embed("🧠 SYKE — Command Menu", body)
-    total = sum(len(c.commands) for c in CATALOG)
-    e.set_footer(text=f"SYKE {version}  •  {total} commands in {len(CATALOG)} categories")
+    """A compact grid: each category with a few of its commands. The dropdown drills in."""
+    e = embed("🧠 SYKE", f"Prefix `{prefix}` · slash works too · `{prefix}help <command>` for details\n"
+                        "Pick a category below.")
+    for cat in CATALOG:
+        cmds = _live(bot, cat.commands)
+        shown = " ".join(f"`{c.name}`" for c in cmds[:4]) + (" …" if len(cmds) > 4 else "")
+        e.add_field(name=f"{cat.emoji} {cat.title} · {len(cmds)}", value=shown or "—", inline=True)
+    while len(e.fields) % 3:  # keep the grid even
+        e.add_field(name="\u200b", value="\u200b", inline=True)
+    total = sum(len(_live(bot, c.commands)) for c in CATALOG)
+    e.set_footer(text=f"SYKE {version}  •  {total} commands")
     return e
 
 
@@ -289,7 +432,8 @@ def command_embed(bot, cmd: commands.Command, prefix: str) -> discord.Embed:
                              else f"`{prefix}{cmd.qualified_name} {sub.name}`")
             e.add_field(name="Sub-commands", value="\n".join(lines)[:1024], inline=False)
     if cat:
-        e.set_footer(text=f"Who can use it: {cat.access}  •  {cat.emoji} {cat.title}")
+        who = cat.access_of.get(cmd.qualified_name.split()[0], cat.access)
+        e.set_footer(text=f"Who can use it: {who}  •  {cat.emoji} {cat.title}")
     return e
 
 

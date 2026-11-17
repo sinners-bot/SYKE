@@ -20,6 +20,13 @@ CORPUS_EXTRA_COLUMNS = (
     ("laugh_reactions", "INTEGER NOT NULL DEFAULT 0"),
     ("total_reactions", "INTEGER NOT NULL DEFAULT 0"),
 )
+# Timers added to econ_wallets after it first shipped (migrated in on startup).
+WALLET_EXTRA_COLUMNS = (
+    ("rob_at", "REAL NOT NULL DEFAULT 0"),
+    ("crime_at", "REAL NOT NULL DEFAULT 0"),
+    ("heist_at", "REAL NOT NULL DEFAULT 0"),
+    ("jail_until", "REAL NOT NULL DEFAULT 0"),
+)
 # (message_id, channel_id, author_id, content[, created_at, author_name, laugh_reactions, total_reactions])
 CorpusRow = tuple
 
@@ -168,6 +175,30 @@ CREATE TABLE IF NOT EXISTS econ_wallets (
     seen      INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (guild_id, user_id)
 );
+CREATE TABLE IF NOT EXISTS econ_items (
+    guild_id INTEGER NOT NULL,
+    user_id  INTEGER NOT NULL,
+    item     TEXT NOT NULL,
+    qty      INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id, item)
+);
+CREATE TABLE IF NOT EXISTS econ_buffs (
+    guild_id INTEGER NOT NULL,
+    user_id  INTEGER NOT NULL,
+    buff     TEXT NOT NULL,
+    until    REAL NOT NULL,
+    PRIMARY KEY (guild_id, user_id, buff)
+);
+CREATE TABLE IF NOT EXISTS econ_shops (
+    guild_id     INTEGER NOT NULL,
+    shop         TEXT NOT NULL,
+    owner_id     INTEGER NOT NULL,
+    level        INTEGER NOT NULL DEFAULT 1,
+    invested     INTEGER NOT NULL DEFAULT 0,
+    register     INTEGER NOT NULL DEFAULT 0,
+    collected_at REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, shop)
+);
 """
 
 
@@ -190,6 +221,10 @@ class Storage:
                 self._conn.execute("ALTER TABLE guild_settings ADD COLUMN prefix TEXT")
             if "modlog_channel" not in columns:
                 self._conn.execute("ALTER TABLE guild_settings ADD COLUMN modlog_channel INTEGER")
+            wallet_columns = {row[1] for row in self._conn.execute("PRAGMA table_info(econ_wallets)")}
+            for column, kind in WALLET_EXTRA_COLUMNS:
+                if column not in wallet_columns:
+                    self._conn.execute(f"ALTER TABLE econ_wallets ADD COLUMN {column} {kind}")
             corpus_columns = {row[1] for row in self._conn.execute("PRAGMA table_info(corpus)")}
             for column, kind in CORPUS_EXTRA_COLUMNS:
                 if column not in corpus_columns:
@@ -758,16 +793,19 @@ class Storage:
 
     # Economy — THE STRIP
 
-    _WALLET_COLS = ("cash", "chips", "bank", "streak", "daily_at", "work_at", "hustle_at", "seen")
+    _WALLET_COLS = ("cash", "chips", "bank", "streak", "daily_at", "work_at", "hustle_at", "seen",
+                    "rob_at", "crime_at", "heist_at", "jail_until")
+    _WALLET_TIMES = {"streak", "daily_at", "work_at", "hustle_at", "rob_at", "crime_at", "heist_at", "jail_until"}
 
     def _wallet_row(self, conn, guild_id: int, user_id: int) -> dict:
         row = conn.execute(
-            "SELECT cash, chips, bank, streak, daily_at, work_at, hustle_at, seen "
-            "FROM econ_wallets WHERE guild_id = ? AND user_id = ?", (guild_id, user_id),
+            f"SELECT {', '.join(self._WALLET_COLS)} FROM econ_wallets WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id),
         ).fetchone()
         if row is None:
-            return {"cash": 0, "chips": 0, "bank": 0, "streak": 0,
-                    "daily_at": 0.0, "work_at": 0.0, "hustle_at": 0.0, "seen": 0}
+            blank = {c: 0.0 for c in self._WALLET_COLS}
+            blank.update(cash=0, chips=0, bank=0, streak=0, seen=0)
+            return blank
         return dict(zip(self._WALLET_COLS, row))
 
     def econ_wallet(self, guild_id: int, user_id: int) -> dict:
@@ -797,8 +835,7 @@ class Storage:
         `times` may contain any of streak/daily_at/work_at/hustle_at to overwrite outright.
         Returns the updated wallet.
         """
-        allowed = {"streak", "daily_at", "work_at", "hustle_at"}
-        bad = set(times) - allowed
+        bad = set(times) - self._WALLET_TIMES
         if bad:
             raise ValueError(f"unknown wallet fields: {sorted(bad)}")
         with self._lock:
@@ -810,17 +847,18 @@ class Storage:
             w["bank"] = max(0, w["bank"] + int(bank))
             for key, value in times.items():
                 w[key] = value
-            conn.execute(
-                "INSERT INTO econ_wallets (guild_id, user_id, cash, chips, bank, streak, "
-                "daily_at, work_at, hustle_at, seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1) "
-                "ON CONFLICT(guild_id, user_id) DO UPDATE SET cash=excluded.cash, chips=excluded.chips, "
-                "bank=excluded.bank, streak=excluded.streak, daily_at=excluded.daily_at, "
-                "work_at=excluded.work_at, hustle_at=excluded.hustle_at, seen=1",
-                (guild_id, user_id, w["cash"], w["chips"], w["bank"], w["streak"],
-                 w["daily_at"], w["work_at"], w["hustle_at"]),
-            )
+            self._write_wallet(conn, guild_id, user_id, w)
             conn.commit()
             return w
+
+    def _write_wallet(self, conn, guild_id: int, user_id: int, w: dict) -> None:
+        cols = [c for c in self._WALLET_COLS if c != "seen"]
+        conn.execute(
+            f"INSERT INTO econ_wallets (guild_id, user_id, {', '.join(cols)}, seen) "
+            f"VALUES (?, ?, {', '.join('?' for _ in cols)}, 1) ON CONFLICT(guild_id, user_id) DO UPDATE SET "
+            + ", ".join(f"{c}=excluded.{c}" for c in cols) + ", seen=1",
+            (guild_id, user_id, *[w[c] for c in cols]),
+        )
 
     def econ_transfer(self, guild_id: int, sender: int, recipient: int, amount: int,
                       tax: int = 0) -> bool:
@@ -883,6 +921,148 @@ class Storage:
             (guild_id, net),
         )[0][0]
         return ahead + 1
+
+    def econ_move(self, guild_id: int, payer: int, payee: int | None, amount: int, *,
+                  min_left: int = 0, cash_only: bool = True) -> int:
+        """Move up to `amount` cash from payer to payee (None = out of the economy), never taking the
+        payer below `min_left`. Atomic. Returns how much actually moved."""
+        with self._lock:
+            conn = self._conn
+            a = self._wallet_row(conn, guild_id, payer)
+            moved = max(0, min(int(amount), a["cash"] - min_left))
+            if moved <= 0:
+                return 0
+            a["cash"] -= moved
+            self._write_wallet(conn, guild_id, payer, a)
+            if payee is not None:
+                b = self._wallet_row(conn, guild_id, payee)
+                b["cash"] += moved
+                self._write_wallet(conn, guild_id, payee, b)
+            conn.commit()
+            return moved
+
+    def econ_spend(self, guild_id: int, user_id: int, amount: int) -> bool:
+        """Take exactly `amount` cash, all or nothing. False (no change) if they can't cover it."""
+        amount = int(amount)
+        with self._lock:
+            conn = self._conn
+            w = self._wallet_row(conn, guild_id, user_id)
+            if amount < 0 or w["cash"] < amount:
+                return False
+            w["cash"] -= amount
+            self._write_wallet(conn, guild_id, user_id, w)
+            conn.commit()
+            return True
+
+    def econ_set(self, guild_id: int, user_id: int, **balances: int) -> dict:
+        """Set balances outright (owner tools). Only cash/chips/bank."""
+        bad = set(balances) - {"cash", "chips", "bank"}
+        if bad:
+            raise ValueError(f"unknown balances: {sorted(bad)}")
+        with self._lock:
+            conn = self._conn
+            w = self._wallet_row(conn, guild_id, user_id)
+            for key, value in balances.items():
+                w[key] = max(0, int(value))
+            self._write_wallet(conn, guild_id, user_id, w)
+            conn.commit()
+            return w
+
+    def econ_global(self) -> dict:
+        """Totals across every server: servers, players, and money in circulation."""
+        row = self._read(
+            "SELECT COUNT(DISTINCT guild_id), COUNT(*), COALESCE(SUM(cash),0), COALESCE(SUM(chips),0), "
+            "COALESCE(SUM(bank),0) FROM econ_wallets WHERE seen = 1", (),
+        )[0]
+        return {"servers": row[0], "players": row[1], "cash": row[2], "chips": row[3], "bank": row[4]}
+
+    # inventory
+    def econ_items(self, guild_id: int, user_id: int) -> dict[str, int]:
+        rows = self._read("SELECT item, qty FROM econ_items WHERE guild_id = ? AND user_id = ? AND qty > 0 "
+                          "ORDER BY item", (guild_id, user_id))
+        return {item: qty for item, qty in rows}
+
+    def econ_item_add(self, guild_id: int, user_id: int, item: str, qty: int = 1) -> int:
+        """Add (or, with a negative qty, remove) items. Never goes below zero; returns the new count.
+        Raises ValueError without changing anything if removing more than they hold."""
+        with self._lock:
+            conn = self._conn
+            row = conn.execute("SELECT qty FROM econ_items WHERE guild_id = ? AND user_id = ? AND item = ?",
+                               (guild_id, user_id, item)).fetchone()
+            have = row[0] if row else 0
+            new = have + int(qty)
+            if new < 0:
+                raise ValueError(f"only {have} {item}")
+            conn.execute("INSERT INTO econ_items VALUES (?, ?, ?, ?) ON CONFLICT(guild_id, user_id, item) "
+                         "DO UPDATE SET qty = excluded.qty", (guild_id, user_id, item, new))
+            conn.commit()
+            return new
+
+    # buffs
+    def econ_buffs(self, guild_id: int, user_id: int, now: float) -> dict[str, float]:
+        """Active buffs → when they wear off."""
+        rows = self._read("SELECT buff, until FROM econ_buffs WHERE guild_id = ? AND user_id = ? AND until > ?",
+                          (guild_id, user_id, now))
+        return dict(rows)
+
+    def econ_buff(self, guild_id: int, user_id: int, buff: str, until: float) -> None:
+        """Grant a buff (extending it if it's already active)."""
+        self._write("INSERT INTO econ_buffs VALUES (?, ?, ?, ?) ON CONFLICT(guild_id, user_id, buff) "
+                    "DO UPDATE SET until = MAX(until, excluded.until)", (guild_id, user_id, buff, until))
+
+    def econ_unbuff(self, guild_id: int, user_id: int, buff: str) -> bool:
+        return self._write("DELETE FROM econ_buffs WHERE guild_id = ? AND user_id = ? AND buff = ?",
+                           (guild_id, user_id, buff)) > 0
+
+    # storefronts
+    _SHOP_COLS = ("shop", "owner_id", "level", "invested", "register", "collected_at")
+
+    def econ_shops(self, guild_id: int) -> dict[str, dict]:
+        rows = self._read(f"SELECT {', '.join(self._SHOP_COLS)} FROM econ_shops WHERE guild_id = ?", (guild_id,))
+        return {r[0]: dict(zip(self._SHOP_COLS, r)) for r in rows}
+
+    def econ_shop(self, guild_id: int, shop: str) -> dict | None:
+        return self.econ_shops(guild_id).get(shop)
+
+    def econ_shop_buy(self, guild_id: int, shop: str, owner_id: int, price: int, now: float) -> bool:
+        """Buy an unowned storefront with cash. False (no change) if it's taken or they can't afford it."""
+        with self._lock:
+            conn = self._conn
+            if conn.execute("SELECT 1 FROM econ_shops WHERE guild_id = ? AND shop = ?", (guild_id, shop)).fetchone():
+                return False
+            w = self._wallet_row(conn, guild_id, owner_id)
+            if w["cash"] < price:
+                return False
+            w["cash"] -= price
+            self._write_wallet(conn, guild_id, owner_id, w)
+            conn.execute("INSERT INTO econ_shops VALUES (?, ?, ?, 1, ?, 0, ?)",
+                         (guild_id, shop, owner_id, price, now))
+            conn.commit()
+            return True
+
+    def econ_shop_update(self, guild_id: int, shop: str, **fields) -> None:
+        bad = set(fields) - {"owner_id", "level", "invested", "register", "collected_at"}
+        if bad:
+            raise ValueError(f"unknown shop fields: {sorted(bad)}")
+        if fields:
+            sets = ", ".join(f"{k} = ?" for k in fields)
+            self._write(f"UPDATE econ_shops SET {sets} WHERE guild_id = ? AND shop = ?",
+                        (*fields.values(), guild_id, shop))
+
+    def econ_shop_tip(self, guild_id: int, shop: str, amount: int) -> None:
+        """Drop money into a storefront's register (no-op if nobody owns it)."""
+        if amount > 0:
+            self._write("UPDATE econ_shops SET register = register + ? WHERE guild_id = ? AND shop = ?",
+                        (int(amount), guild_id, shop))
+
+    def econ_shop_release(self, guild_id: int, shop: str) -> bool:
+        return self._write("DELETE FROM econ_shops WHERE guild_id = ? AND shop = ?", (guild_id, shop)) > 0
+
+    def econ_reset_shops(self, guild_id: int) -> int:
+        n = self._write("DELETE FROM econ_shops WHERE guild_id = ?", (guild_id,))
+        self._write("DELETE FROM econ_items WHERE guild_id = ?", (guild_id,))
+        self._write("DELETE FROM econ_buffs WHERE guild_id = ?", (guild_id,))
+        return n
 
     def econ_top(self, guild_id: int, limit: int = 15) -> list[dict]:
         """Richest wallets by net worth (cash + bank + chips), descending."""

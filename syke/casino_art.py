@@ -983,6 +983,103 @@ def hilo_table(game, *, higher_mult: float, lower_mult: float) -> bytes:
     return cv.png()
 
 
+# ── the Strip property map ─────────────────────────────────────────────────
+def fit(cv: Canvas, text: str, kind: str, max_w: float, size: float, floor: float = 10) -> float:
+    while size > floor and cv.text_width(text, kind, size) > max_w:
+        size -= 1
+    return size
+
+
+@lru_cache(maxsize=4)
+def _facade(w: int, h: int, scale: int) -> Image.Image:
+    """A brick shopfront (cached): dark brick gradient with mortar lines."""
+    cv = Canvas(w, h, scale)
+    cv.img.alpha_composite(gradient(*cv.img.size, (58, 26, 36), (22, 10, 20)))
+    for row, y in enumerate(range(0, h, 13)):
+        cv.line([(0, y), (w, y)], fill=(0, 0, 0, 55), width=1)
+        off = 0 if row % 2 else 16
+        for x in range(off, w, 32):
+            cv.line([(x, y), (x, y + 13)], fill=(0, 0, 0, 45), width=1)
+    mask = Image.new("L", cv.img.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, cv.img.width - 1, cv.img.height - 1), radius=14 * scale, fill=255)
+    cv.img.putalpha(mask)
+    return cv.img
+
+
+def _storefront(cv: Canvas, x, y, w, h, store: dict) -> None:
+    colour = tuple(store["colour"])
+    owned = store.get("owner") is not None
+    shadow(cv, (x, y, x + w, y + h), 14, blur=8, offset=(0, 6), alpha=170)
+    cv.paste(_facade(int(w), int(h), cv.S), x, y)
+    # neon sign
+    sx0, sy0, sx1, sy1 = x + 14, y + 14, x + w - 14, y + 66
+    cv.rrect((sx0, sy0, sx1, sy1), 10, fill=(10, 4, 14, 235))
+    glow_shape(cv, (sx0, sy0, sx1, sy1), 6, lambda g: g.rrect((sx0, sy0, sx1, sy1), 10,
+                                                              outline=colour + (255,), width=4))
+    cv.rrect((sx0, sy0, sx1, sy1), 10, outline=tuple(min(255, c + 70) for c in colour), width=1.6)
+    name = store["name"].upper()
+    size = fit(cv, name, "bold", sx1 - sx0 - 22, 24)
+    lit = colour if owned else tuple(int(c * .75) for c in colour)
+    neon_text(cv, ((sx0 + sx1) / 2, (sy0 + sy1) / 2 + 1), name, lit, size, glow=6 if owned else 3)
+    # window + door
+    wx0, wy0, wx1, wy1 = x + 18, y + 80, x + w - 18, y + h - 74
+    if owned:
+        cv.img.alpha_composite(gradient(int((wx1 - wx0) * cv.S), int((wy1 - wy0) * cv.S), (255, 206, 128), (168, 82, 40)),
+                               tuple(cv.p(wx0, wy0)))
+    else:
+        cv.rect((wx0, wy0, wx1, wy1), fill=(26, 18, 30))
+    cv.rect((wx0, wy0, wx1, wy1), outline=(20, 12, 18), width=3)
+    dw = (wx1 - wx0) * .24
+    cv.rect(((wx0 + wx1) / 2 - dw / 2, wy0 + 10, (wx0 + wx1) / 2 + dw / 2, wy1), fill=(30, 16, 22) if owned else (14, 8, 16),
+            outline=(12, 6, 10), width=2)
+    cv.line([(wx0, (wy0 + wy1) / 2), ((wx0 + wx1) / 2 - dw / 2, (wy0 + wy1) / 2)], fill=(20, 12, 18), width=2)
+    cv.line([((wx0 + wx1) / 2 + dw / 2, (wy0 + wy1) / 2), (wx1, (wy0 + wy1) / 2)], fill=(20, 12, 18), width=2)
+    if not owned:  # a hung FOR SALE placard
+        px, py = (wx0 + wx1) / 2, (wy0 + wy1) / 2
+        cv.line([(px - 30, wy0), (px - 22, py - 14)], fill=(200, 200, 200), width=1.2)
+        cv.line([(px + 30, wy0), (px + 22, py - 14)], fill=(200, 200, 200), width=1.2)
+        cv.rrect((px - 46, py - 16, px + 46, py + 14), 4, fill=(232, 36, 54), outline=WHITE, width=1.5)
+        cv.text((px, py), "FOR SALE", "bold", 13, fill=WHITE)
+    # info strip
+    iy = y + h - 60
+    cv.rrect((x + 10, iy, x + w - 10, y + h - 10), 10, fill=(8, 4, 12, 220))
+    if owned:
+        who = store["owner"][:18]
+        cv.text((x + 22, iy + 16), who, "bold", fit(cv, who, "bold", w - 120, 15), fill=WHITE, anchor="lm")
+        for k in range(5):
+            star(cv, x + w - 76 + k * 13, iy + 16, 5.5, GOLD if k < store["level"] else (70, 60, 80))
+        cv.text((x + 22, iy + 37), f"+{store['income']:,} / HR", "medium", 13, fill=(160, 240, 190), anchor="lm")
+    else:
+        cv.text((x + 22, iy + 16), f"{store['price']:,}", "bold", 16, fill=GOLD, anchor="lm")
+        cv.text((x + 22, iy + 37), f"EARNS {store['income']:,} / HR", "medium", 12, fill=(200, 190, 220), anchor="lm")
+
+
+def strip_map(stores: list[dict]) -> bytes:
+    """The Strip's storefronts as a neon street: who owns what, and what's for sale."""
+    W, H = 1200, 900
+    cv = Canvas(W, H)
+    night_sky(cv, seed=21)
+    header(cv, "PROPERTY", f"{sum(1 for s in stores if s.get('owner'))} / {len(stores)} STOREFRONTS OWNED")
+    cols, gap, margin = 4, 16, 22
+    tw = (W - 2 * margin - (cols - 1) * gap) / cols
+    th = (H - 66 - 2 * 18 - 2 * gap) / 3
+    tiles = list(stores) + [None]
+    for i, store in enumerate(tiles[:12]):
+        x = margin + (i % cols) * (tw + gap)
+        y = 66 + 18 + (i // cols) * (th + gap)
+        if store is None:  # the Strip's own sign fills the last lot
+            glow_shape(cv, (x, y, x + tw, y + th), 18, lambda g: g.rrect((x + 20, y + 20, x + tw - 20, y + th - 20),
+                                                                         20, outline=PINK + (200,), width=4))
+            cv.rrect((x + 20, y + 20, x + tw - 20, y + th - 20), 20, outline=(255, 150, 205, 220), width=1.8)
+            neon_text(cv, (x + tw / 2, y + th / 2 - 26), "THE STRIP", PINK, 38, glow=10)
+            for k in range(3):
+                star(cv, x + tw / 2 - 30 + k * 30, y + th / 2 + 18, 8, GOLD)
+            cv.text((x + tw / 2, y + th / 2 + 52), "OWN A PIECE OF IT", "bold", 14, fill=(225, 214, 245))
+            continue
+        _storefront(cv, x, y, tw, th, store)
+    return cv.png()
+
+
 # ── players club card (wallet) ─────────────────────────────────────────────
 TIERS = [  # (minimum net worth, name, base colour, accent)
     (1_000_000, "BLACK", (18, 16, 22), (220, 220, 230)),

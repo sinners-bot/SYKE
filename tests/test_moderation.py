@@ -402,10 +402,10 @@ def test_help_lists_moderation(cog):
 
     ctx = FakeCtx()
     run(cog.help.callback(cog, ctx))
-    desc = ctx.replies[-1].description
+    grid = " ".join(f.name for f in ctx.replies[-1].fields)
     # The compact overview surfaces each category; the full command lists live one dropdown-click away.
-    assert "Moderation" in desc and "Automod" in desc and "Security" in desc
-    assert len(desc) <= 4096
+    assert "Moderation" in grid and "Automod" in grid and "Security" in grid
+    assert len(ctx.replies[-1]) <= 1500
     assert len(help_lines("!")) <= 1024
 
 
