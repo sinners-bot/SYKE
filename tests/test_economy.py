@@ -27,6 +27,11 @@ def test_next_streak_continues_within_window_else_resets():
     assert econ.next_streak(0, now, 0) == 1                          # first ever claim
 
 
+def test_cage_is_free_by_default():
+    assert econ.CONVERT_FEE == 0
+    assert econ.convert(1000) == (1000, 0)
+
+
 def test_convert_fee_rounds_in_the_houses_favor():
     got, fee = econ.convert(1000, 0.05)
     assert (got, fee) == (950, 50)
@@ -139,15 +144,27 @@ class FakeAuthor:
         self.mention = f"<@{uid}>"
 
 
+class FakeMessage:
+    def __init__(self, kwargs):
+        self.kwargs = kwargs
+        self.edits = []
+
+    async def edit(self, **kwargs):
+        self.edits.append(kwargs)
+
+
 class FakeCtx:
     def __init__(self, uid=1, gid=42):
         self.guild = types.SimpleNamespace(id=gid, me=None)
         self.author = FakeAuthor(uid)
         self.replies = []
+        self.sent = []          # full kwargs of every reply (files, views…)
 
     async def reply(self, content=None, **kwargs):
         self.replies.append(kwargs.get("embed") if kwargs.get("embed") is not None else content)
-        return types.SimpleNamespace(id=len(self.replies))
+        msg = FakeMessage(kwargs)
+        self.sent.append(msg)
+        return msg
 
     send = reply
 
@@ -202,15 +219,55 @@ def test_pay_moves_cash_with_tax(eco, monkeypatch):
     assert eco.bot.storage.econ_wallet(42, 2)["cash"] == econ.STARTING_CASH + (500 - tax)
 
 
-def test_chips_buy_applies_cage_fee(eco):
+@pytest.mark.parametrize("args", [("1000", None), ("buy", "1000")])
+def test_chips_swaps_cash_one_to_one(eco, args):
     _open(eco)
     ctx = FakeCtx()
     eco.bot.storage.econ_adjust(42, 1, cash=1000)
-    run(eco.chips_buy.callback(eco, ctx, "1000"))
+    run(eco.chips.callback(eco, ctx, *args))
     w = eco.bot.storage.econ_wallet(42, 1)
-    got, _ = econ.convert(1000)
-    # Wallet pre-existed (no starting grant); all 1000 cash converted to chips.
-    assert w["chips"] == got and w["cash"] == 0
+    assert w["chips"] == 1000 and w["cash"] == 0     # free: no cut taken
+    assert "no fee" in ctx.replies[-1].description.lower()
+
+
+def test_bare_chips_only_shows_the_cage(eco):
+    _open(eco)
+    ctx = FakeCtx()
+    run(eco.chips.callback(eco, ctx, None, None))
+    assert "cash cage" in ctx.replies[-1].title.lower()
+    assert eco.bot.storage.econ_wallet(42, 1)["chips"] == 0
+
+
+def test_cashout_is_free_and_defaults_to_all(eco):
+    _open(eco)
+    ctx = FakeCtx()
+    eco.bot.storage.econ_adjust(42, 1, chips=750)
+    run(eco.cashout.callback(eco, ctx))
+    w = eco.bot.storage.econ_wallet(42, 1)
+    assert w["chips"] == 0 and w["cash"] == 750
+
+
+def test_bets_top_up_from_cash_automatically(eco, monkeypatch):
+    """The bug report: a player with cash but no chips couldn't bet. Now the cage covers it."""
+    _open(eco)
+    ctx = FakeCtx()                                   # fresh player: 500 starting cash, 0 chips
+    monkeypatch.setattr(econ, "slot_spin", lambda rng: ["🍒", "🔔", "💎"])   # a loss
+    run(eco.slots.callback(eco, ctx, "100"))
+    w = eco.bot.storage.econ_wallet(42, 1)
+    assert w["cash"] == econ.STARTING_CASH - 100 and w["chips"] == 0
+    assert "cage swapped" in ctx.replies[-1].description
+    assert ctx.sent[-1].kwargs["file"].filename == "slots.png"     # result comes with the art
+
+
+def test_bet_errors_are_specific(eco):
+    _open(eco)
+    ctx = FakeCtx()
+    run(eco.slots.callback(eco, ctx, "5"))
+    assert "minimum" in ctx.replies[-1].description.lower()
+    run(eco.slots.callback(eco, ctx, "abc"))
+    assert "bet a number" in ctx.replies[-1].description.lower()
+    run(eco.slots.callback(eco, ctx, "100000"))
+    assert "only got" in ctx.replies[-1].description.lower()
 
 
 def test_slots_win_and_loss_update_chips(eco, monkeypatch):
@@ -247,3 +304,233 @@ def test_admin_on_off_and_give(eco):
     assert eco.bot.storage.econ_wallet(42, 2)["chips"] == 777
     run(eco.economy_off.callback(eco, ctx))
     assert eco._open(42) is False
+
+
+# ── interactive tables ───────────────────────────────────────────────────────
+from syke.cardgames import Card, HiLo, Shoe  # noqa: E402
+
+
+def C(text):
+    return Card(text[:-1], text[-1])
+
+
+def stack(eco, *cards, gid=42):
+    eco.shoes[gid] = Shoe.stacked([C(c) for c in cards])
+
+
+class FakeResponse:
+    def __init__(self):
+        self.done = False
+        self.edits = []
+        self.messages = []
+
+    def is_done(self):
+        return self.done
+
+    async def edit_message(self, **kwargs):
+        self.done = True
+        self.edits.append(kwargs)
+
+    async def send_message(self, content=None, **kwargs):
+        self.done = True
+        self.messages.append(content)
+
+
+class FakeInteraction:
+    def __init__(self, uid=1):
+        self.user = types.SimpleNamespace(id=uid)
+        self.response = FakeResponse()
+
+
+def chips(eco, uid=1):
+    return eco.bot.storage.econ_wallet(42, uid)["chips"]
+
+
+async def _seat(eco, *cards, bank=1000, bet="100"):
+    _open(eco)
+    eco.bot.storage.econ_adjust(42, 1, chips=bank)
+    stack(eco, *cards)
+    ctx = FakeCtx()
+    await eco.blackjack.callback(eco, ctx, bet)
+    return ctx, ctx.sent[-1].kwargs.get("view")
+
+
+def labels(view):
+    return [item.label for item in view.children]
+
+
+async def test_blackjack_natural_pays_3_to_2_and_frees_the_seat(eco):
+    ctx, view = await _seat(eco, "AS", "9H", "KD", "7C")
+    assert chips(eco) == 1000 - 100 + 250
+    assert (42, 1) not in eco.tables
+    assert labels(view) == ["Deal again (100)"]
+    assert ctx.sent[-1].kwargs["file"].filename == "blackjack.png"
+
+
+async def test_blackjack_buttons_match_the_hand(eco):
+    _, view = await _seat(eco, "KS", "5H", "QD", "6C", "9S", "10H", "7D")
+    assert labels(view) == ["Hit", "Stand", "Double (100)", "Split (100)", "Surrender"]
+
+
+async def test_blackjack_stand_wins_and_settles(eco):
+    _, view = await _seat(eco, "10S", "6H", "8D", "AC")       # 18 vs dealer soft 17 (stands)
+    assert chips(eco) == 900 and (42, 1) in eco.tables
+    it = FakeInteraction()
+    await view.press(it, "stand")
+    assert chips(eco) == 1100
+    assert it.response.edits[-1]["attachments"][0].filename == "blackjack.png"
+    assert (42, 1) not in eco.tables
+
+
+async def test_blackjack_double_stakes_and_pays_the_extra_bet(eco):
+    _, view = await _seat(eco, "6S", "6H", "5D", "10C", "10S", "9H")
+    await view.press(FakeInteraction(), "double")
+    assert view.game.hands[0].bet == 200
+    assert chips(eco) == 1000 - 200 + 400
+
+
+async def test_blackjack_split_tens_plays_two_hands(eco):
+    _, view = await _seat(eco, "KS", "5H", "QD", "6C", "9S", "10H", "7D")
+    await view.press(FakeInteraction(), "split")
+    assert chips(eco) == 800                                   # second bet on the table
+    await view.press(FakeInteraction(), "stand")
+    await view.press(FakeInteraction(), "stand")
+    assert [h.outcome for h in view.game.hands] == ["win", "win"]
+    assert chips(eco) == 1200
+
+
+async def test_blackjack_insurance_pays_when_dealer_has_it(eco):
+    _, view = await _seat(eco, "10S", "AH", "8D", "KC")
+    assert labels(view) == ["Insurance (50)", "No thanks"]
+    await view.press(FakeInteraction(), "insurance")
+    assert view.game.phase == "done"
+    assert chips(eco) == 1000                                  # lost 100, insurance won 100
+
+
+async def test_blackjack_double_without_funds_is_refused(eco):
+    _, view = await _seat(eco, "6S", "6H", "5D", "10C", bank=100)
+    it = FakeInteraction()
+    await view.press(it, "double")
+    assert "need 100 more" in it.response.messages[-1]
+    assert not view.game.hands[0].doubled and chips(eco) == 0
+
+
+async def test_only_the_seated_player_can_press(eco):
+    _, view = await _seat(eco, "10S", "6H", "8D", "AC")
+    stranger = FakeInteraction(uid=2)
+    assert await view.interaction_check(stranger) is False
+    assert "table" in stranger.response.messages[-1]
+
+
+async def test_one_table_at_a_time(eco):
+    ctx, _ = await _seat(eco, "10S", "6H", "8D", "AC")
+    await eco.blackjack.callback(eco, ctx, "100")
+    assert "already at a table" in ctx.replies[-1].title.lower()
+    assert chips(eco) == 900                                   # second bet never taken
+
+
+async def test_timeout_auto_stands_and_settles(eco):
+    ctx, view = await _seat(eco, "10S", "6H", "8D", "AC")
+    await view.on_timeout()
+    assert view.game.phase == "done" and chips(eco) == 1100
+    assert ctx.sent[-1].edits                                  # message updated with the result
+
+
+async def test_unload_refunds_chips_still_in_play(eco):
+    _, view = await _seat(eco, "10S", "6H", "8D", "AC")
+    assert chips(eco) == 900
+    await eco.cog_unload()
+    assert chips(eco) == 1000 and not eco.tables
+
+
+async def test_deal_again_rebets_and_reseats(eco):
+    _, view = await _seat(eco, "AS", "9H", "KD", "7C", "10S", "6H", "8D", "AC")
+    assert chips(eco) == 1150
+    await view.press(FakeInteraction(), "again")
+    assert chips(eco) == 1050 and view.game.phase == "player"
+    assert eco.tables[(42, 1)] is view
+
+
+class FixedRng(random.Random):
+    def __init__(self, ranks):
+        super().__init__(0)
+        self.queue = []
+        for r in ranks:
+            self.queue += [r, "S"]
+
+    def choice(self, seq):
+        return self.queue.pop(0) if self.queue else super().choice(seq)
+
+
+async def test_hilo_call_then_cash_out(eco):
+    _open(eco)
+    eco.bot.storage.econ_adjust(42, 1, chips=1000)
+    eco.rng = FixedRng(["5", "9"])
+    ctx = FakeCtx()
+    await eco.hilo.callback(eco, ctx, "100")
+    view = ctx.sent[-1].kwargs["view"]
+    assert chips(eco) == 900
+    assert [b.disabled for b in view.children] == [False, False, True]   # can't cash out before a call
+    await view.press(FakeInteraction(), "higher")
+    await view.press(FakeInteraction(), "cash")
+    assert view.game.won and chips(eco) == 900 + view.game.payout > 1000
+
+
+async def test_hilo_timeout_before_any_call_returns_the_bet(eco):
+    _open(eco)
+    eco.bot.storage.econ_adjust(42, 1, chips=1000)
+    ctx = FakeCtx()
+    await eco.hilo.callback(eco, ctx, "100")
+    await ctx.sent[-1].kwargs["view"].on_timeout()
+    assert chips(eco) == 1000 and not eco.tables
+
+
+async def test_art_failure_falls_back_to_text(eco, monkeypatch):
+    from syke import casino_art
+
+    def boom(*a, **k):
+        raise RuntimeError("no pixels today")
+
+    monkeypatch.setattr(casino_art, "slots_machine", boom)
+    _open(eco)
+    ctx = FakeCtx()
+    await eco.slots.callback(eco, ctx, "50")
+    assert "file" not in ctx.sent[-1].kwargs and "Slots" in ctx.replies[-1].title
+
+
+# ── custom emojis ────────────────────────────────────────────────────────────
+class FakeEmoji:
+    def __init__(self, name, eid):
+        self.name, self.id = name, eid
+
+    def __str__(self):
+        return f"<:{self.name}:{self.id}>"
+
+
+async def test_emoji_sync_uploads_missing_and_reuses_existing(eco):
+    created = []
+
+    async def fetch():
+        return [FakeEmoji("strip_chip", 1)]
+
+    async def create(*, name, image):
+        assert image[:8] == b"\x89PNG\r\n\x1a\n"
+        created.append(name)
+        return FakeEmoji(name, 100 + len(created))
+
+    eco.bot.fetch_application_emojis = fetch
+    eco.bot.create_application_emoji = create
+    await eco.sync_emojis()
+    assert eco.e("chip") == "<:strip_chip:1>"                  # reused, not re-uploaded
+    assert "strip_chip" not in created and "strip_cash" in created
+    assert eco.e("cash").startswith("<:strip_cash:")
+    assert str(eco.partial("chip")) == "<:strip_chip:1>"
+
+
+async def test_emoji_sync_failure_keeps_standard_emoji(eco):
+    async def fetch():
+        raise RuntimeError("Discord said no")
+
+    eco.bot.fetch_application_emojis = fetch
+    await eco.sync_emojis()
+    assert eco.e("chip") == econ.EMOJI_FALLBACK["chip"]

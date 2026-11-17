@@ -851,6 +851,39 @@ class Storage:
             conn.commit()
             return True
 
+    def econ_stake(self, guild_id: int, user_id: int, amount: int) -> tuple[int, int] | None:
+        """Atomically take a bet: chips first, then cash for any shortfall (the cage swaps it
+        1:1). Returns (from_chips, from_cash), or None — changing nothing — if they can't cover it."""
+        amount = int(amount)
+        if amount <= 0:
+            return None
+        with self._lock:
+            conn = self._conn
+            w = self._wallet_row(conn, guild_id, user_id)
+            if w["chips"] + w["cash"] < amount:
+                return None
+            from_chips = min(w["chips"], amount)
+            from_cash = amount - from_chips
+            conn.execute(
+                "INSERT INTO econ_wallets (guild_id, user_id, cash, chips, seen) VALUES (?, ?, ?, ?, 1) "
+                "ON CONFLICT(guild_id, user_id) DO UPDATE SET cash = excluded.cash, chips = excluded.chips, seen = 1",
+                (guild_id, user_id, w["cash"] - from_cash, w["chips"] - from_chips),
+            )
+            conn.commit()
+            return from_chips, from_cash
+
+    def econ_rank(self, guild_id: int, user_id: int) -> int | None:
+        """A player's position on the Strip's rich list (1 = richest), or None if they're broke."""
+        w = self.econ_wallet(guild_id, user_id)
+        net = w["cash"] + w["chips"] + w["bank"]
+        if not w["seen"] or net <= 0:
+            return None
+        ahead = self._read(
+            "SELECT COUNT(*) FROM econ_wallets WHERE guild_id = ? AND seen = 1 AND (cash + bank + chips) > ?",
+            (guild_id, net),
+        )[0][0]
+        return ahead + 1
+
     def econ_top(self, guild_id: int, limit: int = 15) -> list[dict]:
         """Richest wallets by net worth (cash + bank + chips), descending."""
         rows = self._read(

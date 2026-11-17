@@ -94,6 +94,8 @@ STRIP_CSS = (
     ".richrow .rname{font-weight:600;}"
     ".richrow .rnet{font-weight:800;}"
     ".richrow .rsub{grid-column:3/5;font-size:11px;color:var(--muted);}"
+    ".ei{width:1.15em;height:1.15em;vertical-align:-.22em;}"
+    ".tier{font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--brand);margin-left:6px;}"
     "</style>"
 )
 
@@ -1772,13 +1774,15 @@ class WebDashboard:
         return layout(f"THE STRIP · {guild.name}", self._strip_body(guild, request), user=user)
 
     def _strip_body(self, guild: discord.Guild, request) -> str:
-        from .economy import CASH, CHIP, BANK_EMOJI, CONFIG_KEY
+        from .casino_art import emoji_data_uri, tier_for
+        from .economy import CONFIG_KEY
         is_open = bool(self.bot.storage.get_config(guild.id, CONFIG_KEY).get("open"))
         circ = self.bot.storage.econ_circulation(guild.id)
         top = self.bot.storage.econ_top(guild.id, 25)
+        CASH, CHIP, BANK_EMOJI = "cash", "chip", "bank"
 
-        def money(n, emoji=CASH):
-            return f"{emoji} {int(n):,}"
+        def money(n, kind=CASH):
+            return f"<img class='ei' src='{emoji_data_uri(kind)}' alt='{kind}'> {int(n):,}"
 
         state = ("<span style='color:#22C55E'>● OPEN</span>" if is_open
                  else "<span style='color:#F59E0B'>● CLOSED</span>")
@@ -1791,7 +1795,7 @@ class WebDashboard:
         stats = [("Players", f"{circ['players']:,}"), ("Cash", money(circ['cash'])),
                  ("Chips", money(circ['chips'], CHIP)), ("Banked", money(circ['bank'], BANK_EMOJI)),
                  ("In circulation", money(circ['cash'] + circ['chips'] + circ['bank']))]
-        cards = "".join(f"<div class='stat'><div class='statn'>{esc(v)}</div>"
+        cards = "".join(f"<div class='stat'><div class='statn'>{v}</div>"
                         f"<div class='statl'>{esc(label)}</div></div>" for label, v in stats)
         secs.append(f"<div class='statrow'>{cards}</div>")
 
@@ -1808,7 +1812,7 @@ class WebDashboard:
                     f"<a class='richrow' href='/g/{guild.id}/u/{r['user_id']}'>"
                     f"<span class='rank'>{rank}</span>"
                     f"<img src='{esc(av)}' alt='' loading='lazy'>"
-                    f"<span class='rname'>{esc(name)}</span>"
+                    f"<span class='rname'>{esc(name)} <span class='tier'>{tier_for(r['net'])[0]}</span></span>"
                     f"<span class='rnet'>{money(r['net'])}</span>"
                     f"<span class='rsub'>{money(r['cash'])} · {money(r['chips'], CHIP)} · "
                     f"{money(r['bank'], BANK_EMOJI)}</span></a>")

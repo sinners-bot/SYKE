@@ -178,17 +178,24 @@ CATALOG: list[Category] = [
     ),
     Category(
         "economy", "💸", "THE STRIP (Economy)", EVERYONE,
-        "A neon Vegas economy: earn cash, swap it for chips at the cage, and hit the casino.",
+        "A neon Vegas economy: earn cash, hit the casino — blackjack, slots, roulette, Hi-Lo — and climb the rich list.",
         ["balance", "daily", "work", "hustle", "pay", "deposit", "withdraw",
-         "chips", "slots", "flip", "roulette", "rich", "economy"],
+         "chips", "cashout", "blackjack", "slots", "roulette", "hilo", "flip", "rich", "economy"],
         {
-            "balance": "Your cash, chips, bank and net worth. @mention someone to peek at theirs.",
+            "balance": "Your Players Club card — cash, chips, bank, net worth and tier (Bronze up to Black). "
+                       "@mention someone to see theirs.",
+            "blackjack": "A real Vegas Strip table: 6-deck shoe, blackjack pays 3:2, dealer stands on all 17s. "
+                         "Hit, stand, double down, split any pair (10s included, up to 4 hands), insurance / "
+                         "even money and late surrender — all with buttons.",
+            "hilo": "Higher or lower than the current card? Every right call grows your multiplier — cash out "
+                    "before you miss. Aces high, ties lose.",
+            "cashout": "Swap chips back into cash at the cage. Free, 1:1. Defaults to all your chips.",
             "daily": "Claim your daily cash — claim on consecutive days to build a streak for bigger payouts.",
             "work": "Clock a themed shift on the Strip for cash. Hourly cooldown.",
             "hustle": "A risky earn: usually pays, sometimes flops, occasionally backfires.",
             "pay": "Send cash to another member. A small tax is skimmed off the top.",
-            "chips": "The cash cage — `chips buy` turns cash into casino chips, `chips cash` turns them back. "
-                     "The house takes a cut each way.",
+            "chips": "The cash cage — `chips 500` swaps cash for chips, free and 1:1. You rarely need it: "
+                     "any bet tops itself up from your cash automatically.",
             "slots": "Pull the neon slots with chips. Three-of-a-kind pays big; two cherries pays small.",
             "flip": "Coinflip for chips — call `heads` or `tails`.",
             "roulette": "Bet a number (0-36) or red/black/even/odd/low/high.",

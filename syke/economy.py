@@ -1,21 +1,29 @@
 """THE STRIP — a neon Vegas economy for SYKE.
 
 A server economy themed after a seedy-but-glamorous Vegas strip mall: two
-currencies (**cash** you earn and **chips** you gamble), a handful of themed
-jobs, risky hustles, a cash cage that takes a cut, and a small casino (slots,
-coinflip, roulette). The leaderboard is "Richest on the Strip".
+currencies (**cash** you earn and **chips** you play with), themed jobs, risky
+hustles, a free cash cage, and a casino — slots, coinflip, roulette, Hi-Lo and a
+casino-accurate blackjack table (see `cardgames.py` for the rules).
 
-All the money logic — payouts, odds, cooldowns, the house edge — lives in plain
-functions up top so they're trivial to unit-test (and so a test can prove the
-casino actually keeps a long-run edge). The `Economy` cog is a thin Discord
-wrapper over those plus the wallet methods on `Storage`.
+Every casino result is a custom-drawn image (`casino_art.py`) and SYKE uploads
+its own emoji set (chips, cash, the vault…) as application emojis on startup,
+falling back to standard emoji if Discord won't take them.
+
+Bets come out of your chips; if you're short, the cage swaps the difference in
+from your cash automatically (1:1, no fee) so a bet never fails just because you
+forgot to buy chips first. All money logic lives in plain functions up top, so
+it's unit-tested — including a test proving every game keeps a house edge.
 
 The whole system is **off by default** per server; an admin opens the Strip with
-`economy on`. That keeps SYKE's economy out of servers that don't want it.
+`economy on`.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import io
+import logging
 import math
 import random
 import time
@@ -24,13 +32,22 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from . import casino_art as art
+from .cardgames import Blackjack, HiLo, Shoe
 from .moderation import BRAND, OK, WARN, embed, moderator
+
+log = logging.getLogger("syke.economy")
 
 # ── Currency & flavor ──────────────────────────────────────────────────────
 CASH = "💵"
-CHIP = "🎰"
+CHIP = "🪙"
 BANK_EMOJI = "🏦"
 CONFIG_KEY = "economy"          # per-guild config blob: {"open": bool}
+
+# Fallbacks for SYKE's own emoji set (used until/unless the custom ones upload).
+EMOJI_FALLBACK = {"cash": CASH, "chip": CHIP, "bank": BANK_EMOJI, "coin": "🪙", "cards": "🃏",
+                  "slots": "🎰", "roulette": "🎡", "crown": "👑", "dice": "🎲"}
+EMOJI_PREFIX = "strip_"
 
 STARTING_CASH = 500             # granted once, on a player's first interaction
 
@@ -47,13 +64,18 @@ WORK_LOW, WORK_HIGH = 120, 340
 HUSTLE_COOLDOWN = 20 * 60
 
 PAY_TAX = 0.03                  # cut taken out of player-to-player transfers (a sink)
-CONVERT_FEE = 0.05             # the cash cage's edge on cash<->chips both ways
+CONVERT_FEE = 0.0              # the cash cage is free: cash and chips swap 1:1
 
 CHAT_REWARD = 3                 # trickle for being active
 CHAT_COOLDOWN = 60
 
 MIN_BET = 10
 MAX_BET = 1_000_000
+
+TABLE_TIMEOUT = 120             # seconds of inactivity before a blackjack hand auto-stands
+HILO_TIMEOUT = 90
+
+RULES_FOOTER = "6-deck shoe • Blackjack pays 3:2 • Dealer stands on all 17s • Split any pair, 10s included"
 
 # Themed shifts, straight off the signs on the Strip.
 WORK_JOBS = [
@@ -136,8 +158,8 @@ def hustle(rng: random.Random) -> tuple[int, str]:
 
 
 def convert(amount: int, fee_rate: float = CONVERT_FEE) -> tuple[int, int]:
-    """Cash cage conversion: returns (received, fee) for turning `amount` of one currency
-    into the other. The fee is the house's cut and rounds in the house's favor."""
+    """Cash cage conversion: returns (received, fee) for swapping `amount` of one currency
+    for the other. The cage is free by default (fee 0); any fee rounds in the house's favor."""
     amount = max(0, int(amount))
     fee = math.ceil(amount * fee_rate)
     return max(0, amount - fee), fee
@@ -195,9 +217,9 @@ def parse_amount(text: str, available: int) -> int | None:
         return None
     t = text.strip().lower().replace(",", "")
     if t in ("all", "max"):
-        return available
+        return available if available > 0 else None
     if t in ("half",):
-        return available // 2
+        return available // 2 if available // 2 > 0 else None
     mult = 1
     if t.endswith("k"):
         mult, t = 1_000, t[:-1]
@@ -210,6 +232,16 @@ def parse_amount(text: str, available: int) -> int | None:
     return value if value > 0 else None
 
 
+async def render(fn, *args, filename: str, **kwargs) -> discord.File | None:
+    """Render an image off the event loop. None (text-only fallback) if drawing fails."""
+    try:
+        data = await asyncio.to_thread(fn, *args, **kwargs)
+    except Exception:
+        log.exception("Casino art failed (%s); sending text only", getattr(fn, "__name__", fn))
+        return None
+    return discord.File(io.BytesIO(data), filename=filename)
+
+
 # ── The cog ────────────────────────────────────────────────────────────────
 class Economy(commands.Cog, name="Economy"):
     """THE STRIP: wallets, earning, the cash cage, and the casino."""
@@ -218,6 +250,50 @@ class Economy(commands.Cog, name="Economy"):
         self.bot = bot
         self.rng = random.Random()
         self._chat_at: dict[tuple[int, int], float] = {}
+        self.icons: dict[str, str] = dict(EMOJI_FALLBACK)
+        self._emoji_task: asyncio.Task | None = None
+        self.shoes: dict[int, Shoe] = {}                       # one blackjack shoe per server
+        self.tables: dict[tuple[int, int], discord.ui.View] = {}  # live games by (guild, player)
+
+    # -- custom emojis --
+    def e(self, kind: str) -> str:
+        return self.icons.get(kind) or EMOJI_FALLBACK.get(kind, "")
+
+    def money(self, amount: int, kind: str = "cash") -> str:
+        return f"{self.e(kind)} **{int(amount):,}**"
+
+    def partial(self, kind: str) -> discord.PartialEmoji | str:
+        value = self.e(kind)
+        return discord.PartialEmoji.from_str(value) if value.startswith("<") else value
+
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        if self._emoji_task is None:
+            self._emoji_task = asyncio.create_task(self.sync_emojis())
+
+    async def sync_emojis(self) -> None:
+        """Upload SYKE's economy emoji set as application emojis (once; reused afterwards)."""
+        try:
+            existing = {e.name: e for e in await self.bot.fetch_application_emojis()}
+            for kind in art.EMOJI_NAMES:
+                name = EMOJI_PREFIX + kind
+                emoji = existing.get(name)
+                if emoji is None:
+                    data = await asyncio.to_thread(art.emoji_icon, kind)
+                    emoji = await self.bot.create_application_emoji(name=name, image=data)
+                self.icons[kind] = str(emoji)
+            log.info("Economy emojis ready (%d)", len(art.EMOJI_NAMES))
+        except Exception:
+            log.warning("Couldn't sync the economy's custom emojis; using standard ones", exc_info=True)
+
+    async def cog_unload(self) -> None:
+        # Never strand chips on a table: refund anything still in play.
+        for view in list(self.tables.values()):
+            with contextlib.suppress(Exception):
+                view.refund()
+        self.tables.clear()
+        if self._emoji_task is not None:
+            self._emoji_task.cancel()
 
     # -- helpers --
     def _open(self, guild_id: int) -> bool:
@@ -225,6 +301,21 @@ class Economy(commands.Cog, name="Economy"):
 
     def p(self, ctx) -> str:
         return self.bot.display_prefix(ctx.guild.id)
+
+    def casino_embed(self, title: str, body: str, colour, image: discord.File | None = None) -> discord.Embed:
+        e = embed(title, body, colour)
+        e.set_author(name="THE STRIP  •  CASINO")
+        if image is not None:
+            e.set_image(url=f"attachment://{image.filename}")
+        return e
+
+    async def send(self, ctx, e: discord.Embed, image: discord.File | None = None, view=None):
+        kwargs = {"embed": e}
+        if image is not None:
+            kwargs["file"] = image
+        if view is not None:
+            kwargs["view"] = view
+        return await ctx.reply(**kwargs)
 
     async def _guard(self, ctx) -> dict | None:
         """Shared entry for player commands: ensures the Strip is open and returns the caller's
@@ -234,7 +325,7 @@ class Economy(commands.Cog, name="Economy"):
                                         WARN), ephemeral=True)
             return None
         if not self._open(ctx.guild.id):
-            await ctx.reply(embed=embed(f"{CHIP} The Strip is dark",
+            await ctx.reply(embed=embed(f"{self.e('slots')} The Strip is dark",
                                         f"The neon's off here. An admin can light it up with "
                                         f"`{self.p(ctx)}economy on`.", WARN), ephemeral=True)
             return None
@@ -243,10 +334,42 @@ class Economy(commands.Cog, name="Economy"):
     def _net(self, w: dict) -> int:
         return w["cash"] + w["bank"] + w["chips"]
 
+    async def _place_bet(self, ctx, w: dict, text: str) -> tuple[int, int] | None:
+        """Validate and take a bet from chips (topped up from cash at the free cage).
+        Returns (bet, cash_converted) — or replies with the problem and returns None."""
+        bankroll = w["chips"] + w["cash"]
+        value = parse_amount(text, min(bankroll, MAX_BET))
+        problem = None
+        if value is None:
+            problem = (f"Bet a number of chips — like `{self.p(ctx)}slots 100` — or `all` / `half`."
+                       if bankroll else "You're broke! Grab your `daily` or clock a `work` shift first.")
+        elif value < MIN_BET:
+            problem = f"The minimum bet is {self.money(MIN_BET, 'chip')}."
+        elif value > MAX_BET:
+            problem = f"The table limit is {self.money(MAX_BET, 'chip')}."
+        elif value > bankroll:
+            problem = (f"You've only got {self.money(w['chips'], 'chip')} chips and {self.money(w['cash'])} "
+                       f"cash on you.")
+        if problem is None:
+            staked = self.bot.storage.econ_stake(ctx.guild.id, ctx.author.id, value)
+            if staked is None:
+                problem = "You can't cover that bet right now."
+            else:
+                return value, staked[1]
+        await ctx.reply(embed=embed("Bad bet", problem, WARN), ephemeral=True)
+        return None
+
+    def _cage_note(self, converted: int) -> str:
+        return (f"\n*The cage swapped {self.money(converted)} cash into chips for this bet — no fee.*"
+                if converted else "")
+
+    def _pay(self, guild_id: int, user_id: int, chips: int) -> dict:
+        return self.bot.storage.econ_adjust(guild_id, user_id, chips=chips)
+
     # -- balance --
     @commands.hybrid_command(name="balance", aliases=["bal", "wallet"],
-                             description="Check your cash, chips and bank on the Strip")
-    @app_commands.describe(member="Whose wallet to check (defaults to you)")
+                             description="Your Players Club card: cash, chips, bank and net worth")
+    @app_commands.describe(member="Whose card to check (defaults to you)")
     async def balance(self, ctx: commands.Context, member: discord.Member | None = None) -> None:
         w = await self._guard(ctx)
         if w is None:
@@ -254,14 +377,21 @@ class Economy(commands.Cog, name="Economy"):
         who = member or ctx.author
         if member is not None and not member.bot:
             w = self.bot.storage.econ_wallet(ctx.guild.id, member.id)
-        e = embed(f"{who.display_name}'s wallet", colour=BRAND)
-        e.add_field(name="Cash", value=fmt(w["cash"]), inline=True)
-        e.add_field(name="Chips", value=fmt(w["chips"], CHIP), inline=True)
-        e.add_field(name="Bank", value=fmt(w["bank"], BANK_EMOJI), inline=True)
-        e.add_field(name="Net worth", value=f"**{fmt(self._net(w))}**", inline=False)
-        if w["streak"]:
-            e.set_footer(text=f"🔥 {w['streak']}-day daily streak")
-        await ctx.reply(embed=e)
+        rank = self.bot.storage.econ_rank(ctx.guild.id, who.id)
+        avatar = None
+        with contextlib.suppress(Exception):
+            asset = who.display_avatar.with_size(256)
+            avatar = await asyncio.wait_for(asset.read(), timeout=4)
+        image = await render(art.players_card, name=who.display_name, cash=w["cash"], chips=w["chips"],
+                             bank=w["bank"], rank=rank, member_no=int(f"{ctx.guild.id % 10**6}{who.id % 10**10}"),
+                             avatar=avatar, streak=w["streak"], filename="players-club.png")
+        tier = art.tier_for(self._net(w))[0].title()
+        body = (f"{self.money(w['cash'])} cash · {self.money(w['chips'], 'chip')} chips · "
+                f"{self.money(w['bank'], 'bank')} banked\nNet worth {self.money(self._net(w))} · **{tier}** member")
+        e = embed(f"{who.display_name}'s Players Club card", body, BRAND)
+        if image is not None:
+            e.set_image(url=f"attachment://{image.filename}")
+        await self.send(ctx, e, image)
 
     # -- daily --
     @commands.hybrid_command(name="daily", description="Claim your daily cash (build a streak for more)")
@@ -280,10 +410,10 @@ class Economy(commands.Cog, name="Economy"):
         amount = daily_reward(streak)
         self.bot.storage.econ_adjust(ctx.guild.id, ctx.author.id, cash=amount,
                                      daily_at=now, streak=streak)
-        body = f"You picked up {fmt(amount)}."
+        body = f"You picked up {self.money(amount)}."
         if streak > 1:
             body += f"\n🔥 **{streak}-day streak** — keep it going for bigger payouts."
-        await ctx.reply(embed=embed(f"{CASH} Daily collected", body, OK))
+        await ctx.reply(embed=embed(f"{self.e('cash')} Daily collected", body, OK))
 
     # -- work --
     @commands.hybrid_command(name="work", aliases=["shift"], description="Clock a shift on the Strip for cash")
@@ -300,7 +430,7 @@ class Economy(commands.Cog, name="Economy"):
             return
         did, amount = work_shift(self.rng)
         self.bot.storage.econ_adjust(ctx.guild.id, ctx.author.id, cash=amount, work_at=now)
-        await ctx.reply(embed=embed("Shift done 🧾", f"You {did} and earned {fmt(amount)}.", OK))
+        await ctx.reply(embed=embed("Shift done 🧾", f"You {did} and earned {self.money(amount)}.", OK))
 
     # -- hustle --
     @commands.hybrid_command(name="hustle", aliases=["grind"],
@@ -319,7 +449,7 @@ class Economy(commands.Cog, name="Economy"):
         delta, flavor = hustle(self.rng)
         self.bot.storage.econ_adjust(ctx.guild.id, ctx.author.id, cash=delta, hustle_at=now)
         colour = OK if delta > 0 else WARN
-        await ctx.reply(embed=embed("Hustle", flavor, colour))
+        await ctx.reply(embed=embed("Hustle", flavor.replace(CASH, self.e("cash")), colour))
 
     # -- pay --
     @commands.hybrid_command(name="pay", aliases=["give"], description="Send cash to someone (small tax applies)")
@@ -338,18 +468,18 @@ class Economy(commands.Cog, name="Economy"):
                             ephemeral=True)
             return
         if value > w["cash"]:
-            await ctx.reply(embed=embed("Not enough cash", f"You only have {fmt(w['cash'])}.", WARN),
+            await ctx.reply(embed=embed("Not enough cash", f"You only have {self.money(w['cash'])}.", WARN),
                             ephemeral=True)
             return
         tax = math.ceil(value * PAY_TAX)
         self.bot.storage.econ_touch(ctx.guild.id, member.id, STARTING_CASH)
         if not self.bot.storage.econ_transfer(ctx.guild.id, ctx.author.id, member.id, value, tax):
-            await ctx.reply(embed=embed("Not enough cash", f"You only have {fmt(w['cash'])}.", WARN),
+            await ctx.reply(embed=embed("Not enough cash", f"You only have {self.money(w['cash'])}.", WARN),
                             ephemeral=True)
             return
-        await ctx.reply(embed=embed(f"{CASH} Paid",
-                                    f"{ctx.author.mention} → {member.mention}: {fmt(value - tax)} "
-                                    f"(after {fmt(tax)} tax).", OK))
+        await ctx.reply(embed=embed(f"{self.e('cash')} Paid",
+                                    f"{ctx.author.mention} → {member.mention}: {self.money(value - tax)} "
+                                    f"(after {self.money(tax)} tax).", OK))
 
     # -- bank --
     @commands.hybrid_command(name="deposit", aliases=["dep"], description="Move cash into your bank")
@@ -360,11 +490,11 @@ class Economy(commands.Cog, name="Economy"):
             return
         value = parse_amount(amount, w["cash"])
         if value is None or value <= 0 or value > w["cash"]:
-            await ctx.reply(embed=embed("Can't deposit that", f"You have {fmt(w['cash'])} on hand.",
+            await ctx.reply(embed=embed("Can't deposit that", f"You have {self.money(w['cash'])} on hand.",
                                         WARN), ephemeral=True)
             return
         self.bot.storage.econ_adjust(ctx.guild.id, ctx.author.id, cash=-value, bank=value)
-        await ctx.reply(embed=embed(f"{BANK_EMOJI} Deposited", f"Banked {fmt(value)}.", OK))
+        await ctx.reply(embed=embed(f"{self.e('bank')} Deposited", f"Banked {self.money(value)}.", OK))
 
     @commands.hybrid_command(name="withdraw", aliases=["wd"], description="Take cash out of your bank")
     @app_commands.describe(amount="How much (a number, or 'all'/'half')")
@@ -374,99 +504,93 @@ class Economy(commands.Cog, name="Economy"):
             return
         value = parse_amount(amount, w["bank"])
         if value is None or value <= 0 or value > w["bank"]:
-            await ctx.reply(embed=embed("Can't withdraw that", f"You have {fmt(w['bank'], BANK_EMOJI)} "
+            await ctx.reply(embed=embed("Can't withdraw that", f"You have {self.money(w['bank'], 'bank')} "
                                         "banked.", WARN), ephemeral=True)
             return
         self.bot.storage.econ_adjust(ctx.guild.id, ctx.author.id, cash=value, bank=-value)
-        await ctx.reply(embed=embed(f"{CASH} Withdrew", f"Took out {fmt(value)}.", OK))
+        await ctx.reply(embed=embed(f"{self.e('cash')} Withdrew", f"Took out {self.money(value)}.", OK))
 
-    # -- the cash cage: cash <-> chips --
-    @commands.hybrid_group(name="chips", fallback="help", case_insensitive=True,
-                           description="The cash cage: swap cash for casino chips and back")
-    async def chips(self, ctx: commands.Context) -> None:
+    # -- the cash cage: cash <-> chips, free --
+    @commands.hybrid_command(name="chips", aliases=["cage", "buychips"],
+                             description="The cash cage: swap cash for chips (free) — e.g. chips 500")
+    @app_commands.describe(action="An amount of cash to swap for chips — or 'buy'/'cash' then an amount",
+                           amount="The amount, when you picked buy or cash")
+    async def chips(self, ctx: commands.Context, action: str | None = None, amount: str | None = None) -> None:
         w = await self._guard(ctx)
         if w is None:
             return
-        pct = int(CONVERT_FEE * 100)
-        await ctx.reply(embed=embed(f"{CHIP} The cash cage",
-                                    f"You hold {fmt(w['cash'])} and {fmt(w['chips'], CHIP)}.\n\n"
-                                    f"`{self.p(ctx)}chips buy <amount>` — cash → chips\n"
-                                    f"`{self.p(ctx)}chips cash <amount>` — chips → cash\n\n"
-                                    f"The cage takes **{pct}%** each way.", BRAND))
-
-    @chips.command(name="buy", description="Turn cash into chips")
-    @app_commands.describe(amount="How much cash to convert (number, or 'all'/'half')")
-    async def chips_buy(self, ctx: commands.Context, amount: str) -> None:
-        w = await self._guard(ctx)
-        if w is None:
+        act = (action or "").strip().lower()
+        if not act:
+            p = self.p(ctx)
+            await ctx.reply(embed=embed(f"{self.e('chip')} The cash cage",
+                                        f"You hold {self.money(w['cash'])} cash and "
+                                        f"{self.money(w['chips'], 'chip')} chips.\n\n"
+                                        f"`{p}chips 500` — swap cash for chips\n"
+                                        f"`{p}cashout 500` — swap chips back to cash\n\n"
+                                        "The cage is **free** — 1 cash = 1 chip, both ways. You don't even "
+                                        "need to stop here: any bet tops itself up from your cash.", BRAND))
             return
-        value = parse_amount(amount, w["cash"])
-        if value is None or value <= 0 or value > w["cash"]:
-            await ctx.reply(embed=embed("Can't convert that", f"You have {fmt(w['cash'])}.", WARN),
+        if act in ("cash", "sell", "out", "cashout"):
+            await self._cash_out(ctx, w, amount or "all")
+            return
+        text = amount if act in ("buy", "in") else action
+        value = parse_amount(text or "", w["cash"])
+        if value is None or value > w["cash"]:
+            await ctx.reply(embed=embed("Can't swap that", f"You have {self.money(w['cash'])} cash.", WARN),
                             ephemeral=True)
             return
-        got, fee = convert(value)
+        got, _ = convert(value)
         self.bot.storage.econ_adjust(ctx.guild.id, ctx.author.id, cash=-value, chips=got)
-        await ctx.reply(embed=embed(f"{CHIP} Bought chips",
-                                    f"{fmt(value)} → {fmt(got, CHIP)} (cage took {fmt(fee)}).", OK))
+        await ctx.reply(embed=embed(f"{self.e('chip')} Chips bought",
+                                    f"{self.money(value)} cash → {self.money(got, 'chip')} chips. No fee.", OK))
 
-    @chips.command(name="cash", description="Turn chips back into cash")
-    @app_commands.describe(amount="How many chips to convert (number, or 'all'/'half')")
-    async def chips_cash(self, ctx: commands.Context, amount: str) -> None:
+    @commands.hybrid_command(name="cashout", aliases=["cashin"], description="Swap your chips back into cash (free)")
+    @app_commands.describe(amount="How many chips (a number, or 'all'/'half'; default all)")
+    async def cashout(self, ctx: commands.Context, amount: str = "all") -> None:
         w = await self._guard(ctx)
         if w is None:
             return
-        value = parse_amount(amount, w["chips"])
-        if value is None or value <= 0 or value > w["chips"]:
-            await ctx.reply(embed=embed("Can't convert that", f"You have {fmt(w['chips'], CHIP)}.",
+        await self._cash_out(ctx, w, amount)
+
+    async def _cash_out(self, ctx, w: dict, text: str) -> None:
+        value = parse_amount(text, w["chips"])
+        if value is None or value > w["chips"]:
+            await ctx.reply(embed=embed("Nothing to cash out", f"You have {self.money(w['chips'], 'chip')} chips.",
                                         WARN), ephemeral=True)
             return
-        got, fee = convert(value)
+        got, _ = convert(value)
         self.bot.storage.econ_adjust(ctx.guild.id, ctx.author.id, chips=-value, cash=got)
-        await ctx.reply(embed=embed(f"{CASH} Cashed out",
-                                    f"{fmt(value, CHIP)} → {fmt(got)} (cage took {fmt(fee, CHIP)}).", OK))
+        await ctx.reply(embed=embed(f"{self.e('cash')} Cashed out",
+                                    f"{self.money(value, 'chip')} chips → {self.money(got)} cash. No fee.", OK))
 
-    # -- casino --
-    def _take_bet(self, ctx, w: dict, amount: str) -> int | None:
-        """Validate a chip bet; replies and returns None if it doesn't fly."""
-        value = parse_amount(amount, w["chips"])
-        if value is None or value < MIN_BET or value > MAX_BET or value > w["chips"]:
-            return None
-        return value
-
-    async def _bad_bet(self, ctx, w: dict) -> None:
-        await ctx.reply(embed=embed("Bad bet",
-                                    f"Bet between {MIN_BET:,} and your {w['chips']:,} chips. "
-                                    f"Buy chips with `{self.p(ctx)}chips buy`.", WARN), ephemeral=True)
-
-    @commands.hybrid_command(name="slots", aliases=["slot"], description="Pull the neon slots (bets chips)")
+    # -- casino: quick games --
+    @commands.hybrid_command(name="slots", aliases=["slot"], description="Pull the neon slots")
     @app_commands.describe(bet="How many chips to bet (number, or 'all'/'half')")
     async def slots(self, ctx: commands.Context, bet: str) -> None:
         w = await self._guard(ctx)
         if w is None:
             return
-        value = self._take_bet(ctx, w, bet)
-        if value is None:
-            await self._bad_bet(ctx, w)
+        placed = await self._place_bet(ctx, w, bet)
+        if placed is None:
             return
+        value, converted = placed
         reels = slot_spin(self.rng)
         mult = slot_multiplier(reels)
         won = value * mult
-        self.bot.storage.econ_adjust(ctx.guild.id, ctx.author.id, chips=won - value)
+        after = self._pay(ctx.guild.id, ctx.author.id, won)
+        image = await render(art.slots_machine, reels, bet=value, won=won, multiplier=mult, filename="slots.png")
         line = " ".join(reels)
         if won > value:
-            msg = f"**{line}**\n\nYou win {fmt(won - value, CHIP)}! (×{mult})"
-            colour = OK
+            body, colour = f"{line}  —  **×{mult}**! You win {self.money(won - value, 'chip')}.", OK
         elif won == value:
-            msg = f"**{line}**\n\nPush — you keep your {fmt(value, CHIP)}."
-            colour = BRAND
+            body, colour = f"{line}  —  push, your {self.money(value, 'chip')} comes back.", BRAND
         else:
-            msg = f"**{line}**\n\nThe Strip keeps your {fmt(value, CHIP)}."
-            colour = WARN
-        await ctx.reply(embed=embed(f"{CHIP} Slots", msg, colour))
+            body, colour = f"{line}  —  the Strip keeps your {self.money(value, 'chip')}.", WARN
+        body += f"\nChips: {self.money(after['chips'], 'chip')}{self._cage_note(converted)}"
+        await self.send(ctx, self.casino_embed(f"{self.e('slots')} Slots", body, colour, image), image)
 
     @commands.hybrid_command(name="flip", aliases=["coinflip", "cf"],
-                             description="Coinflip for chips — heads or tails")
+                             description="Coinflip for chips — heads or tails (pays 1.95×)")
     @app_commands.describe(side="heads or tails", bet="How many chips to bet")
     async def flip(self, ctx: commands.Context, side: str, bet: str) -> None:
         w = await self._guard(ctx)
@@ -478,23 +602,23 @@ class Economy(commands.Cog, name="Economy"):
         elif pick in ("t", "tail", "tails"):
             pick = "tails"
         else:
-            await ctx.reply(embed=embed("Heads or tails?", "Pick `heads` or `tails`.", WARN),
+            await ctx.reply(embed=embed("Heads or tails?", f"Try `{self.p(ctx)}flip heads 100`.", WARN),
                             ephemeral=True)
             return
-        value = self._take_bet(ctx, w, bet)
-        if value is None:
-            await self._bad_bet(ctx, w)
+        placed = await self._place_bet(ctx, w, bet)
+        if placed is None:
             return
+        value, converted = placed
         result = self.rng.choice(["heads", "tails"])
-        if result == pick:
-            won = int(value * COINFLIP_MULT)
-            self.bot.storage.econ_adjust(ctx.guild.id, ctx.author.id, chips=won - value)
-            await ctx.reply(embed=embed(f"{CHIP} {result.title()}!",
-                                        f"You called it — up {fmt(won - value, CHIP)}.", OK))
+        won = int(value * COINFLIP_MULT) if result == pick else 0
+        after = self._pay(ctx.guild.id, ctx.author.id, won)
+        image = await render(art.coin_flip, result, pick=pick, bet=value, won=won, filename="coinflip.png")
+        if won:
+            body, colour = f"**{result.title()}** — you called it, up {self.money(won - value, 'chip')}.", OK
         else:
-            self.bot.storage.econ_adjust(ctx.guild.id, ctx.author.id, chips=-value)
-            await ctx.reply(embed=embed(f"{CHIP} {result.title()}.",
-                                        f"Wrong call — down {fmt(value, CHIP)}.", WARN))
+            body, colour = f"**{result.title()}** — wrong call, down {self.money(value, 'chip')}.", WARN
+        body += f"\nChips: {self.money(after['chips'], 'chip')}{self._cage_note(converted)}"
+        await self.send(ctx, self.casino_embed(f"{self.e('coin')} Coin flip", body, colour, image), image)
 
     @commands.hybrid_command(name="roulette", aliases=["roul"],
                              description="Spin the wheel: a number (0-36) or red/black/even/odd/low/high")
@@ -508,23 +632,83 @@ class Economy(commands.Cog, name="Economy"):
                                         "Bet a number `0`-`36`, or `red`/`black`/`even`/`odd`/`low`/`high`.",
                                         WARN), ephemeral=True)
             return
-        value = self._take_bet(ctx, w, bet)
-        if value is None:
-            await self._bad_bet(ctx, w)
+        placed = await self._place_bet(ctx, w, bet)
+        if placed is None:
             return
+        value, converted = placed
         number = roulette_spin(self.rng)
         mult = roulette_multiplier(space, number)
         won = value * mult
-        self.bot.storage.econ_adjust(ctx.guild.id, ctx.author.id, chips=won - value)
-        colour = "red" if number in ROULETTE_RED else ("green" if number == 0 else "black")
-        head = f"The ball lands on **{number}** ({colour})."
+        after = self._pay(ctx.guild.id, ctx.author.id, won)
+        image = await render(art.roulette_wheel, number, space=space.strip().lower(), bet=value, won=won,
+                             red=ROULETTE_RED, filename="roulette.png")
+        colour_name = "red" if number in ROULETTE_RED else ("green" if number == 0 else "black")
+        head = f"The ball lands on **{number} {colour_name}**."
         if won > value:
-            msg = f"{head}\n\nYou win {fmt(won - value, CHIP)}! (×{mult})"
-            tone = OK
+            body, tone = f"{head} You win {self.money(won - value, 'chip')} (×{mult}).", OK
         else:
-            msg = f"{head}\n\nDown {fmt(value, CHIP)}."
-            tone = WARN
-        await ctx.reply(embed=embed(f"{CHIP} Roulette", msg, tone))
+            body, tone = f"{head} Down {self.money(value, 'chip')}.", WARN
+        body += f"\nChips: {self.money(after['chips'], 'chip')}{self._cage_note(converted)}"
+        await self.send(ctx, self.casino_embed(f"{self.e('roulette')} Roulette", body, tone, image), image)
+
+    # -- casino: blackjack --
+    def _busy(self, ctx) -> bool:
+        return (ctx.guild.id, ctx.author.id) in self.tables
+
+    async def _already_playing(self, ctx) -> None:
+        await ctx.reply(embed=embed("You're already at a table",
+                                    "Finish the hand you're playing first.", WARN), ephemeral=True)
+
+    def shoe_for(self, guild_id: int) -> tuple[Shoe, bool]:
+        """The server's shoe, reshuffled between rounds once the cut card has come out."""
+        shoe = self.shoes.get(guild_id)
+        if shoe is None:
+            shoe = self.shoes[guild_id] = Shoe(rng=self.rng)
+            return shoe, True
+        if shoe.needs_shuffle:
+            shoe.shuffle()
+            return shoe, True
+        return shoe, False
+
+    @commands.hybrid_command(name="blackjack", aliases=["bj", "21"],
+                             description="Sit down at the blackjack table — real Vegas Strip rules")
+    @app_commands.describe(bet="How many chips to bet (number, or 'all'/'half')")
+    async def blackjack(self, ctx: commands.Context, bet: str) -> None:
+        w = await self._guard(ctx)
+        if w is None:
+            return
+        if self._busy(ctx):
+            await self._already_playing(ctx)
+            return
+        placed = await self._place_bet(ctx, w, bet)
+        if placed is None:
+            return
+        value, converted = placed
+        view = BlackjackView(self, ctx.guild.id, ctx.author, value)
+        self.tables[(ctx.guild.id, ctx.author.id)] = view   # before dealing: a natural settles (and frees it)
+        view.start_round(converted)
+        e, image = await view.frame()
+        view.message = await self.send(ctx, e, image, view)
+
+    # -- casino: hi-lo --
+    @commands.hybrid_command(name="hilo", aliases=["hl", "higherlower"],
+                             description="Higher or lower? Build a multiplier, cash out before you miss")
+    @app_commands.describe(bet="How many chips to bet (number, or 'all'/'half')")
+    async def hilo(self, ctx: commands.Context, bet: str) -> None:
+        w = await self._guard(ctx)
+        if w is None:
+            return
+        if self._busy(ctx):
+            await self._already_playing(ctx)
+            return
+        placed = await self._place_bet(ctx, w, bet)
+        if placed is None:
+            return
+        value, converted = placed
+        view = HiLoView(self, ctx.guild.id, ctx.author, HiLo(value, self.rng), converted)
+        self.tables[(ctx.guild.id, ctx.author.id)] = view
+        e, image = await view.frame()
+        view.message = await self.send(ctx, e, image, view)
 
     # -- leaderboard --
     @commands.hybrid_command(name="rich", aliases=["baltop", "richest"],
@@ -542,8 +726,9 @@ class Economy(commands.Cog, name="Economy"):
         lines = []
         for i, row in enumerate(top):
             tag = medals[i] if i < 3 else f"`#{i + 1}`"
-            lines.append(f"{tag} <@{row['user_id']}> — {fmt(row['net'])}")
-        await ctx.reply(embed=embed(f"{CHIP} Richest on the Strip", "\n".join(lines), BRAND))
+            tier = art.tier_for(row["net"])[0].title()
+            lines.append(f"{tag} <@{row['user_id']}> — {self.money(row['net'])} · {tier}")
+        await ctx.reply(embed=embed(f"{self.e('crown')} Richest on the Strip", "\n".join(lines), BRAND))
 
     # -- admin --
     @commands.hybrid_group(name="economy", fallback="status", case_insensitive=True,
@@ -552,9 +737,10 @@ class Economy(commands.Cog, name="Economy"):
     async def economy(self, ctx: commands.Context) -> None:
         state = "**open** 🟢" if self._open(ctx.guild.id) else "**closed** 🔴"
         circ = self.bot.storage.econ_circulation(ctx.guild.id)
-        await ctx.reply(embed=embed(f"{CHIP} The Strip — {state}",
-                                    f"{circ['players']} players · {fmt(circ['cash'])} cash · "
-                                    f"{fmt(circ['chips'], CHIP)} chips · {fmt(circ['bank'], BANK_EMOJI)} banked\n\n"
+        await ctx.reply(embed=embed(f"{self.e('slots')} The Strip — {state}",
+                                    f"{circ['players']} players · {self.money(circ['cash'])} cash · "
+                                    f"{self.money(circ['chips'], 'chip')} chips · "
+                                    f"{self.money(circ['bank'], 'bank')} banked\n\n"
                                     f"`{self.p(ctx)}economy on` / `off` · `give` · `take` · `reset`", BRAND),
                         ephemeral=True)
 
@@ -562,9 +748,11 @@ class Economy(commands.Cog, name="Economy"):
     @moderator("manage_guild")
     async def economy_on(self, ctx: commands.Context) -> None:
         self.bot.storage.update_config(ctx.guild.id, CONFIG_KEY, open=True)
-        await ctx.reply(embed=embed(f"{CHIP} The Strip is OPEN",
-                                    f"The neon's on. Everyone starts with {fmt(STARTING_CASH)}. "
-                                    f"Try `{self.p(ctx)}daily`, `{self.p(ctx)}work`, `{self.p(ctx)}slots`.", OK))
+        p = self.p(ctx)
+        await ctx.reply(embed=embed(f"{self.e('slots')} The Strip is OPEN",
+                                    f"The neon's on. Everyone starts with {self.money(STARTING_CASH)}.\n"
+                                    f"Earn with `{p}daily` and `{p}work`, then hit the casino: "
+                                    f"`{p}blackjack`, `{p}slots`, `{p}roulette`, `{p}hilo`, `{p}flip`.", OK))
 
     @economy.command(name="off", aliases=["close"], description="Close the Strip (balances are kept)")
     @moderator("manage_guild")
@@ -587,8 +775,8 @@ class Economy(commands.Cog, name="Economy"):
         self.bot.storage.econ_touch(ctx.guild.id, member.id, STARTING_CASH)
         self.bot.storage.econ_adjust(ctx.guild.id, member.id, **{cur: amount})
         verb = "Gave" if amount > 0 else "Took"
-        emoji = {"cash": CASH, "chips": CHIP, "bank": BANK_EMOJI}[cur]
-        await ctx.reply(embed=embed("Done", f"{verb} {member.mention} {fmt(abs(amount), emoji)} {cur}.", OK))
+        kind = {"cash": "cash", "chips": "chip", "bank": "bank"}[cur]
+        await ctx.reply(embed=embed("Done", f"{verb} {member.mention} {self.money(abs(amount), kind)} {cur}.", OK))
 
     @economy.command(name="take", description="Remove funds from a member's wallet")
     @app_commands.describe(member="Who", amount="How much", currency="cash (default), chips or bank")
@@ -633,11 +821,329 @@ class Economy(commands.Cog, name="Economy"):
         self.bot.storage.econ_adjust(message.guild.id, message.author.id, cash=CHAT_REWARD)
 
 
+# ── interactive tables ─────────────────────────────────────────────────────
+class TableView(discord.ui.View):
+    """Shared plumbing for a one-player casino table: owner-only buttons, a lock against
+    double clicks, and refunds/settlement so chips are never stranded."""
+
+    def __init__(self, cog: Economy, guild_id: int, player, timeout: float) -> None:
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.player = player
+        self.message: discord.Message | None = None
+        self.lock = asyncio.Lock()
+        self.settled = False
+        self.note = ""
+
+    @property
+    def key(self) -> tuple[int, int]:
+        return (self.guild_id, self.player.id)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.player.id:
+            p = self.cog.bot.display_prefix(self.guild_id)
+            await interaction.response.send_message(
+                f"This is {self.player.display_name}'s table — grab your own seat with `{p}blackjack <bet>` "
+                f"or `{p}hilo <bet>`.", ephemeral=True)
+            return False
+        return True
+
+    def button(self, label: str, style: discord.ButtonStyle, action: str, *, emoji=None,
+               disabled: bool = False, row: int = 0) -> None:
+        b = discord.ui.Button(label=label, style=style, emoji=emoji, disabled=disabled, row=row)
+
+        async def callback(interaction: discord.Interaction, act=action) -> None:
+            await self.press(interaction, act)
+
+        b.callback = callback
+        self.add_item(b)
+
+    async def press(self, interaction: discord.Interaction, action: str) -> None:
+        raise NotImplementedError
+
+    async def frame(self) -> tuple[discord.Embed, discord.File | None]:
+        raise NotImplementedError
+
+    async def redraw(self, interaction: discord.Interaction | None = None) -> None:
+        e, image = await self.frame()
+        kwargs = {"embed": e, "attachments": [image] if image is not None else [], "view": self}
+        if interaction is not None and not interaction.response.is_done():
+            await interaction.response.edit_message(**kwargs)
+        elif self.message is not None:
+            with contextlib.suppress(discord.HTTPException):
+                await self.message.edit(**kwargs)
+
+    def release(self) -> None:
+        if self.cog.tables.get(self.key) is self:
+            self.cog.tables.pop(self.key, None)
+
+    def refund(self) -> None:
+        raise NotImplementedError
+
+
+class BlackjackView(TableView):
+    def __init__(self, cog: Economy, guild_id: int, player, bet: int) -> None:
+        super().__init__(cog, guild_id, player, TABLE_TIMEOUT)
+        self.bet = bet
+        self.game: Blackjack | None = None
+        self.shuffled = False
+
+    @property
+    def finished(self) -> bool:
+        return self.game is not None and self.game.phase == "done"
+
+    def start_round(self, converted: int) -> None:
+        shoe, self.shuffled = self.cog.shoe_for(self.guild_id)
+        self.game = Blackjack(self.bet, shoe)
+        self.game.deal()
+        self.settled = False
+        self.note = self.cog._cage_note(converted)
+        if self.finished:
+            self.settle()
+        self.rebuild()
+
+    def rebuild(self) -> None:
+        self.clear_items()
+        g = self.game
+        cog = self.cog
+        if g.phase == "insurance":
+            cost = g.cost("insurance")
+            label = "Even money" if g.even_money else f"Insurance ({cost:,})"
+            self.button(label, discord.ButtonStyle.success, "insurance", emoji=cog.partial("chip"))
+            self.button("No thanks", discord.ButtonStyle.secondary, "no_insurance")
+        elif g.phase == "player":
+            acts = g.actions()
+            self.button("Hit", discord.ButtonStyle.primary, "hit", emoji="👆")
+            self.button("Stand", discord.ButtonStyle.secondary, "stand", emoji="✋")
+            if "double" in acts:
+                self.button(f"Double ({g.cost('double'):,})", discord.ButtonStyle.success, "double",
+                            emoji=cog.partial("chip"))
+            if "split" in acts:
+                self.button(f"Split ({g.cost('split'):,})", discord.ButtonStyle.success, "split", emoji="✂️")
+            if "surrender" in acts:
+                self.button("Surrender", discord.ButtonStyle.danger, "surrender", emoji="🏳️", row=1)
+        else:
+            self.button(f"Deal again ({self.bet:,})", discord.ButtonStyle.success, "again", emoji=cog.partial("cards"))
+
+    async def press(self, interaction: discord.Interaction, action: str) -> None:
+        async with self.lock:
+            g = self.game
+            storage = self.cog.bot.storage
+            if action == "again":
+                if self.cog.tables.get(self.key) not in (None, self):
+                    await interaction.response.send_message("Finish your other game first.", ephemeral=True)
+                    return
+                staked = storage.econ_stake(self.guild_id, self.player.id, self.bet)
+                if staked is None:
+                    await interaction.response.send_message(
+                        f"You need {self.bet:,} chips (or cash) to go again.", ephemeral=True)
+                    return
+                self.cog.tables[self.key] = self
+                self.start_round(staked[1])
+                await self.redraw(interaction)
+                return
+            available = g.actions()
+            if action not in available:
+                await interaction.response.send_message("That move isn't available right now.", ephemeral=True)
+                return
+            cost = g.cost(action)
+            self.note = ""
+            if cost:
+                staked = storage.econ_stake(self.guild_id, self.player.id, cost)
+                if staked is None:
+                    await interaction.response.send_message(
+                        f"You need {cost:,} more chips (or cash) to {action.replace('_', ' ')}.", ephemeral=True)
+                    return
+                self.note = self.cog._cage_note(staked[1])
+            if action == "insurance":
+                g.decide_insurance(True)
+            elif action == "no_insurance":
+                g.decide_insurance(False)
+            else:
+                getattr(g, action)()
+            if self.finished:
+                self.settle()
+            self.rebuild()
+            await self.redraw(interaction)
+
+    def settle(self) -> None:
+        if self.settled or self.game is None:
+            return
+        self.settled = True
+        if self.game.returned:
+            self.cog._pay(self.guild_id, self.player.id, self.game.returned)
+        self.release()
+
+    def refund(self) -> None:
+        if self.settled or self.game is None:
+            return
+        self.settled = True
+        self.cog._pay(self.guild_id, self.player.id, self.game.wagered)
+        self.release()
+
+    async def on_timeout(self) -> None:
+        async with self.lock:
+            g = self.game
+            if g is not None and g.phase != "done":
+                if g.phase == "insurance":
+                    g.decide_insurance(False)
+                while g.phase == "player":
+                    g.stand()
+                self.settle()
+                self.note = "\n*Timed out — remaining hands stood automatically.*"
+            self.clear_items()
+            self.stop()
+            await self.redraw()
+
+    def _summary(self) -> str:
+        g = self.game
+        cog = self.cog
+        if g.phase == "insurance":
+            return ("Dealer shows an **Ace**. You have **blackjack** — take **even money** (a guaranteed 1:1 "
+                    "payout) or play it out?" if g.even_money else
+                    f"Dealer shows an **Ace**. Insurance costs {cog.money(g.cost('insurance'), 'chip')} and pays 2:1 "
+                    "if the dealer has blackjack.")
+        if g.phase == "player":
+            h = g.hand
+            where = f"Hand {g.active + 1} of {len(g.hands)} · " if len(g.hands) > 1 else ""
+            soft = " (soft)" if h.soft and h.total < 21 else ""
+            return f"{where}You have **{h.total}{soft}** against the dealer's **{g.upcard}**. Your move."
+        lines = []
+        for i, h in enumerate(g.hands, 1):
+            net = h.payout - h.bet
+            label = {"blackjack": "Blackjack!", "win": "Win", "push": "Push", "lose": "Lose", "bust": "Bust",
+                     "surrender": "Surrendered"}[h.outcome]
+            prefix = f"**Hand {i}** · " if len(g.hands) > 1 else ""
+            amount = f"+{net:,}" if net > 0 else f"{net:,}"
+            lines.append(f"{prefix}{h.total} vs dealer {hand_total(g)} · {label} ({amount})")
+        if g.insurance_bet:
+            ins = g.insurance_payout - g.insurance_bet
+            lines.append(f"Insurance · {'paid' if ins > 0 else 'lost'} ({'+' if ins > 0 else ''}{ins:,})")
+        net = g.net
+        result = (f"You're up {cog.money(net, 'chip')}" if net > 0 else
+                  "Push — your bet comes back" if net == 0 else f"You're down {cog.money(-net, 'chip')}")
+        chips = cog.bot.storage.econ_wallet(self.guild_id, self.player.id)["chips"]
+        return "\n".join(lines) + f"\n\n**{result}.** Chips: {cog.money(chips, 'chip')}"
+
+    async def frame(self) -> tuple[discord.Embed, discord.File | None]:
+        g = self.game
+        image = await render(art.blackjack_table, g, player_name=self.player.display_name,
+                             shoe_left=g.shoe.remaining, filename="blackjack.png")
+        if g.phase == "done":
+            colour = OK if g.net > 0 else (BRAND if g.net == 0 else WARN)
+        else:
+            colour = BRAND
+        body = self._summary()
+        if self.shuffled and g.phase != "done":
+            body = "🔀 *Fresh shoe — the dealer shuffled six decks.*\n" + body
+        e = self.cog.casino_embed(f"{self.cog.e('cards')} Blackjack · {self.bet:,} chips", body + self.note,
+                                  colour, image)
+        e.set_footer(text=RULES_FOOTER)
+        return e, image
+
+
+def hand_total(g: Blackjack) -> str:
+    from .cardgames import hand_value
+    total = hand_value(g.dealer)[0]
+    if len(g.dealer) == 2 and total == 21:
+        return "blackjack"
+    return "bust" if total > 21 else str(total)
+
+
+class HiLoView(TableView):
+    def __init__(self, cog: Economy, guild_id: int, player, game: HiLo, converted: int) -> None:
+        super().__init__(cog, guild_id, player, HILO_TIMEOUT)
+        self.game = game
+        self.note = cog._cage_note(converted)
+        self.rebuild()
+
+    def rebuild(self) -> None:
+        self.clear_items()
+        g = self.game
+        if g.done:
+            return
+        hi, lo = g.step_multiplier("higher"), g.step_multiplier("lower")
+        self.button(f"Higher ×{hi:.2f}" if hi else "Higher", discord.ButtonStyle.success, "higher",
+                    emoji="⬆️", disabled=not hi)
+        self.button(f"Lower ×{lo:.2f}" if lo else "Lower", discord.ButtonStyle.danger, "lower",
+                    emoji="⬇️", disabled=not lo)
+        self.button(f"Cash out {int(g.bet * g.multiplier):,}", discord.ButtonStyle.secondary, "cash",
+                    emoji=self.cog.partial("chip"), disabled=g.steps == 0)
+
+    async def press(self, interaction: discord.Interaction, action: str) -> None:
+        async with self.lock:
+            g = self.game
+            if g.done:
+                await interaction.response.send_message("This round is over.", ephemeral=True)
+                return
+            self.note = ""
+            if action == "cash":
+                g.cash_out()
+            else:
+                try:
+                    g.guess(action)
+                except ValueError:
+                    await interaction.response.send_message("You can't call that on this card.", ephemeral=True)
+                    return
+            if g.done:
+                self.settle()
+                self.stop()
+            self.rebuild()
+            await self.redraw(interaction)
+
+    def settle(self) -> None:
+        if self.settled:
+            return
+        self.settled = True
+        if self.game.payout:
+            self.cog._pay(self.guild_id, self.player.id, self.game.payout)
+        self.release()
+
+    def refund(self) -> None:
+        if self.settled:
+            return
+        self.settled = True
+        # Mid-run: pay out what they'd built up; before any call: hand the bet back.
+        self.game.cash_out()
+        self.cog._pay(self.guild_id, self.player.id, self.game.payout)
+        self.release()
+
+    async def on_timeout(self) -> None:
+        async with self.lock:
+            if not self.game.done:
+                self.refund()
+                self.note = "\n*Timed out — " + ("cashed out for you.*" if self.game.steps else "bet returned.*")
+            self.clear_items()
+            await self.redraw()
+
+    async def frame(self) -> tuple[discord.Embed, discord.File | None]:
+        g = self.game
+        cog = self.cog
+        image = await render(art.hilo_table, g, higher_mult=g.step_multiplier("higher") if not g.done else 0,
+                             lower_mult=g.step_multiplier("lower") if not g.done else 0, filename="hilo.png")
+        if not g.done:
+            body = (f"The card is **{g.current}**. Higher or lower? (Aces high, ties lose.)\n"
+                    f"Multiplier **×{g.multiplier:.2f}** — cash out now for {cog.money(int(g.bet * g.multiplier), 'chip')}.")
+            colour = BRAND
+        elif g.won:
+            body = f"Cashed out at **×{g.multiplier:.2f}** — up {cog.money(g.payout - g.bet, 'chip')}."
+            colour = OK
+        else:
+            body = f"It was **{g.current}** — wrong call. Down {cog.money(g.bet, 'chip')}."
+            colour = WARN
+        if g.done:
+            chips = cog.bot.storage.econ_wallet(self.guild_id, self.player.id)["chips"]
+            body += f"\nChips: {cog.money(chips, 'chip')}"
+        e = cog.casino_embed(f"{cog.e('cards')} Hi-Lo · {g.bet:,} chips", body + self.note, colour, image)
+        e.set_footer(text="Each correct call pays fair odds less 3% • Cash out any time after your first call")
+        return e, image
+
+
 def help_lines(prefix: str) -> list[str]:
     return [
         f"`{prefix}economy on` — open THE STRIP in your server (admin)",
         f"`{prefix}daily` / `{prefix}work` / `{prefix}hustle` — earn cash",
-        f"`{prefix}chips buy` — swap cash for chips at the cage",
-        f"`{prefix}slots` / `{prefix}flip` / `{prefix}roulette` — the casino",
-        f"`{prefix}rich` — richest on the Strip",
+        f"`{prefix}blackjack` / `{prefix}slots` / `{prefix}roulette` / `{prefix}hilo` / `{prefix}flip` — the casino",
+        f"`{prefix}balance` — your Players Club card · `{prefix}rich` — richest on the Strip",
     ]
