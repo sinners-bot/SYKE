@@ -32,6 +32,7 @@ from . import stripworld as sw
 from .casino_art import tier_for
 from .strip_casino import CasinoError, CasinoService
 from .strip_homes import HomeError, HomeService
+from .strip_life import LifeError, LifeService
 
 log = logging.getLogger("syke.strip_api")
 
@@ -287,6 +288,7 @@ class StripAPI:
         self.svc = StripService(storage)
         self.casino = CasinoService(storage, self.svc.guard)
         self.homes = HomeService(storage, self.svc.guard)
+        self.life = LifeService(storage, self.svc.guard)
         self.secret = secret
 
     def add_routes(self, app: web.Application) -> None:
@@ -321,6 +323,7 @@ class StripAPI:
             "home_purchase_split": lambda g, u, b: self.homes.purchase_split(g, u, b.get("partner"), b.get("amount"), b.get("kind", ""), b.get("rid"), b.get("detail")),
             "home_transfer": lambda g, u, b: self.homes.transfer(g, u, b.get("owner"), b.get("home"), b.get("item"), b.get("qty", 1), b.get("rid")),
             "home_storage_of": lambda g, u, b: self.homes.storage_of(g, u, b.get("owner"), b.get("home")),
+            "life_reward": lambda g, u, b: self.life.reward(g, u, b.get("key"), b.get("amount")),
             "casino_rl_bet": lambda g, u, b: c.rl_bet(g, u, b.get("table"), b.get("round_id"), b.get("space"), b.get("amount"), b.get("rid"),
                                                      b.get("name", ""), bool(b.get("vip_ok"))),
             "casino_rl_clear": lambda g, u, b: c.rl_clear(g, u, b.get("table"), b.get("round_id"), b.get("rid")),
@@ -372,7 +375,7 @@ class StripAPI:
                 return web.json_response({"ok": False, "error": "bad_ids"}, status=400)
             try:
                 return web.json_response({"ok": True, **table_fn(gid, body)})
-            except (StripError, CasinoError, HomeError) as e:
+            except (StripError, CasinoError, HomeError, LifeError) as e:
                 return web.json_response({"ok": False, "error": e.code, "message": e.message, **e.extra})
             except (TypeError, ValueError):
                 return web.json_response({"ok": False, "error": "bad_args"}, status=400)
@@ -385,7 +388,7 @@ class StripAPI:
         try:
             result = fn(gid, uid, body)
             return web.json_response({"ok": True, **result, "state": self.svc.state(gid, uid)})
-        except (StripError, CasinoError, HomeError) as e:
+        except (StripError, CasinoError, HomeError, LifeError) as e:
             state = None
             try:
                 state = self.svc.state(gid, uid)
