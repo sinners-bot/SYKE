@@ -1776,7 +1776,7 @@ class WebDashboard:
     def _strip_body(self, guild: discord.Guild, request) -> str:
         from .casino_art import emoji_data_uri, tier_for
         from .economy import CONFIG_KEY
-        is_open = bool(self.bot.storage.get_config(guild.id, CONFIG_KEY).get("open"))
+        is_open = bool(self.bot.storage.get_config(guild.id, CONFIG_KEY).get("open", True))
         circ = self.bot.storage.econ_circulation(guild.id)
         top = self.bot.storage.econ_top(guild.id, 25)
         CASH, CHIP, BANK_EMOJI = "cash", "chip", "bank"

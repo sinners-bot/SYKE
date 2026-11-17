@@ -313,7 +313,7 @@ class Economy(commands.Cog, name="Economy"):
 
     # -- helpers --
     def _open(self, guild_id: int) -> bool:
-        return bool(self.bot.storage.get_config(guild_id, CONFIG_KEY).get("open"))
+        return bool(self.bot.storage.get_config(guild_id, CONFIG_KEY).get("open", True))   # on unless an admin turned it off
 
     def house(self) -> dict:
         """The owner's global settings (bans, casino maintenance)."""
@@ -891,7 +891,7 @@ class Economy(commands.Cog, name="Economy"):
     async def house_cmd(self, ctx: commands.Context) -> None:
         g = self.bot.storage.econ_global()
         h = self.house()
-        opened = sum(1 for cfg in self.bot.storage.configs(CONFIG_KEY).values() if cfg.get("open"))
+        opened = sum(1 for cfg in self.bot.storage.configs(CONFIG_KEY).values() if cfg.get("open", True))
         lines = [f"**{g['players']:,}** players in **{g['servers']}** servers · Strip open in **{opened}**",
                  f"{self.money(g['cash'])} cash · {self.money(g['chips'], 'chip')} chips · "
                  f"{self.money(g['bank'], 'bank')} banked",

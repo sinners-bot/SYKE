@@ -90,8 +90,16 @@ def env(tmp_path):
     return db, svc, clock
 
 
+def test_open_by_default(tmp_path):
+    db = Storage(str(tmp_path / "o.db"))
+    svc = StripService(db)
+    assert svc.state(G, U)["open"] is True        # no admin action needed
+    assert svc.work(G, U)["amount"] > 0
+
+
 def test_closed_server_says_so(tmp_path):
     db = Storage(str(tmp_path / "c.db"))
+    db.update_config(G, eco.CONFIG_KEY, open=False)   # an admin turned it off (!economy off)
     svc = StripService(db)
     assert svc.state(G, U) == {"open": False}
     with pytest.raises(StripError) as e:

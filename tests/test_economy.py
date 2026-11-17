@@ -182,7 +182,8 @@ def _open(eco, gid=42):
     eco.bot.storage.update_config(gid, econ.CONFIG_KEY, open=True)
 
 
-def test_commands_blocked_until_strip_is_open(eco):
+def test_commands_blocked_when_an_admin_closes_it(eco):
+    eco.bot.storage.update_config(42, econ.CONFIG_KEY, open=False)   # on by default; !economy off closes it
     ctx = FakeCtx()
     run(eco.daily.callback(eco, ctx))
     assert "dark" in ctx.replies[-1].title.lower()          # closed notice

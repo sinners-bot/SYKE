@@ -71,7 +71,7 @@ class StripService:
         return float(cfg.get("happy_mult", 1.0)) if cfg.get("happy_until", 0) > self.now() else 1.0
 
     def guard(self, gid: int, uid: int) -> dict:
-        if not self.cfg(gid).get("open"):
+        if not self.cfg(gid).get("open", True):
             raise StripError("closed", "The Strip is dark here. An admin can light it up with !economy on.")
         if uid in (self.house().get("banned") or []):
             raise StripError("banned", "The House has banned you from the Strip.")
@@ -87,7 +87,7 @@ class StripService:
 
     # -- reads --
     def state(self, gid: int, uid: int) -> dict:
-        if not self.cfg(gid).get("open"):
+        if not self.cfg(gid).get("open", True):
             return {"open": False}
         w = self.guard(gid, uid)
         now = self.now()
