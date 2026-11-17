@@ -177,6 +177,26 @@ CATALOG: list[Category] = [
         },
     ),
     Category(
+        "economy", "💸", "THE STRIP (Economy)", EVERYONE,
+        "A neon Vegas economy: earn cash, swap it for chips at the cage, and hit the casino.",
+        ["balance", "daily", "work", "hustle", "pay", "deposit", "withdraw",
+         "chips", "slots", "flip", "roulette", "rich", "economy"],
+        {
+            "balance": "Your cash, chips, bank and net worth. @mention someone to peek at theirs.",
+            "daily": "Claim your daily cash — claim on consecutive days to build a streak for bigger payouts.",
+            "work": "Clock a themed shift on the Strip for cash. Hourly cooldown.",
+            "hustle": "A risky earn: usually pays, sometimes flops, occasionally backfires.",
+            "pay": "Send cash to another member. A small tax is skimmed off the top.",
+            "chips": "The cash cage — `chips buy` turns cash into casino chips, `chips cash` turns them back. "
+                     "The house takes a cut each way.",
+            "slots": "Pull the neon slots with chips. Three-of-a-kind pays big; two cherries pays small.",
+            "flip": "Coinflip for chips — call `heads` or `tails`.",
+            "roulette": "Bet a number (0-36) or red/black/even/odd/low/high.",
+            "rich": "The leaderboard — richest net worth on the Strip.",
+            "economy": "Admins: `economy on`/`off` opens or closes the Strip, plus `give`/`take`/`reset` wallets.",
+        },
+    ),
+    Category(
         "meta", "ℹ️", "About & Account", EVERYONE,
         "Info about SYKE, adding it elsewhere, and controlling your own data.",
         ["help", "about", "invite", "inviter", "showcase", "diagnose", "scanme", "optout", "optin", "servers"],

@@ -40,6 +40,7 @@ from .models import Msg
 from .automod import AutoMod, help_lines as automod_help
 from .community import Community, help_lines as community_help
 from .dashboard import DashboardCog
+from .economy import Economy
 from .moderation import Moderation, help_lines as moderation_help, pretty as pretty_permission
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
 from .scanner import Scanner, to_msg
@@ -357,6 +358,7 @@ class Syke(commands.Bot):
         await self.add_cog(Security(self))
         await self.add_cog(TextFun(self))
         await self.add_cog(Community(self))
+        await self.add_cog(Economy(self))
         await self.add_cog(DashboardCog(self))
         if self.settings.web_enabled:
             try:

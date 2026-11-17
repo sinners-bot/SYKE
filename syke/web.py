@@ -77,6 +77,27 @@ SIDEBAR_JS = (
 )
 
 
+STRIP_CSS = (
+    "<style>"
+    ".statrow{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0 6px;}"
+    ".stat{flex:1 1 120px;background:var(--panel);border:1px solid var(--line);border-radius:12px;"
+    "padding:12px 14px;}"
+    ".statn{font-size:18px;font-weight:800;color:var(--text);}"
+    ".statl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-top:2px;}"
+    ".richlist{display:flex;flex-direction:column;gap:6px;margin-top:8px;}"
+    ".richrow{display:grid;grid-template-columns:34px 32px 1fr auto;grid-template-rows:auto auto;"
+    "align-items:center;gap:2px 10px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;"
+    "background:var(--panel);text-decoration:none;color:var(--text);}"
+    ".richrow:hover{border-color:var(--brand);}"
+    ".richrow .rank{grid-row:1/3;font-weight:800;color:var(--brand);text-align:center;}"
+    ".richrow img{grid-row:1/3;width:32px;height:32px;border-radius:50%;}"
+    ".richrow .rname{font-weight:600;}"
+    ".richrow .rnet{font-weight:800;}"
+    ".richrow .rsub{grid-column:3/5;font-size:11px;color:var(--muted);}"
+    "</style>"
+)
+
+
 def esc(value: object) -> str:
     return html.escape(str(value if value is not None else ""))
 
@@ -784,6 +805,7 @@ class WebDashboard:
         a("/g/{gid}/alts", self.alt_scan)
         a("/g/{gid}/memory", self.memory_page)
         p("/g/{gid}/memory/remove", self.memory_remove)
+        a("/g/{gid}/strip", self.strip_page)
         a("/g/{gid}/announce", self.announce_page)
         p("/g/{gid}/announce", self.announce_send)
         a("/g/{gid}/c/{cid}", self.channel)
@@ -979,6 +1001,7 @@ class WebDashboard:
             f"<a href='/g/{guild.id}/emojis'>{emoji_count} emojis</a> · "
             f"<a href='/g/{guild.id}/alts'>🔎 Alt &amp; raid scan</a> · "
             f"<a href='/g/{guild.id}/memory'>🧠 Memory</a> · "
+            f"<a href='/g/{guild.id}/strip'>💸 The Strip</a> · "
             f"<a href='/g/{guild.id}/announce'>📣 Announce features</a></div>"
             f"<div class='grid' style='margin-top:14px'>{settings_form}{mod}{danger}</div>"
             f"<h2>Channels</h2><table>{''.join(rows) or '<tr><td>No text channels</td></tr>'}</table>"
@@ -1740,6 +1763,61 @@ class WebDashboard:
             self.bot.block_memory(guild.id, sticker=int(value))
             raise self._redirect(back, ok="Sticker removed from memory.")
         raise self._redirect(back, err="Nothing to remove.")
+
+    async def strip_page(self, request: web.Request) -> web.Response:
+        user = self._user(request)
+        if user is None:
+            raise web.HTTPFound("/login")
+        guild = self._guild_or_404(request)
+        return layout(f"THE STRIP · {guild.name}", self._strip_body(guild, request), user=user)
+
+    def _strip_body(self, guild: discord.Guild, request) -> str:
+        from .economy import CASH, CHIP, BANK_EMOJI, CONFIG_KEY
+        is_open = bool(self.bot.storage.get_config(guild.id, CONFIG_KEY).get("open"))
+        circ = self.bot.storage.econ_circulation(guild.id)
+        top = self.bot.storage.econ_top(guild.id, 25)
+
+        def money(n, emoji=CASH):
+            return f"{emoji} {int(n):,}"
+
+        state = ("<span style='color:#22C55E'>● OPEN</span>" if is_open
+                 else "<span style='color:#F59E0B'>● CLOSED</span>")
+        secs = [f"<div class='muted'><a href='/g/{guild.id}'>← {esc(guild.name)}</a></div>",
+                "<h1>💸 THE STRIP</h1>",
+                f"<p class='muted'>The neon's {state} here. "
+                f"Admins open or close it in Discord with <code>economy on</code> / <code>off</code>.</p>"]
+
+        # Circulation stat row.
+        stats = [("Players", f"{circ['players']:,}"), ("Cash", money(circ['cash'])),
+                 ("Chips", money(circ['chips'], CHIP)), ("Banked", money(circ['bank'], BANK_EMOJI)),
+                 ("In circulation", money(circ['cash'] + circ['chips'] + circ['bank']))]
+        cards = "".join(f"<div class='stat'><div class='statn'>{esc(v)}</div>"
+                        f"<div class='statl'>{esc(label)}</div></div>" for label, v in stats)
+        secs.append(f"<div class='statrow'>{cards}</div>")
+
+        # Richest on the Strip.
+        if top:
+            rows = []
+            medals = ["🥇", "🥈", "🥉"]
+            for i, r in enumerate(top):
+                m = guild.get_member(r["user_id"])
+                name = getattr(m, "display_name", None) or f"user {r['user_id']}"
+                av = getattr(getattr(m, "display_avatar", None), "url", "")
+                rank = medals[i] if i < 3 else f"#{i + 1}"
+                rows.append(
+                    f"<a class='richrow' href='/g/{guild.id}/u/{r['user_id']}'>"
+                    f"<span class='rank'>{rank}</span>"
+                    f"<img src='{esc(av)}' alt='' loading='lazy'>"
+                    f"<span class='rname'>{esc(name)}</span>"
+                    f"<span class='rnet'>{money(r['net'])}</span>"
+                    f"<span class='rsub'>{money(r['cash'])} · {money(r['chips'], CHIP)} · "
+                    f"{money(r['bank'], BANK_EMOJI)}</span></a>")
+            secs.append("<h2>Richest on the Strip</h2>"
+                        f"<div class='richlist'>{''.join(rows)}</div>")
+        else:
+            secs.append("<div class='note'>No wallets yet — once people run <code>daily</code> or "
+                        "<code>work</code>, they'll show up here.</div>")
+        return "<div class='prof'>" + "".join(secs) + "</div>" + STRIP_CSS
 
     async def announce_page(self, request: web.Request) -> web.Response:
         user = self._user(request)

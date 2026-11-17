@@ -638,6 +638,23 @@ def test_memory_body_lists_gifs_and_stickers(dash):
     assert "Stickers (1)" in html and "https://cdn/s.png" in html and "wave" in html
 
 
+def test_strip_body_shows_state_and_leaderboard(dash):
+    web, bot, guild = dash
+    from syke.economy import CONFIG_KEY
+    req = types.SimpleNamespace(query={})
+    # Closed, empty economy.
+    html = web._strip_body(guild, req)
+    assert "THE STRIP" in html and "CLOSED" in html and "No wallets yet" in html
+    # Open it and seed two wallets.
+    bot.storage.update_config(guild.id, CONFIG_KEY, open=True)
+    bot.storage.econ_adjust(guild.id, 7, cash=900, chips=100)   # net 1000
+    bot.storage.econ_adjust(guild.id, 8, cash=200)              # net 200
+    html = web._strip_body(guild, req)
+    assert "OPEN" in html and "Richest on the Strip" in html
+    assert "1,000" in html                                      # top player's net worth
+    assert html.index("/u/7") < html.index("/u/8")             # richer player ranked first
+
+
 def test_gif_image_url_resolves_only_loadable_links():
     from syke.web import gif_image_url, gif_label
     assert gif_image_url("https://tenor.com/view/happy-dance-gif-12345") is None   # page link, not an image
