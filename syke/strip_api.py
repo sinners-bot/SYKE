@@ -31,6 +31,7 @@ from . import economy as eco
 from . import stripworld as sw
 from .casino_art import tier_for
 from .strip_casino import CasinoError, CasinoService
+from .strip_homes import HomeError, HomeService
 
 log = logging.getLogger("syke.strip_api")
 
@@ -285,6 +286,7 @@ class StripAPI:
     def __init__(self, storage, secret: str) -> None:
         self.svc = StripService(storage)
         self.casino = CasinoService(storage, self.svc.guard)
+        self.homes = HomeService(storage, self.svc.guard)
         self.secret = secret
 
     def add_routes(self, app: web.Application) -> None:
@@ -310,6 +312,12 @@ class StripAPI:
             # casino (every money move carries a request id `rid` and happens exactly once)
             "casino_exchange": lambda g, u, b: c.exchange(g, u, b.get("action"), b.get("amount"), b.get("rid")),
             "casino_slots": lambda g, u, b: c.slots(g, u, b.get("bet"), b.get("rid"), b.get("machine", ""), b.get("name", ""), b.get("theme", "")),
+            # homes: purchases priced by the game server, and the storage box (items move, never copy)
+            "home_purchase": lambda g, u, b: self.homes.purchase(g, u, b.get("amount"), b.get("kind", ""), b.get("rid"), b.get("detail")),
+            "home_storage": lambda g, u, b: self.homes.storage(g, u, b.get("home")),
+            "home_store": lambda g, u, b: self.homes.store(g, u, b.get("home"), b.get("item"), b.get("qty", 1), b.get("cap", 0), b.get("rid")),
+            "home_take": lambda g, u, b: self.homes.take(g, u, b.get("home"), b.get("item"), b.get("qty", 1), b.get("rid")),
+            "home_release": lambda g, u, b: self.homes.release(g, u, b.get("home")),
             "casino_rl_bet": lambda g, u, b: c.rl_bet(g, u, b.get("table"), b.get("round_id"), b.get("space"), b.get("amount"), b.get("rid"),
                                                      b.get("name", ""), bool(b.get("vip_ok"))),
             "casino_rl_clear": lambda g, u, b: c.rl_clear(g, u, b.get("table"), b.get("round_id"), b.get("rid")),
@@ -361,7 +369,7 @@ class StripAPI:
                 return web.json_response({"ok": False, "error": "bad_ids"}, status=400)
             try:
                 return web.json_response({"ok": True, **table_fn(gid, body)})
-            except (StripError, CasinoError) as e:
+            except (StripError, CasinoError, HomeError) as e:
                 return web.json_response({"ok": False, "error": e.code, "message": e.message, **e.extra})
             except (TypeError, ValueError):
                 return web.json_response({"ok": False, "error": "bad_args"}, status=400)
@@ -374,7 +382,7 @@ class StripAPI:
         try:
             result = fn(gid, uid, body)
             return web.json_response({"ok": True, **result, "state": self.svc.state(gid, uid)})
-        except (StripError, CasinoError) as e:
+        except (StripError, CasinoError, HomeError) as e:
             state = None
             try:
                 state = self.svc.state(gid, uid)
