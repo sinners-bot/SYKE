@@ -10,7 +10,9 @@ and only the game server knows the secret (players never talk to this API direct
     POST /strip/api/<op>   JSON body: {"guild_id": ..., "user_id": ..., ...op arguments}
     GET  /strip/api/health
 
-Ops: state, daily, work, buy, use, pawn, spend, grant, catalog.
+Ops: state, daily, work, buy, use, pawn, spend, grant, catalog, bank, goal_reward, and the casino
+(strip_casino.py): casino_exchange, casino_slots, casino_bj_start, casino_bj_act, casino_bj_state,
+casino_visit, casino_stats; table ops (guild only): casino_roulette_round, casino_bj_sweep, casino_recent.
 Every successful reply includes the player's fresh `state`, so the game can redraw its HUD.
 """
 
@@ -26,6 +28,7 @@ from aiohttp import web
 from . import economy as eco
 from . import stripworld as sw
 from .casino_art import tier_for
+from .strip_casino import CasinoError, CasinoService
 
 log = logging.getLogger("syke.strip_api")
 
@@ -279,6 +282,7 @@ class StripAPI:
 
     def __init__(self, storage, secret: str) -> None:
         self.svc = StripService(storage)
+        self.casino = CasinoService(storage, self.svc.guard)
         self.secret = secret
 
     def add_routes(self, app: web.Application) -> None:
@@ -289,7 +293,7 @@ class StripAPI:
         return web.json_response({"ok": True, "service": "strip_api"})
 
     def _ops(self):
-        s = self.svc
+        s, c = self.svc, self.casino
         return {
             "state": lambda g, u, b: {},
             "daily": lambda g, u, b: s.daily(g, u),
@@ -301,6 +305,22 @@ class StripAPI:
             "grant": lambda g, u, b: s.grant(g, u, b.get("amount", 0), b.get("reason", "")),
             "goal_reward": lambda g, u, b: s.goal_reward(g, u),
             "bank": lambda g, u, b: s.bank(g, u, b.get("action"), b.get("amount", 0)),
+            # casino (every money move carries a request id `rid` and happens exactly once)
+            "casino_exchange": lambda g, u, b: c.exchange(g, u, b.get("action"), b.get("amount"), b.get("rid")),
+            "casino_slots": lambda g, u, b: c.slots(g, u, b.get("bet"), b.get("rid"), b.get("machine", ""), b.get("name", "")),
+            "casino_bj_start": lambda g, u, b: c.bj_start(g, u, b.get("table"), b.get("bet"), b.get("rid"), bool(b.get("vip_ok")), b.get("name", "")),
+            "casino_bj_act": lambda g, u, b: c.bj_act(g, u, b.get("hand_id"), b.get("action"), b.get("rid"), b.get("name", "")),
+            "casino_bj_state": lambda g, u, b: c.bj_state(g, u),
+            "casino_visit": lambda g, u, b: c.visit(g, u, b.get("rid")),
+            "casino_stats": lambda g, u, b: c.stats(g, u),
+        }
+
+    def _table_ops(self):
+        c = self.casino
+        return {
+            "casino_roulette_round": lambda g, b: c.roulette_round(g, b.get("round_id"), b.get("bets"), b.get("table", "roulette")),
+            "casino_bj_sweep": lambda g, b: c.bj_sweep(g),
+            "casino_recent": lambda g, b: c.recent(g),
         }
 
     async def handle(self, request: web.Request) -> web.Response:
@@ -310,8 +330,8 @@ class StripAPI:
         op = request.match_info.get("op", "")
         if op == "catalog":
             return web.json_response({"ok": True, **self.svc.catalog()})
-        fn = self._ops().get(op)
-        if fn is None:
+        fn, table_fn = self._ops().get(op), self._table_ops().get(op)
+        if fn is None and table_fn is None:
             return web.json_response({"ok": False, "error": "unknown_op"}, status=404)
         try:
             body = await request.json()
@@ -319,13 +339,26 @@ class StripAPI:
             return web.json_response({"ok": False, "error": "bad_json"}, status=400)
         if not isinstance(body, dict):
             return web.json_response({"ok": False, "error": "bad_json"}, status=400)
+        if table_fn is not None:   # whole-table ops: a server, no single player
+            gid = _id(body.get("guild_id"))
+            if gid is None:
+                return web.json_response({"ok": False, "error": "bad_ids"}, status=400)
+            try:
+                return web.json_response({"ok": True, **table_fn(gid, body)})
+            except (StripError, CasinoError) as e:
+                return web.json_response({"ok": False, "error": e.code, "message": e.message, **e.extra})
+            except (TypeError, ValueError):
+                return web.json_response({"ok": False, "error": "bad_args"}, status=400)
+            except Exception:
+                log.exception("Strip API %s failed", op)
+                return web.json_response({"ok": False, "error": "server_error"}, status=500)
         gid, uid = _id(body.get("guild_id")), _id(body.get("user_id"))
         if gid is None or uid is None:
             return web.json_response({"ok": False, "error": "bad_ids"}, status=400)
         try:
             result = fn(gid, uid, body)
             return web.json_response({"ok": True, **result, "state": self.svc.state(gid, uid)})
-        except StripError as e:
+        except (StripError, CasinoError) as e:
             state = None
             try:
                 state = self.svc.state(gid, uid)
