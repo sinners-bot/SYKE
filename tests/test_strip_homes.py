@@ -82,3 +82,39 @@ def test_concurrent_takes_never_duplicate(homes):
     for t in ts: t.start()
     for t in ts: t.join()
     assert len(ok) == 1 and db.econ_items(G, U)["cookie"] == 1
+
+
+def test_split_purchase_both_or_neither(homes):
+    db, h = homes
+    a0, b0 = db.econ_wallet(G, U)["cash"], db.econ_wallet(G, U2)["cash"]
+    r = h.purchase_split(G, U, U2, 1001, "upgrade", "rid-split-1", {"prop": "lot-1"})
+    assert (r["mine"], r["theirs"]) == (501, 500)
+    assert db.econ_wallet(G, U)["cash"] == a0 - 501 and db.econ_wallet(G, U2)["cash"] == b0 - 500
+    assert h.purchase_split(G, U, U2, 1001, "upgrade", "rid-split-1")["replayed"] and db.econ_wallet(G, U2)["cash"] == b0 - 500
+    db.econ_adjust(G, U2, cash=-(b0 - 500))   # the partner is broke now
+    with pytest.raises(HomeError) as e:
+        h.purchase_split(G, U, U2, 1000, "upgrade", "rid-split-2")
+    assert e.value.code == "partner_broke" and db.econ_wallet(G, U)["cash"] == a0 - 501   # and nobody paid
+    with pytest.raises(HomeError):
+        h.purchase_split(G, U, U, 1000, "upgrade", "rid-split-3")
+
+
+def test_transfer_from_partner_box_is_logged_and_never_copies(homes):
+    db, h = homes
+    db.econ_item_add(G, U2, "cookie", 2)
+    h.store(G, U2, "lot-1", "cookie", 2, 10, "rid-ps-1")
+    out = []
+    ts = [threading.Thread(target=lambda i=i: out.append(_try(lambda: h.transfer(G, U, U2, "lot-1", "cookie", 1, f"rid-tr-{i}")))) for i in range(5)]
+    for t in ts: t.start()
+    for t in ts: t.join()
+    assert sum(1 for r in out if r) == 2 and db.econ_items(G, U).get("cookie", 0) == 2
+    assert h.storage_of(G, U, U2, "lot-1")["box"] == {}
+    rows = db._read("SELECT from_user, to_user, item, qty FROM strip_home_item_log WHERE guild_id=?", (G,))
+    assert rows == [(U2, U, "cookie", 1), (U2, U, "cookie", 1)]
+
+
+def _try(fn):
+    try:
+        return fn()
+    except HomeError:
+        return None

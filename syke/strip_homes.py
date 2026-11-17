@@ -8,6 +8,10 @@ here, in SYKE, the single source of truth:
 * store() / take(): move items between the player's bag (econ_items) and a home's storage box. The item
   leaves one place and arrives in the other in the same transaction, so nothing can be duplicated.
 * release(): when someone moves out, everything in that home's storage goes back to their bag.
+* purchase_split(): a shared household's bill split between the two partners (larger half to the one
+  asking), both paid in one transaction or neither.
+* transfer(): a household member with storage permission takes an item from their partner's box at the
+  shared home. Logged with who, from whom and when.
 """
 
 from __future__ import annotations
@@ -32,6 +36,10 @@ CREATE TABLE IF NOT EXISTS strip_home_ledger (
     kind TEXT NOT NULL, amount INTEGER NOT NULL, cash_after INTEGER NOT NULL, detail TEXT NOT NULL DEFAULT '{}', ts REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS strip_home_ledger_user ON strip_home_ledger (guild_id, user_id, id);
+CREATE TABLE IF NOT EXISTS strip_home_item_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, home TEXT NOT NULL, from_user INTEGER NOT NULL, to_user INTEGER NOT NULL,
+    item TEXT NOT NULL, qty INTEGER NOT NULL, rid TEXT NOT NULL, ts REAL NOT NULL
+);
 """
 PURCHASE_MAX = 1_000_000          # the most expensive thing on the Strip (a penthouse)
 STORE_MAX_QTY = 99
@@ -140,6 +148,37 @@ class HomeService:
             return self._once(conn, gid, uid, rid, "purchase", inner)
         return self._tx(do)
 
+    def purchase_split(self, gid: int, uid: int, partner, amount, kind: str, rid, detail: dict | None = None) -> dict:
+        """Both partners pay half (the asker the larger half), in one transaction: both pay or nobody does."""
+        self.guard(gid, uid)
+        try:
+            partner, amount = int(partner), int(amount)
+        except (TypeError, ValueError):
+            raise HomeError("bad_amount", "That's not a price.")
+        if partner == uid:
+            raise HomeError("bad_partner", "Split with whom?")
+        self.guard(gid, partner)
+        if amount < 2 or amount > PURCHASE_MAX:
+            raise HomeError("bad_amount", "That's not a price.")
+        kind = re.sub(r"[^a-z_]", "", str(kind or "purchase"))[:24] or "purchase"
+        mine, theirs = (amount + 1) // 2, amount // 2
+
+        def do(conn):
+            def inner():
+                a, b = self.db._wallet_row(conn, gid, uid), self.db._wallet_row(conn, gid, partner)
+                if a["cash"] < mine:
+                    raise HomeError("broke", f"Your half is {mine:,}. You have {a['cash']:,} on you.", have=a["cash"])
+                if b["cash"] < theirs:
+                    raise HomeError("partner_broke", f"Your partner's half is {theirs:,} and they don't have it on them.")
+                for who, w, part in ((uid, a, mine), (partner, b, theirs)):
+                    w["cash"] -= part
+                    self.db._write_wallet(conn, gid, who, w)
+                    conn.execute("INSERT INTO strip_home_ledger (guild_id, user_id, rid, kind, amount, cash_after, detail, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                 (gid, who, str(rid), kind, part, w["cash"], json.dumps({**(detail or {}), "split_with": partner if who == uid else uid})[:400], self.now()))
+                return {"amount": amount, "mine": mine, "theirs": theirs, "kind": kind, "cash": a["cash"]}
+            return self._once(conn, gid, uid, rid, "purchase_split", inner)
+        return self._tx(do)
+
     # ---------------------------------------------------------------- the storage box
     def storage(self, gid: int, uid: int, home) -> dict:
         self.guard(gid, uid)
@@ -194,3 +233,32 @@ class HomeService:
             conn.execute("DELETE FROM strip_home_storage WHERE guild_id=? AND user_id=? AND home=?", (gid, uid, home))
             return {"home": home, "returned": box}
         return self._tx(do)
+
+    def transfer(self, gid: int, uid: int, owner, home, item, qty, rid) -> dict:
+        """A household member takes an item from their partner's box at the shared home (permission checked by the game server)."""
+        self.guard(gid, uid)
+        try:
+            owner = int(owner)
+        except (TypeError, ValueError):
+            raise HomeError("bad_partner", "Whose box?")
+        self.guard(gid, owner)
+        home, item, qty = self._home(home), str(item or ""), self._qty(qty)
+
+        def do(conn):
+            def inner():
+                box = self._box(conn, gid, owner, home)
+                if box.get(item, 0) < qty:
+                    raise HomeError("no_item", "That isn't in storage.")
+                conn.execute("UPDATE strip_home_storage SET qty = qty - ? WHERE guild_id=? AND user_id=? AND home=? AND item=?", (qty, gid, owner, home, item))
+                self._bag_add(conn, gid, uid, item, qty)
+                conn.execute("INSERT INTO strip_home_item_log (guild_id, home, from_user, to_user, item, qty, rid, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (gid, home, owner, uid, item, qty, str(rid), self.now()))
+                return {"home": home, "box": self._box(conn, gid, owner, home)}
+            return self._once(conn, gid, uid, rid, "transfer", inner)
+        return self._tx(do)
+
+    def storage_of(self, gid: int, uid: int, owner, home) -> dict:
+        """A partner's box at a shared home (read only)."""
+        self.guard(gid, uid)
+        owner = int(owner)
+        home = self._home(home)
+        return self._tx(lambda conn: {"home": home, "owner": owner, "box": self._box(conn, gid, owner, home)})
