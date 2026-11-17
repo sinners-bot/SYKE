@@ -359,6 +359,11 @@ class StripWorld(commands.Cog, name="StripWorld"):
             return
         owned = self.db.econ_shops(ctx.guild.id)
         p = self.p(ctx)
+        love = self.bot.get_cog("Love")   # the chapel's rings and gifts (love.py), when SYKE is linked to the game
+        if store and love is not None and love.is_chapel(store):
+            await love.chapel.catalog()
+            await ctx.reply(embed=love.chapel_embed(p))
+            return
         if store:
             s = find_store(store)
             if s is None:
@@ -381,6 +386,8 @@ class StripWorld(commands.Cog, name="StripWorld"):
             if not items:
                 continue
             e.add_field(name=s.name, value="\n".join(f"{i.emoji} `{i.key}` {i.price:,}" for i in items), inline=True)
+        if love is not None:
+            love.shop_field(e, p)
         e.set_footer(text="Prices in cash • store owners get 10% of every sale")
         await ctx.reply(embed=e)
 

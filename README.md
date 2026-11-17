@@ -72,6 +72,21 @@ switch a server to mentions only with `!prefix mention`.
 | `!welcome` | Manage Server | **Welcome message** posted when someone gets verified (by `!verify`, the Verify button, or an admin). Your own embed design with a gentle AI roast of their name and avatar (a built-in roaster without an AI key). `!welcome channel #channel`, `!welcome title <text>`, `!welcome message <text>`, `!welcome colour #ff8800`, `!welcome image <url>`, `!welcome footer <text>`, `!welcome roles #channel`, `!welcome colors #channel` (adds "Grab your roles in #roles and pick a name colour in #colors." after the default text), `!welcome ping on\|off`, `!welcome thumbnail on\|off`, `!welcome test`, `!welcome off`. Placeholders: `{roast}` `{mention}` `{name}` `{username}` `{server}` `{count}` `{roles}` `{colors}` `{next_steps}`; `\n` makes a new line in slash commands |
 | `!dashboard` | Manage Server | **Every setting in one message**: pick a section (General, Channels, Verification, Welcome, Weekly awards, Moderation) and change things with menus, buttons and forms. Only the person who opened it can use it. Aliases: `!panel`, `!admin`, `!setup` |
 
+### Love (shared with THE STRIP)
+
+The simple version of THE STRIP game's love system. Relationships live in the game, so marrying here means
+you're married in the game too, and the other way round. Rings and gifts are paid from this server's cash and
+land in the game. Needs `SYKE_STRIP_GAME_URL` (see **Configuration**). Also `/love marry`, `/love divorce`,
+`/love partner`, `/love gift`, `/love chapel`.
+
+| Command | Who | What it does |
+| --- | --- | --- |
+| `!marry @member [ring]` | everyone | Propose. They press Yes or No; yes makes you married here and in the game, straight away (no dating ladder). Rings: `paper` (free), `promise` 250, `gold` 2,500, `diamond` 15,000, charged only on a yes. A ring you own in the game is used instead. Alias: `!propose` |
+| `!divorce` | everyone | End your marriage, engagement or relationship. One-sided, with a confirm button. Alias: `!breakup` |
+| `!partner [@member]` | everyone | Who someone is with, since when, the ring, dates and time together in the game. Respects the game's privacy setting. Aliases: `!spouse`, `!relationship`, `!married` |
+| `!gift @member <gift>` | everyone | `flower` (free, once a day), `candy`, `roses`, `teddy`, `perfume`, `watch`. It lands in their pocket in the game. Alias: `!present` |
+| `!shop chapel` | everyone | The Little Chapel: every ring and gift with its price. `!shop` lists the rings next to the storefronts |
+
 ### Moderation
 
 Each command needs the matching Discord permission (or Administrator, or `SYKE_OWNER_IDS`).
@@ -306,6 +321,8 @@ All settings live in `.env` (see `.env.example`):
 | `SYKE_WEB` | empty | `1` turns on the owner web dashboard (needs the three values below). See **Owner web dashboard** |
 | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | empty | OAuth app credentials for the dashboard login |
 | `SYKE_WEB_SECRET` | empty | A long random secret that signs dashboard login cookies |
+| `SYKE_STRIP_API_SECRET` | empty | Shared secret with THE STRIP game (the game's `SYKE_API_SECRET`) |
+| `SYKE_STRIP_GAME_URL` | empty | THE STRIP game server's address, e.g. `https://hometown-production.up.railway.app`. Turns on `!marry`, `!divorce`, `!partner`, `!gift` and the chapel in `!shop` |
 | `SYKE_WEB_BASE_URL` | empty | The dashboard's public URL, e.g. `https://syke.up.railway.app` |
 
 ## Development

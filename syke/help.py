@@ -227,6 +227,22 @@ CATALOG: list[Category] = [
         access_of={"economy": ADMIN, "house": OWNER},
     ),
     Category(
+        "love", "💞", "Love", EVERYONE,
+        "Marry, divorce and send gifts. Shared with THE STRIP game: married here means married there.",
+        ["marry", "divorce", "partner", "gift"],
+        {
+            "marry": "Propose: `marry @someone [ring]`. Nothing happens until they press Yes, then you're married here "
+                     "and in THE STRIP game. Rings: `paper` (free bottle-cap), `promise`, `gold`, `diamond`, paid from "
+                     "your cash only if they say yes. A ring you already own in the game is used instead.",
+            "divorce": "End your marriage, engagement or relationship. One-sided, like on the Strip: only you decide. "
+                       "Asks you to confirm.",
+            "partner": "Who you (or @someone) are with: married since, the ring, dates and time together in the game. "
+                       "Respects the game's privacy setting.",
+            "gift": "`gift @someone roses`: chocolates, roses, a teddy, perfume or a gold watch, paid from your cash, "
+                    "and a free wildflower once a day. It lands in their pocket in the game. `shop chapel` lists them.",
+        },
+    ),
+    Category(
         "casino", "🎰", "Casino", EVERYONE,
         "Real Vegas tables. Bets top up from your cash automatically.",
         ["blackjack", "roulette", "slots", "hilo", "flip", "chips", "cashout"],
@@ -327,6 +343,8 @@ BRIEF = {
     "jail": "Who's locked up", "bail": "Post bail",
     "property": "Own a storefront", "cashup": "Empty your registers",
     "economy": "Open, close, manage wallets", "house": "Run the economy anywhere",
+    "marry": "Propose (shared with the game)", "divorce": "End it, one-sided", "partner": "Who someone is with",
+    "gift": "Send a gift",
     "blackjack": "Vegas rules, pays 3:2", "roulette": "European wheel", "slots": "Neon slots",
     "hilo": "Higher or lower", "flip": "Coinflip, pays 1.95×", "chips": "Cash → chips, free",
     "cashout": "Chips → cash, free",

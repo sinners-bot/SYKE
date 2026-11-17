@@ -11,6 +11,7 @@ from syke.community import Community
 from syke.config import load_settings
 from syke.dashboard import DashboardCog
 from syke.economy import Economy
+from syke.love import Love
 from syke.stripworld import StripWorld
 from syke.strip_slash import StripSlash
 from syke.help import (
@@ -34,7 +35,7 @@ def bot(tmp_path):
     b._connection.user = types.SimpleNamespace(id=999, mention="<@999>", name="SYKE")
     names = []
     for cog in (SykeCommands(b), Moderation(b), AutoMod(b), Security(b), TextFun(b), Community(b),
-                Economy(b), StripWorld(b), StripSlash(b), DashboardCog(b)):
+                Economy(b), StripWorld(b), StripSlash(b), Love(b), DashboardCog(b)):
         run(b.add_cog(cog))
         names.append(cog.qualified_name)
     yield b

@@ -40,6 +40,8 @@ class Settings:
     web_secret: str = ""
     # THE STRIP game API (off unless a secret is set). The game server sends it as a bearer token.
     strip_api_secret: str = ""
+    # THE STRIP game server (for !marry, !divorce, !partner, !gift). Uses the same secret, sent the other way.
+    strip_game_url: str = ""
 
 DEFAULT_OWNER_IDS = "1342786189576634398"
 
@@ -97,4 +99,5 @@ def load_settings() -> Settings:
         web_client_secret=client_secret,
         web_secret=web_secret,
         strip_api_secret=os.getenv("SYKE_STRIP_API_SECRET", "").strip(),
+        strip_game_url=os.getenv("SYKE_STRIP_GAME_URL", "").strip().rstrip("/"),
     )

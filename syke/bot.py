@@ -42,6 +42,7 @@ from .community import Community, help_lines as community_help
 from .dashboard import DashboardCog
 from .economy import Economy
 from .stripworld import StripWorld
+from .love import Love
 from .strip_slash import StripSlash
 from .moderation import Moderation, help_lines as moderation_help, pretty as pretty_permission
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
@@ -364,6 +365,7 @@ class Syke(commands.Bot):
         await self.add_cog(Economy(self))
         await self.add_cog(StripWorld(self))
         await self.add_cog(StripSlash(self))
+        await self.add_cog(Love(self))
         await self.add_cog(DashboardCog(self))
         if self.settings.web_enabled:
             try:
