@@ -12,7 +12,9 @@ and only the game server knows the secret (players never talk to this API direct
 
 Ops: state, daily, work, buy, use, pawn, spend, grant, catalog, bank, goal_reward, and the casino
 (strip_casino.py): casino_exchange, casino_slots, casino_bj_start, casino_bj_act, casino_bj_state,
-casino_visit, casino_stats; table ops (guild only): casino_roulette_round, casino_bj_sweep, casino_recent.
+casino_visit, casino_stats, casino_rl_bet, casino_rl_clear, casino_bjt_bet, casino_bjt_unbet, casino_bjt_act;
+table ops (guild only): casino_roulette_round, casino_bj_sweep, casino_recent, casino_config, casino_sweep,
+casino_rl_open, casino_rl_state, casino_rl_spin, casino_bjt_state, casino_bjt_deal, casino_bjt_timeout.
 Every successful reply includes the player's fresh `state`, so the game can redraw its HUD.
 """
 
@@ -307,7 +309,13 @@ class StripAPI:
             "bank": lambda g, u, b: s.bank(g, u, b.get("action"), b.get("amount", 0)),
             # casino (every money move carries a request id `rid` and happens exactly once)
             "casino_exchange": lambda g, u, b: c.exchange(g, u, b.get("action"), b.get("amount"), b.get("rid")),
-            "casino_slots": lambda g, u, b: c.slots(g, u, b.get("bet"), b.get("rid"), b.get("machine", ""), b.get("name", "")),
+            "casino_slots": lambda g, u, b: c.slots(g, u, b.get("bet"), b.get("rid"), b.get("machine", ""), b.get("name", ""), b.get("theme", "")),
+            "casino_rl_bet": lambda g, u, b: c.rl_bet(g, u, b.get("table"), b.get("round_id"), b.get("space"), b.get("amount"), b.get("rid"),
+                                                     b.get("name", ""), bool(b.get("vip_ok"))),
+            "casino_rl_clear": lambda g, u, b: c.rl_clear(g, u, b.get("table"), b.get("round_id"), b.get("rid")),
+            "casino_bjt_bet": lambda g, u, b: c.bjt_bet(g, u, b.get("table"), b.get("seat"), b.get("bet"), b.get("rid"), bool(b.get("vip_ok")), b.get("name", "")),
+            "casino_bjt_unbet": lambda g, u, b: c.bjt_unbet(g, u, b.get("table"), b.get("rid")),
+            "casino_bjt_act": lambda g, u, b: c.bjt_act(g, u, b.get("table"), b.get("action"), b.get("rid"), b.get("name", "")),
             "casino_bj_start": lambda g, u, b: c.bj_start(g, u, b.get("table"), b.get("bet"), b.get("rid"), bool(b.get("vip_ok")), b.get("name", "")),
             "casino_bj_act": lambda g, u, b: c.bj_act(g, u, b.get("hand_id"), b.get("action"), b.get("rid"), b.get("name", "")),
             "casino_bj_state": lambda g, u, b: c.bj_state(g, u),
@@ -321,6 +329,14 @@ class StripAPI:
             "casino_roulette_round": lambda g, b: c.roulette_round(g, b.get("round_id"), b.get("bets"), b.get("table", "roulette")),
             "casino_bj_sweep": lambda g, b: c.bj_sweep(g),
             "casino_recent": lambda g, b: c.recent(g),
+            "casino_config": lambda g, b: c.config(),
+            "casino_sweep": lambda g, b: c.casino_sweep(g),
+            "casino_rl_open": lambda g, b: c.rl_open(g, b.get("table")),
+            "casino_rl_state": lambda g, b: c.rl_state(g, b.get("table")),
+            "casino_rl_spin": lambda g, b: c.rl_spin(g, b.get("table"), b.get("round_id")),
+            "casino_bjt_state": lambda g, b: c.bjt_state(g, b.get("table")),
+            "casino_bjt_deal": lambda g, b: c.bjt_deal(g, b.get("table"), b.get("round_id"), bool(b.get("early"))),
+            "casino_bjt_timeout": lambda g, b: c.bjt_timeout(g, b.get("table"), b.get("round_id")),
         }
 
     async def handle(self, request: web.Request) -> web.Response:

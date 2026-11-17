@@ -28,6 +28,8 @@ import time
 
 from . import economy as eco
 from .cardgames import Blackjack, Shoe, hand_value
+from .strip_games import (SLOT_MACHINES, TableRound, card_code, roulette_colour, roulette_mult, roulette_numbers,
+                          slot_config, slot_pay, slot_spin)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS strip_casino_requests (
@@ -61,6 +63,25 @@ CREATE TABLE IF NOT EXISTS strip_casino_hands (
     staked INTEGER NOT NULL, settled INTEGER NOT NULL DEFAULT 0, created REAL NOT NULL, updated REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS strip_casino_hands_open ON strip_casino_hands (guild_id, user_id, settled);
+CREATE TABLE IF NOT EXISTS strip_casino_rl_rounds (
+    guild_id INTEGER NOT NULL, round_id TEXT NOT NULL, table_id TEXT NOT NULL, status TEXT NOT NULL,
+    opened REAL NOT NULL, closes_at REAL, number INTEGER, reply TEXT, spun_at REAL,
+    PRIMARY KEY (guild_id, round_id)
+);
+CREATE INDEX IF NOT EXISTS strip_casino_rl_rounds_open ON strip_casino_rl_rounds (guild_id, table_id, status);
+CREATE TABLE IF NOT EXISTS strip_casino_rl_bets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, round_id TEXT NOT NULL, user_id INTEGER NOT NULL,
+    rid TEXT NOT NULL, space TEXT NOT NULL, amount INTEGER NOT NULL, name TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL, payout INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS strip_casino_rl_bets_round ON strip_casino_rl_bets (guild_id, round_id);
+CREATE TABLE IF NOT EXISTS strip_casino_bjt (
+    guild_id INTEGER NOT NULL, round_id TEXT NOT NULL, table_id TEXT NOT NULL, phase TEXT NOT NULL,
+    seed INTEGER NOT NULL, seats TEXT NOT NULL DEFAULT '[]', moves TEXT NOT NULL DEFAULT '[]',
+    closes_at REAL NOT NULL, turn_deadline REAL, created REAL NOT NULL, updated REAL NOT NULL,
+    PRIMARY KEY (guild_id, round_id)
+);
+CREATE INDEX IF NOT EXISTS strip_casino_bjt_open ON strip_casino_bjt (guild_id, table_id, phase);
 CREATE TABLE IF NOT EXISTS strip_casino_rounds (
     guild_id INTEGER NOT NULL, round_id TEXT NOT NULL, number INTEGER NOT NULL, reply TEXT NOT NULL, ts REAL NOT NULL,
     PRIMARY KEY (guild_id, round_id)
@@ -74,6 +95,13 @@ TABLES = {                     # blackjack tables: limits only (same rules and o
 }
 ROULETTE_TABLES = {"roulette": (eco.MIN_BET, 100_000), "vip_roulette": (1_000, eco.MAX_BET)}
 ROULETTE_MAX_BETS = 300        # per round, across all players
+RL_MAX_PER_PLAYER = 20         # bets per player per spin
+RL_BET_SECS = 20               # the betting clock starts with the first bet of a round
+RL_STALE = 120                 # a round its game server abandoned is spun this long after betting closed
+TABLE_SEATS = {"bj1": 5, "bj2": 5, "vip": 4}
+BJ_BET_SECS = 15               # betting window after the first bet at a blackjack table
+TURN_SECS = 20                 # each player's decision clock; when it runs out the hand stands
+BJ_STALE = 90                  # a table round nobody has touched this long is finished automatically
 BJ_IDLE = 600                  # a hand untouched this long stands automatically
 BIG_WIN = 500                  # net win that makes the recent-winners board
 # VIP progression by lifetime chips wagered. Status only: it never changes odds or pays out money.
@@ -112,7 +140,7 @@ class CasinoService:
     def __init__(self, storage, guard, rng: random.Random | None = None, clock=time.time) -> None:
         self.db = storage
         self.guard = guard
-        self.rng = rng or random.Random()
+        self.rng = rng or secrets.SystemRandom()   # operating-system randomness for every outcome
         self.now = clock
         with storage._lock:
             storage._conn.executescript(SCHEMA)
@@ -239,7 +267,9 @@ class CasinoService:
         return self._tx(do)
 
     # ------------------------------------------------------------------ slots
-    def slots(self, gid: int, uid: int, bet, rid, machine: str = "", name: str = "") -> dict:
+    def slots(self, gid: int, uid: int, bet, rid, machine: str = "", name: str = "", theme: str = "") -> dict:
+        if theme:
+            return self.slot_machine(gid, uid, theme, bet, rid, machine, name)
         self.guard(gid, uid)
         rid = self._rid(rid)
         bet = self._amount(bet, eco.MIN_BET, SLOTS_MAX)
@@ -261,6 +291,429 @@ class CasinoService:
                 return {"reels": keys, "mult": mult, "bet": bet, "payout": payout, "net": payout - bet, "chips": w["chips"]}
             return self._once(conn, gid, uid, rid, "slots", inner)
         return self._tx(do)
+
+    def slot_machine(self, gid: int, uid: int, theme: str, bet, rid, machine: str = "", name: str = "") -> dict:
+        """A spin on one of the themed machines (strip_games.SLOT_MACHINES): its reels, pay table and limits."""
+        self.guard(gid, uid)
+        rid = self._rid(rid)
+        if theme not in SLOT_MACHINES:
+            raise CasinoError("bad_machine", "No such machine.")
+        lo, hi = SLOT_MACHINES[theme]["limits"]
+        bet = self._amount(bet, lo, hi)
+
+        def do(conn):
+            def inner():
+                w = self._wallet(conn, gid, uid)
+                if w["chips"] < bet:
+                    raise CasinoError("broke", f"You need {bet:,} chips for that spin. Visit the cashier.", have=w["chips"])
+                reels = slot_spin(theme, self.rng)
+                mult, hit = slot_pay(theme, reels)
+                payout = bet * mult
+                w["chips"] += payout - bet
+                self._save(conn, gid, uid, w)
+                self._ledger(conn, gid, uid, rid, "slots", "slots", w, chips_delta=payout - bet, wager=bet, payout=payout,
+                             ref=str(machine)[:16], reels=reels, theme=theme, hit=hit, name=self._name(name))
+                self._stat(conn, gid, uid, "slots", bet, payout)
+                return {"theme": theme, "reels": reels, "mult": mult, "hit": hit, "bet": bet, "payout": payout,
+                        "net": payout - bet, "chips": w["chips"]}
+            return self._once(conn, gid, uid, rid, "slots", inner)
+        return self._tx(do)
+
+    @staticmethod
+    def config() -> dict:
+        """Everything the game needs to show the games: machines and pay tables, table limits and seats, clocks."""
+        return {"slots": slot_config(), "blackjack": {t: {"limits": list(TABLES[t]), "seats": TABLE_SEATS[t]} for t in TABLES},
+                "roulette": {t: {"limits": list(v), "max_bets": RL_MAX_PER_PLAYER} for t, v in ROULETTE_TABLES.items()},
+                "clocks": {"roulette_bet": RL_BET_SECS, "bj_bet": BJ_BET_SECS, "turn": TURN_SECS}}
+
+    # ------------------------------------------------------------------ shared roulette (chips staked when the bet is placed)
+    def _rl_row(self, conn, gid: int, table: str):
+        return conn.execute("SELECT round_id, status, opened, closes_at FROM strip_casino_rl_rounds "
+                            "WHERE guild_id=? AND table_id=? AND status='open' ORDER BY opened DESC LIMIT 1", (gid, table)).fetchone()
+
+    def _rl_view(self, conn, gid: int, table: str, row) -> dict:
+        bets = conn.execute("SELECT user_id, name, space, amount FROM strip_casino_rl_bets WHERE guild_id=? AND round_id=? AND status='live' "
+                            "ORDER BY id", (gid, row[0])).fetchall() if row else []
+        hist = conn.execute("SELECT number FROM strip_casino_rl_rounds WHERE guild_id=? AND table_id=? AND status='spun' "
+                            "ORDER BY spun_at DESC LIMIT 20", (gid, table)).fetchall()
+        return {"table": table, "round_id": row[0] if row else None, "status": row[1] if row else None,
+                "closes_at": row[3] if row else None, "now": self.now(), "history": [h[0] for h in reversed(hist)],
+                "bets": [{"user_id": str(b[0]), "name": b[1], "space": b[2], "amount": b[3]} for b in bets]}
+
+    @staticmethod
+    def _rl_table(table: str) -> tuple[int, int]:
+        if table not in ROULETTE_TABLES:
+            raise CasinoError("bad_table", "No such table.")
+        return ROULETTE_TABLES[table]
+
+    def rl_open(self, gid: int, table: str) -> dict:
+        """The table's open round (made if there is none): exactly one per table."""
+        self._rl_table(table)
+
+        def do(conn):
+            row = self._rl_row(conn, gid, table)
+            if not row:
+                rnd = f"{table}-{secrets.token_hex(6)}"
+                conn.execute("INSERT INTO strip_casino_rl_rounds (guild_id, round_id, table_id, status, opened) VALUES (?, ?, ?, 'open', ?)",
+                             (gid, rnd, table, self.now()))
+                row = self._rl_row(conn, gid, table)
+            return self._rl_view(conn, gid, table, row)
+        return self._tx(do)
+
+    def rl_state(self, gid: int, table: str) -> dict:
+        self._rl_table(table)
+        return self._tx(lambda conn: self._rl_view(conn, gid, table, self._rl_row(conn, gid, table)))
+
+    def rl_bet(self, gid: int, uid: int, table: str, round_id: str, space, amount, rid, name: str = "", vip_ok: bool = False) -> dict:
+        self.guard(gid, uid)
+        rid = self._rid(rid)
+        lo, hi = self._rl_table(table)
+        if table.startswith("vip") and not vip_ok:
+            raise CasinoError("vip_only", "That wheel is for VIP members.")
+        space = str(space or "").strip().lower()
+        if roulette_numbers(space) is None:
+            raise CasinoError("bad_space", "That's not a bet on this table.")
+        amount = self._amount(amount, lo, hi)
+
+        def do(conn):
+            def inner():
+                row = self._rl_row(conn, gid, table)
+                if not row or row[0] != round_id:
+                    raise CasinoError("closed", "No more bets: the wheel has moved on. Bet on the next spin.")
+                if row[3] is not None and self.now() >= row[3]:
+                    raise CasinoError("closed", "No more bets.")
+                mine = conn.execute("SELECT COUNT(*) FROM strip_casino_rl_bets WHERE guild_id=? AND round_id=? AND user_id=? AND status='live'",
+                                    (gid, round_id, uid)).fetchone()[0]
+                total = conn.execute("SELECT COUNT(*) FROM strip_casino_rl_bets WHERE guild_id=? AND round_id=? AND status='live'",
+                                     (gid, round_id)).fetchone()[0]
+                if mine >= RL_MAX_PER_PLAYER or total >= ROULETTE_MAX_BETS:
+                    raise CasinoError("limit", f"Up to {RL_MAX_PER_PLAYER} bets a spin.")
+                w = self._wallet(conn, gid, uid)
+                if w["chips"] < amount:
+                    raise CasinoError("broke", f"You only have {w['chips']:,} chips.", have=w["chips"])
+                w["chips"] -= amount
+                self._save(conn, gid, uid, w)
+                conn.execute("INSERT INTO strip_casino_rl_bets (guild_id, round_id, user_id, rid, space, amount, name, status) "
+                             "VALUES (?, ?, ?, ?, ?, ?, ?, 'live')", (gid, round_id, uid, rid, space, amount, self._name(name)))
+                self._ledger(conn, gid, uid, rid, "roulette_bet", "roulette", w, chips_delta=-amount, ref=round_id, space=space, table=table)
+                if row[3] is None:
+                    conn.execute("UPDATE strip_casino_rl_rounds SET closes_at=? WHERE guild_id=? AND round_id=?",
+                                 (self.now() + RL_BET_SECS, gid, round_id))
+                return {"chips": w["chips"], "round": self._rl_view(conn, gid, table, self._rl_row(conn, gid, table))}
+            return self._once(conn, gid, uid, rid, "rl_bet", inner)
+        return self._tx(do)
+
+    def rl_clear(self, gid: int, uid: int, table: str, round_id: str, rid) -> dict:
+        """Take your bets back while betting is still open."""
+        self.guard(gid, uid)
+        rid = self._rid(rid)
+        self._rl_table(table)
+
+        def do(conn):
+            def inner():
+                row = self._rl_row(conn, gid, table)
+                if not row or row[0] != round_id or (row[3] is not None and self.now() >= row[3]):
+                    raise CasinoError("closed", "No more bets: too late to take them back.")
+                bets = conn.execute("SELECT id, amount, rid FROM strip_casino_rl_bets WHERE guild_id=? AND round_id=? AND user_id=? AND status='live'",
+                                    (gid, round_id, uid)).fetchall()
+                w = self._wallet(conn, gid, uid)
+                back = sum(b[1] for b in bets)
+                if back:
+                    w["chips"] += back
+                    self._save(conn, gid, uid, w)
+                    conn.executemany("UPDATE strip_casino_rl_bets SET status='cleared' WHERE id=?", [(b[0],) for b in bets])
+                    self._ledger(conn, gid, uid, rid, "roulette_refund", "roulette", w, chips_delta=back, ref=round_id, bets=len(bets))
+                return {"refunded": back, "chips": w["chips"], "round": self._rl_view(conn, gid, table, row)}
+            return self._once(conn, gid, uid, rid, "rl_clear", inner)
+        return self._tx(do)
+
+    def rl_spin(self, gid: int, table: str, round_id: str) -> dict:
+        """Close the round and spin once; every live bet is paid in this one transaction. Replays by round id."""
+        self._rl_table(table)
+
+        def do(conn):
+            row = conn.execute("SELECT status, closes_at, reply, table_id FROM strip_casino_rl_rounds WHERE guild_id=? AND round_id=?",
+                               (gid, str(round_id))).fetchone()
+            if not row or row[3] != table:
+                raise CasinoError("bad_round", "No such round.")
+            if row[0] == "spun":
+                return {**json.loads(row[2]), "replayed": True}
+            if row[1] is None:
+                raise CasinoError("no_bets", "Nobody has bet yet.")
+            if self.now() < row[1]:
+                raise CasinoError("too_early", "Betting is still open.", wait=row[1] - self.now())
+            number = self.rng.randint(0, 36)
+            bets = conn.execute("SELECT id, user_id, rid, space, amount, name FROM strip_casino_rl_bets WHERE guild_id=? AND round_id=? "
+                                "AND status='live' ORDER BY id", (gid, round_id)).fetchall()
+            results = []
+            for bid, uid, brid, space, amount, name in bets:
+                payout = amount * roulette_mult(space, number)
+                w = self._wallet(conn, gid, uid)
+                if payout:
+                    w["chips"] += payout
+                    self._save(conn, gid, uid, w)
+                self._ledger(conn, gid, uid, f"spin:{brid}", "roulette", "roulette", w, chips_delta=payout, wager=amount, payout=payout,
+                             ref=round_id, space=space, number=number, name=name, table=table)
+                self._stat(conn, gid, uid, "roulette", amount, payout)
+                conn.execute("UPDATE strip_casino_rl_bets SET status='settled', payout=? WHERE id=?", (payout, bid))
+                results.append({"user_id": str(uid), "rid": brid, "name": name, "space": space, "amount": amount,
+                                "payout": payout, "net": payout - amount, "chips": w["chips"]})
+            reply = {"round_id": round_id, "table": table, "number": number, "color": roulette_colour(number), "results": results}
+            conn.execute("UPDATE strip_casino_rl_rounds SET status='spun', number=?, reply=?, spun_at=? WHERE guild_id=? AND round_id=?",
+                         (number, json.dumps(reply), self.now(), gid, round_id))
+            return reply
+        return self._tx(do)
+
+    # ------------------------------------------------------------------ shared blackjack tables (seats play in turn)
+    def _bjt_row(self, conn, gid: int, table: str, open_only: bool = True):
+        q = ("SELECT round_id, phase, seed, seats, moves, closes_at, turn_deadline, updated FROM strip_casino_bjt WHERE guild_id=? AND table_id=? "
+             + ("AND phase != 'done' " if open_only else "") + "ORDER BY created DESC LIMIT 1")
+        return conn.execute(q, (gid, table)).fetchone()
+
+    @staticmethod
+    def _bjt_game(row) -> TableRound | None:
+        if row[1] == "betting":
+            return None
+        seats = json.loads(row[3])
+        g = TableRound(row[2], sorted((s["seat"], s["bet"]) for s in seats))
+        for seat, action in json.loads(row[4]):
+            g.act(seat, action)
+        return g
+
+    def _bjt_view(self, table: str, row, g: TableRound | None) -> dict:
+        if not row:
+            return {"table": table, "round_id": None, "phase": None, "seats": [], "now": self.now()}
+        seats = json.loads(row[3])
+        done = g is not None and g.phase == "done"
+        out = {"table": table, "round_id": row[0], "phase": row[1], "closes_at": row[5], "turn_deadline": row[6], "now": self.now(),
+               "turn_seat": g.seat if g else None, "actions": sorted(g.actions()) if g else [],
+               "costs": {a: g.cost(a) for a in ("double", "split") if g and a in g.actions()},
+               "dealer": ([card_code(c) for c in g.dealer] if done else [card_code(g.dealer[0]), "??"]) if g else [],
+               "dealer_total": (hand_value(g.dealer)[0] if done else g.dealer[0].value) if g else None, "seats": []}
+        for s in sorted(seats, key=lambda x: x["seat"]):
+            hs = g.hands[s["seat"]] if g else []
+            out["seats"].append({
+                "seat": s["seat"], "user_id": str(s["uid"]), "name": s["name"], "bet": s["bet"], "staked": s["staked"],
+                "active": g.active[s["seat"]] if g else 0,
+                "hands": [{"cards": [card_code(c) for c in h.cards], "total": h.total, "soft": h.soft, "bet": h.bet, "doubled": h.doubled,
+                           "done": h.done, "outcome": h.outcome, "payout": h.payout} for h in hs],
+                "returned": g.returned(s["seat"]) if g else 0})
+        return out
+
+    def _bjt_settle(self, conn, gid: int, table: str, round_id: str, seats: list, g: TableRound) -> None:
+        for s in seats:
+            if s["staked"] != g.wagered(s["seat"]):   # the chips taken must equal what's on the table, or something is wrong
+                raise CasinoError("ledger_mismatch", "Table stake mismatch.")
+        for s in seats:
+            ret = g.returned(s["seat"])
+            w = self._wallet(conn, gid, s["uid"])
+            w["chips"] += ret
+            self._save(conn, gid, s["uid"], w)
+            self._ledger(conn, gid, s["uid"], f"bjt:{round_id}:{s['seat']}", "bj_payout", "blackjack", w, chips_delta=ret, wager=s["staked"],
+                         payout=ret, ref=round_id, table=table, outcomes=[h.outcome for h in g.hands[s["seat"]]], name=s["name"])
+            self._stat(conn, gid, s["uid"], "blackjack", s["staked"], ret)
+        conn.execute("UPDATE strip_casino_bjt SET phase='done', turn_deadline=NULL, updated=? WHERE guild_id=? AND round_id=?",
+                     (self.now(), gid, round_id))
+
+    def _bjt_after(self, conn, gid: int, table: str, round_id: str, seats: list, moves: list, g: TableRound, turn_changed: bool) -> None:
+        if g.phase == "done":
+            conn.execute("UPDATE strip_casino_bjt SET seats=?, moves=? WHERE guild_id=? AND round_id=?",
+                         (json.dumps(seats), json.dumps(moves), gid, round_id))
+            self._bjt_settle(conn, gid, table, round_id, seats, g)
+        else:
+            conn.execute("UPDATE strip_casino_bjt SET phase='player', seats=?, moves=?, turn_deadline=?, updated=? WHERE guild_id=? AND round_id=?",
+                         (json.dumps(seats), json.dumps(moves), self.now() + TURN_SECS, self.now(), gid, round_id))
+
+    @staticmethod
+    def _bjt_table(table: str) -> tuple[int, int]:
+        if table not in TABLE_SEATS:
+            raise CasinoError("bad_table", "No such table.")
+        return TABLES[table]
+
+    def bjt_state(self, gid: int, table: str) -> dict:
+        """The table's current round, or the last finished one (for the result on screen)."""
+        self._bjt_table(table)
+
+        def do(conn):
+            row = self._bjt_row(conn, gid, table) or self._bjt_row(conn, gid, table, open_only=False)
+            return self._bjt_view(table, row, self._bjt_game(row) if row else None)
+        return self._tx(do)
+
+    def bjt_bet(self, gid: int, uid: int, table: str, seat, bet, rid, vip_ok: bool = False, name: str = "") -> dict:
+        self.guard(gid, uid)
+        rid = self._rid(rid)
+        lo, hi = self._bjt_table(table)
+        if table == "vip" and not vip_ok:
+            raise CasinoError("vip_only", "That table is for VIP members.")
+        if not isinstance(seat, int) or not 0 <= seat < TABLE_SEATS[table]:
+            raise CasinoError("bad_seat", "Sit down first.")
+        bet = self._amount(bet, lo, hi)
+
+        def do(conn):
+            def inner():
+                row = self._bjt_row(conn, gid, table)
+                now = self.now()
+                if row and row[1] != "betting":
+                    raise CasinoError("closed", "Cards are out. You're in on the next hand.")
+                if row and now >= row[5]:
+                    raise CasinoError("closed", "Betting just closed. Next hand.")
+                seats = json.loads(row[3]) if row else []
+                if any(s["uid"] == uid for s in seats):
+                    raise CasinoError("already_bet", "Your bet is already on the table.")
+                if any(s["seat"] == seat for s in seats):
+                    raise CasinoError("seat_taken", "Someone has a bet on that seat.")
+                w = self._wallet(conn, gid, uid)
+                if w["chips"] < bet:
+                    raise CasinoError("broke", f"You need {bet:,} chips. Visit the cashier.", have=w["chips"])
+                if not row:
+                    round_id = f"{table}-{secrets.token_hex(6)}"
+                    conn.execute("INSERT INTO strip_casino_bjt (guild_id, round_id, table_id, phase, seed, closes_at, created, updated) "
+                                 "VALUES (?, ?, ?, 'betting', ?, ?, ?, ?)", (gid, round_id, table, secrets.randbits(62), now + BJ_BET_SECS, now, now))
+                else:
+                    round_id = row[0]
+                w["chips"] -= bet
+                self._save(conn, gid, uid, w)
+                seats.append({"seat": seat, "uid": uid, "name": self._name(name), "bet": bet, "staked": bet})
+                conn.execute("UPDATE strip_casino_bjt SET seats=?, updated=? WHERE guild_id=? AND round_id=?", (json.dumps(seats), now, gid, round_id))
+                self._ledger(conn, gid, uid, rid, "bj_stake", "blackjack", w, chips_delta=-bet, wager=0, ref=round_id, table=table, seat=seat)
+                row = self._bjt_row(conn, gid, table)
+                return {"chips": w["chips"], "round": self._bjt_view(table, row, None)}
+            return self._once(conn, gid, uid, rid, "bjt_bet", inner)
+        return self._tx(do)
+
+    def bjt_unbet(self, gid: int, uid: int, table: str, rid) -> dict:
+        """Take your bet back before the cards are dealt."""
+        self.guard(gid, uid)
+        rid = self._rid(rid)
+        self._bjt_table(table)
+
+        def do(conn):
+            def inner():
+                row = self._bjt_row(conn, gid, table)
+                if not row or row[1] != "betting" or self.now() >= row[5]:
+                    raise CasinoError("closed", "Too late: the cards are coming.")
+                seats = json.loads(row[3])
+                mine = [s for s in seats if s["uid"] == uid]
+                if not mine:
+                    raise CasinoError("no_bet", "You have no bet on this table.")
+                w = self._wallet(conn, gid, uid)
+                w["chips"] += mine[0]["staked"]
+                self._save(conn, gid, uid, w)
+                self._ledger(conn, gid, uid, rid, "bj_refund", "blackjack", w, chips_delta=mine[0]["staked"], ref=row[0], table=table)
+                rest = [s for s in seats if s["uid"] != uid]
+                if rest:
+                    conn.execute("UPDATE strip_casino_bjt SET seats=?, updated=? WHERE guild_id=? AND round_id=?", (json.dumps(rest), self.now(), gid, row[0]))
+                else:   # nobody left: the round never happened
+                    conn.execute("DELETE FROM strip_casino_bjt WHERE guild_id=? AND round_id=?", (gid, row[0]))
+                row = self._bjt_row(conn, gid, table)
+                return {"chips": w["chips"], "round": self._bjt_view(table, row, None)}
+            return self._once(conn, gid, uid, rid, "bjt_unbet", inner)
+        return self._tx(do)
+
+    def bjt_deal(self, gid: int, table: str, round_id: str, early: bool = False) -> dict:
+        """Close betting and deal (the game server calls this when the clock runs out, or early once every seat has bet)."""
+        self._bjt_table(table)
+
+        def do(conn):
+            row = conn.execute("SELECT round_id, phase, seed, seats, moves, closes_at, turn_deadline, updated FROM strip_casino_bjt "
+                               "WHERE guild_id=? AND round_id=? AND table_id=?", (gid, str(round_id), table)).fetchone()
+            if not row:
+                raise CasinoError("bad_round", "No such round.")
+            if row[1] != "betting":   # already dealt: same answer again
+                return {**self._bjt_view(table, row, self._bjt_game(row)), "replayed": True}
+            if self.now() < row[5] and not early:
+                raise CasinoError("too_early", "Betting is still open.", wait=row[5] - self.now())
+            seats = json.loads(row[3])
+            row = (row[0], "player", *row[2:])
+            g = self._bjt_game(row)
+            self._bjt_after(conn, gid, table, round_id, seats, [], g, True)
+            row = conn.execute("SELECT round_id, phase, seed, seats, moves, closes_at, turn_deadline, updated FROM strip_casino_bjt "
+                               "WHERE guild_id=? AND round_id=?", (gid, round_id)).fetchone()
+            return self._bjt_view(table, row, g)
+        return self._tx(do)
+
+    def bjt_act(self, gid: int, uid: int, table: str, action: str, rid, name: str = "") -> dict:
+        self.guard(gid, uid)
+        rid = self._rid(rid)
+        self._bjt_table(table)
+        action = str(action or "")
+
+        def do(conn):
+            def inner():
+                row = self._bjt_row(conn, gid, table)
+                if not row or row[1] != "player":
+                    raise CasinoError("no_hand", "No hand in play at this table.")
+                seats, moves = json.loads(row[3]), json.loads(row[4])
+                mine = next((s for s in seats if s["uid"] == uid), None)
+                if not mine:
+                    raise CasinoError("no_hand", "You're not in this hand.")
+                g = self._bjt_game(row)
+                if g.seat != mine["seat"]:
+                    raise CasinoError("not_your_turn", "Wait for your turn.")
+                if action not in g.actions():
+                    raise CasinoError("bad_action", f"You can't {action} right now.", actions=sorted(g.actions()))
+                cost = g.cost(action)
+                w = self._wallet(conn, gid, uid)
+                if cost:
+                    if w["chips"] < cost:
+                        raise CasinoError("broke", f"You need {cost:,} more chips to {action}.", have=w["chips"])
+                    w["chips"] -= cost
+                    self._save(conn, gid, uid, w)
+                    mine["staked"] += cost
+                    self._ledger(conn, gid, uid, rid, f"bj_{action}", "blackjack", w, chips_delta=-cost, ref=row[0], table=table)
+                g.act(mine["seat"], action)
+                moves.append([mine["seat"], action])
+                self._bjt_after(conn, gid, table, row[0], seats, moves, g, True)
+                row2 = conn.execute("SELECT round_id, phase, seed, seats, moves, closes_at, turn_deadline, updated FROM strip_casino_bjt "
+                                    "WHERE guild_id=? AND round_id=?", (gid, row[0])).fetchone()
+                return {"chips": self._wallet(conn, gid, uid)["chips"], "round": self._bjt_view(table, row2, g)}
+            return self._once(conn, gid, uid, rid, "bjt_act", inner)
+        return self._tx(do)
+
+    def bjt_timeout(self, gid: int, table: str, round_id: str, force: bool = False) -> dict:
+        """The decision clock ran out: the hand whose turn it is stands. (force: finish an abandoned round.)"""
+        self._bjt_table(table)
+
+        def do(conn):
+            row = conn.execute("SELECT round_id, phase, seed, seats, moves, closes_at, turn_deadline, updated FROM strip_casino_bjt "
+                               "WHERE guild_id=? AND round_id=? AND table_id=?", (gid, str(round_id), table)).fetchone()
+            if not row:
+                raise CasinoError("bad_round", "No such round.")
+            if row[1] != "player":
+                return self._bjt_view(table, row, self._bjt_game(row) if row[1] == "done" else None)
+            if not force and self.now() < (row[6] or 0) - 0.5:
+                raise CasinoError("too_early", "There's still time on the clock.", wait=row[6] - self.now())
+            seats, moves = json.loads(row[3]), json.loads(row[4])
+            g = self._bjt_game(row)
+            while g.phase != "done":
+                seat = g.seat
+                g.act(seat, "stand")
+                moves.append([seat, "stand"])
+                if not force:
+                    break
+            self._bjt_after(conn, gid, table, row[0], seats, moves, g, True)
+            row = conn.execute("SELECT round_id, phase, seed, seats, moves, closes_at, turn_deadline, updated FROM strip_casino_bjt "
+                               "WHERE guild_id=? AND round_id=?", (gid, row[0])).fetchone()
+            return {**self._bjt_view(table, row, g), "timed_out": True}
+        return self._tx(do)
+
+    def casino_sweep(self, gid: int) -> dict:
+        """Finish what an absent game server left behind: deal and stand abandoned blackjack rounds, spin closed wheels."""
+        now, done = self.now(), {"bj": 0, "roulette": 0}
+        for rnd, table, phase, closes, updated in self.db._read(
+                "SELECT round_id, table_id, phase, closes_at, updated FROM strip_casino_bjt WHERE guild_id=? AND phase != 'done'", (gid,)):
+            if phase == "betting" and now >= closes + BJ_STALE:
+                self.bjt_deal(gid, table, rnd)
+                phase = "player"; updated = now - BJ_STALE
+            if phase == "player" and now - updated >= BJ_STALE:
+                self.bjt_timeout(gid, table, rnd, force=True)
+                done["bj"] += 1
+        for rnd, table in self.db._read("SELECT round_id, table_id FROM strip_casino_rl_rounds WHERE guild_id=? AND status='open' "
+                                        "AND closes_at IS NOT NULL AND closes_at < ?", (gid, now - RL_STALE)):
+            self.rl_spin(gid, table, rnd)
+            done["roulette"] += 1
+        self.bj_sweep(gid)
+        return done
 
     # ------------------------------------------------------------------ roulette (one shared spin per round)
     def roulette_round(self, gid: int, round_id: str, bets: list, table: str = "roulette") -> dict:
@@ -501,7 +954,7 @@ class CasinoService:
             d = json.loads(r[11] or "{}")
             out.append({"id": r[0], "user_id": str(r[1]), "kind": r[2], "game": r[3], "ref": r[4], "chips": r[5], "cash": r[6],
                         "wager": r[7], "payout": r[8], "chips_after": r[9], "cash_after": r[10], "ts": r[12],
-                        **{k: d[k] for k in ("reels", "space", "number", "outcomes", "name", "table") if k in d}})
+                        **{k: d[k] for k in ("reels", "space", "number", "outcomes", "name", "table", "theme", "hit") if k in d}})
         return out
 
     def recent(self, gid: int, limit: int = 12) -> dict:
