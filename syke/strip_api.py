@@ -227,6 +227,21 @@ class StripService:
             raise StripError("broke", f"That costs {amount:,}. You don't have that on you.")
         return {"amount": amount, "reason": str(reason)[:40]}
 
+    def bank(self, gid: int, uid: int, action: str, amount: int) -> dict:
+        """ATM: the same as !deposit / !withdraw (no fee)."""
+        w = self.guard(gid, uid)
+        amount = int(amount)
+        if action not in ("deposit", "withdraw"):
+            raise StripError("bad_args", "Deposit or withdraw?")
+        have = w["cash"] if action == "deposit" else w["bank"]
+        if amount <= 0 or amount > have:
+            raise StripError("broke", f"You only have {have:,} {'on hand' if action == 'deposit' else 'banked'}.")
+        if action == "deposit":
+            self.db.econ_adjust(gid, uid, cash=-amount, bank=amount)
+        else:
+            self.db.econ_adjust(gid, uid, cash=amount, bank=-amount)
+        return {"action": action, "amount": amount}
+
     def grant(self, gid: int, uid: int, amount: int, reason: str = "") -> dict:
         self.guard(gid, uid)
         amount = int(amount)
@@ -285,6 +300,7 @@ class StripAPI:
             "spend": lambda g, u, b: s.spend(g, u, b.get("amount", 0), b.get("reason", "")),
             "grant": lambda g, u, b: s.grant(g, u, b.get("amount", 0), b.get("reason", "")),
             "goal_reward": lambda g, u, b: s.goal_reward(g, u),
+            "bank": lambda g, u, b: s.bank(g, u, b.get("action"), b.get("amount", 0)),
         }
 
     async def handle(self, request: web.Request) -> web.Response:

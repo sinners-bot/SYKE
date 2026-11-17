@@ -274,3 +274,17 @@ def test_api_round_trip(env):
     assert status == 400
     status, data = _call(api, "launder", {"guild_id": G, "user_id": U})
     assert status == 404
+
+
+def test_bank_deposit_and_withdraw(env):
+    db, svc, clock = env
+    svc.state(G, U)
+    svc.bank(G, U, "deposit", 200)
+    st = svc.state(G, U)
+    assert st["wallet"]["cash"] == eco.STARTING_CASH - 200 and st["wallet"]["bank"] == 200
+    svc.bank(G, U, "withdraw", 50)
+    assert svc.state(G, U)["wallet"]["bank"] == 150
+    with pytest.raises(StripError):
+        svc.bank(G, U, "withdraw", 1000)
+    with pytest.raises(StripError):
+        svc.bank(G, U, "deposit", 0)
