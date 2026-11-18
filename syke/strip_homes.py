@@ -55,7 +55,8 @@ class HomeError(Exception):
 
 def eligible(item: str) -> bool:
     """Items that can be kept at home: anything from the shops or a record."""
-    return item in sw.ITEM_BY_KEY or item in getattr(sw, "RECORD_BY_KEY", {})
+    from .strip_kitchen import is_food   # groceries and cooked food keep at home too
+    return item in sw.ITEM_BY_KEY or item in getattr(sw, "RECORD_BY_KEY", {}) or is_food(item)
 
 
 class HomeService:

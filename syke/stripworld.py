@@ -216,7 +216,8 @@ def label(key: str) -> str:
     if key in RECORD_BY_KEY:
         _, title, rarity, _ = RECORD_BY_KEY[key]
         return f"{RARITY_EMOJI[rarity]} {title}"
-    return key
+    from . import strip_kitchen   # ingredients and dishes from THE STRIP's kitchens
+    return strip_kitchen.label(key)
 
 
 def pawn_value(key: str) -> int:
@@ -224,7 +225,8 @@ def pawn_value(key: str) -> int:
         return int(RECORD_BY_KEY[key][3] * RECORD_PAWN)
     if key in ITEM_BY_KEY:
         return int(ITEM_BY_KEY[key].price * ITEM_PAWN)
-    return 0
+    from . import strip_kitchen
+    return strip_kitchen.value(key)
 
 
 def scratch(rng: random.Random) -> int:

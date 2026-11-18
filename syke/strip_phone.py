@@ -34,7 +34,8 @@ class PhoneError(Exception):
 
 
 def tradeable(key: str) -> bool:
-    return key in sw.ITEM_BY_KEY or key in sw.RECORD_BY_KEY
+    from .strip_kitchen import is_food
+    return key in sw.ITEM_BY_KEY or key in sw.RECORD_BY_KEY or is_food(key)
 
 
 class PhoneService:

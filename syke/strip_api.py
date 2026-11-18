@@ -10,7 +10,7 @@ and only the game server knows the secret (players never talk to this API direct
     POST /strip/api/<op>   JSON body: {"guild_id": ..., "user_id": ..., ...op arguments}
     GET  /strip/api/health
 
-Ops: state, daily, work, buy, use, pawn, spend, grant, catalog, bank, goal_reward, and the casino
+Ops: state, daily, work, buy, use, pawn, spend, grant, catalog, bank, goal_reward, the kitchen (kitchen_*), and the casino
 (strip_casino.py): casino_exchange, casino_slots, casino_bj_start, casino_bj_act, casino_bj_state,
 casino_visit, casino_stats, casino_rl_bet, casino_rl_clear, casino_bjt_bet, casino_bjt_unbet, casino_bjt_act;
 table ops (guild only): casino_roulette_round, casino_bj_sweep, casino_recent, casino_config, casino_sweep,
@@ -34,6 +34,7 @@ from .strip_casino import CasinoError, CasinoService
 from .strip_homes import HomeError, HomeService
 from .strip_life import LifeError, LifeService
 from .strip_phone import PhoneError, PhoneService
+from .strip_kitchen import KitchenError, KitchenService
 
 log = logging.getLogger("syke.strip_api")
 
@@ -292,6 +293,7 @@ class StripAPI:
         self.homes = HomeService(storage, self.svc.guard)
         self.life = LifeService(storage, self.svc.guard)
         self.phone = PhoneService(storage, self.svc.guard)
+        self.kitchen = KitchenService(storage, self.svc.guard)
         self.secret = secret
 
     def add_routes(self, app: web.Application) -> None:
@@ -359,6 +361,16 @@ class StripAPI:
             "market_post": lambda g, u, b: self.phone.market_post(g, u, b.get("item"), b.get("qty", 1), b.get("price")),
             "market_cancel": lambda g, u, b: self.phone.market_cancel(g, u, b.get("listing")),
             "market_buy": lambda g, u, b: self.phone.market_buy(g, u, b.get("listing"), b.get("price")),
+            # the kitchen: groceries, cooking, eating, giving, food on a business's menu (strip_kitchen.py)
+            "kitchen_catalog": lambda g, u, b: self.kitchen.catalog(),
+            "kitchen_buy": lambda g, u, b: self.kitchen.buy(g, u, b.get("items"), b.get("fee", 0), b.get("rid")),
+            "kitchen_cook": lambda g, u, b: self.kitchen.cook(g, u, b.get("use"), b.get("make"), b.get("fee", 0), b.get("rid")),
+            "kitchen_consume": lambda g, u, b: self.kitchen.consume(g, u, b.get("item"), b.get("qty", 1), b.get("rid")),
+            "kitchen_give": lambda g, u, b: self.kitchen.give(g, u, b.get("to"), b.get("item"), b.get("qty", 1), b.get("rid")),
+            "kitchen_menu": lambda g, u, b: self.kitchen.menu(g, u, b.get("store")),
+            "kitchen_stock": lambda g, u, b: self.kitchen.stock(g, u, b.get("store"), b.get("item"), b.get("qty", 1), b.get("price")),
+            "kitchen_unstock": lambda g, u, b: self.kitchen.unstock(g, u, b.get("store"), b.get("item")),
+            "kitchen_order": lambda g, u, b: self.kitchen.order(g, u, b.get("store"), b.get("item"), b.get("price"), b.get("rid")),
             "casino_rl_bet": lambda g, u, b: c.rl_bet(g, u, b.get("table"), b.get("round_id"), b.get("space"), b.get("amount"), b.get("rid"),
                                                      b.get("name", ""), bool(b.get("vip_ok"))),
             "casino_rl_clear": lambda g, u, b: c.rl_clear(g, u, b.get("table"), b.get("round_id"), b.get("rid")),
@@ -410,7 +422,7 @@ class StripAPI:
                 return web.json_response({"ok": False, "error": "bad_ids"}, status=400)
             try:
                 return web.json_response({"ok": True, **table_fn(gid, body)})
-            except (StripError, CasinoError, HomeError, LifeError, PhoneError) as e:
+            except (StripError, CasinoError, HomeError, LifeError, PhoneError, KitchenError) as e:
                 return web.json_response({"ok": False, "error": e.code, "message": e.message, **e.extra})
             except (TypeError, ValueError):
                 return web.json_response({"ok": False, "error": "bad_args"}, status=400)
@@ -423,7 +435,7 @@ class StripAPI:
         try:
             result = fn(gid, uid, body)
             return web.json_response({"ok": True, **result, "state": self.svc.state(gid, uid)})
-        except (StripError, CasinoError, HomeError, LifeError, PhoneError) as e:
+        except (StripError, CasinoError, HomeError, LifeError, PhoneError, KitchenError) as e:
             state = None
             try:
                 state = self.svc.state(gid, uid)
