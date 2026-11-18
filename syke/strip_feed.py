@@ -32,6 +32,7 @@ KINDS = {
     "cup": ("🏆 Weekly cup champion", "**{name}** won this week's **{game}** cup at Pixel Palace."),
     "promotion": ("💼 Promotion", "**{name}** is now **{title}** ({job}, level {level})."),
     "newplayer": ("🌆 New arrival", "**{name}** from this server just moved to THE STRIP. Come say hi!"),
+    "pet": ("🐾 New best friend", "**{name}** just adopted **{pet}**, a {breed}, on THE STRIP. Come say hi (pats welcome)!"),
 }
 
 
@@ -57,6 +58,8 @@ SHOWCASE = [
      "a player market, maps with directions, a calendar and your profile, all in your pocket."),
     ("profile", "💕 People", "Make friends, go on dates, propose and get married at the chapel, then move in together. "
      "Profiles show off your trophies, homes and cars, with privacy you control."),
+    ("pets", "🐾 Pets", "Adopt a dog or a cat: pick a breed at Paws & Claws or give a rescue a home at the shelter (new animals every day). "
+     "They follow you around town, nap when you stop, and other players can stop for a pat. Feed them, walk them, dress them in tiny cowboy hats."),
 ]
 
 
@@ -144,7 +147,7 @@ class StripFeed(commands.Cog, name="StripFeed"):
         clip = lambda v, n=40: discord.utils.escape_markdown(str(v or "")[:n]) or "someone"
         fields = {"name": clip(player.get("name")), "game": clip(data.get("game")), "score": clip(data.get("score")),
                   "partner": clip(data.get("partner")), "title": clip(data.get("title")), "job": clip(data.get("job")),
-                  "level": clip(data.get("level"), 4)}
+                  "level": clip(data.get("level"), 4), "pet": clip(data.get("pet"), 20), "breed": clip(data.get("breed"), 30)}
         if kind == "jackpot":
             net = data.get("net")
             amount = f"{int(net):,}" if isinstance(net, (int, float)) else "a pile of"

@@ -71,7 +71,8 @@ def test_feed_posts_only_where_opted_in_and_rate_limits():
 
 @pytest.mark.parametrize("kind,data", [("wedding", {"partner": "Cy"}), ("cup", {"game": "Beat Street"}),
                                        ("promotion", {"title": "Head Chef", "job": "Restaurant", "level": 4}),
-                                       ("newplayer", {}), ("jackpot", {"game": "slots", "net": 9000, "jackpot": "Mega"})])
+                                       ("newplayer", {}), ("jackpot", {"game": "slots", "net": 9000, "jackpot": "Mega"}),
+                                       ("pet", {"pet": "Biscuit", "breed": "Shiba Inu"})])
 def test_every_highlight_reads_well(kind, data):
     f, *_ = _setup()
     e = f.highlight_embed(kind, {"player": {"name": "Dee"}, "data": data})
