@@ -185,7 +185,7 @@ CATALOG: list[Category] = [
         "A neon Vegas economy: earn, shop, scheme and own a storefront.",
         ["daily", "work", "hustle", "pay", "balance", "deposit", "withdraw", "rich",
          "shop", "buy", "use", "inventory", "pawn", "rob", "crime", "heist", "jail", "bail",
-         "property", "cashup", "economy", "house"],
+         "property", "cashup", "thestrip", "stripfeed", "economy", "house"],
         {
             "balance": "Your Players Club card — cash, chips, bank, net worth and tier (Bronze up to Black). "
                        "@mention someone to see theirs.",
@@ -213,6 +213,11 @@ CATALOG: list[Category] = [
             "property": "11 storefronts per server, one owner each. Buy one and it earns every hour into its register "
                         "(holds a day's takings), plus 10% of every sale inside. `property buy/upgrade/sell`.",
             "cashup": "Empty the registers of every storefront you own — before someone heists them.",
+            "thestrip": "Post THE STRIP game with a Play button and how many people are on it right now. "
+                        "Also `/strip play`.",
+            "stripfeed": "Admins: `stripfeed #channel` posts highlights from this server's players (arcade records, big "
+                         "casino wins, weddings, cup champions, promotions, new arrivals) with a Play button. "
+                         "`stripfeed off` stops it. Also `/strip feed`.",
             "economy": "Admins: `economy on`/`off` opens or closes the Strip, plus `give`/`take`/`reset` wallets.",
             "house": "SYKE owners: run the economy in any server — `give`/`take`/`set`/`peek`/`reset` wallets, "
                      "`open`/`close`/`wipe` servers, `ban` (86) players, `jail`/`free`, `happyhour <x> [hours]` "
@@ -223,8 +228,9 @@ CATALOG: list[Category] = [
                   ("Shops", ["shop", "buy", "use", "inventory", "pawn"]),
                   ("Crime", ["rob", "crime", "heist", "jail", "bail"]),
                   ("Property", ["property", "cashup"]),
+                  ("The game", ["thestrip", "stripfeed"]),
                   ("Admin", ["economy", "house"])],
-        access_of={"economy": ADMIN, "house": OWNER},
+        access_of={"economy": ADMIN, "house": OWNER, "stripfeed": ADMIN},
     ),
     Category(
         "love", "💞", "Love", EVERYONE,

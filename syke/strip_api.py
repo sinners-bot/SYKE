@@ -284,7 +284,8 @@ def _id(value) -> int | None:
 class StripAPI:
     """aiohttp front door for StripService."""
 
-    def __init__(self, storage, secret: str) -> None:
+    def __init__(self, storage, secret: str, feed=None) -> None:
+        self.feed = feed            # () -> the StripFeed cog (highlights posted in servers, the live count)
         self.svc = StripService(storage)
         self.casino = CasinoService(storage, self.svc.guard)
         self.homes = HomeService(storage, self.svc.guard)
@@ -293,10 +294,31 @@ class StripAPI:
 
     def add_routes(self, app: web.Application) -> None:
         app.router.add_get("/strip/api/health", self.health)
+        app.router.add_post("/strip/api/feed", self.feed_handle)
         app.router.add_post("/strip/api/{op}", self.handle)
 
     async def health(self, request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "service": "strip_api"})
+
+    async def feed_handle(self, request: web.Request) -> web.Response:
+        """Highlights from the game, posted in the player's own server where its admins opted in; the live count."""
+        given = request.headers.get("Authorization", "")
+        if not self.secret or not hmac.compare_digest(given.encode(), f"Bearer {self.secret}".encode()):
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "bad_json"}, status=400)
+        if not isinstance(body, dict):
+            return web.json_response({"ok": False, "error": "bad_json"}, status=400)
+        cog = self.feed() if self.feed else None
+        if cog is None:
+            return web.json_response({"ok": True, "posted": False, "why": "no_bot"})
+        try:
+            return web.json_response(await cog.handle(body))
+        except Exception:
+            log.exception("Strip feed failed")
+            return web.json_response({"ok": False, "error": "server_error"}, status=500)
 
     def _ops(self):
         s, c = self.svc, self.casino

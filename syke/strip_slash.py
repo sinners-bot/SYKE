@@ -29,6 +29,20 @@ class StripSlash(commands.Cog, name="StripSlash"):
         await getattr(target, command).callback(target, ctx, *args, **kwargs)
 
     # ── /strip ──
+    @strip.command(name="play", description="Post THE STRIP with a Play button and how many are on now")
+    async def s_play(self, interaction: discord.Interaction) -> None:
+        feed = self.bot.get_cog("StripFeed")
+        from .strip_feed import play_view
+        await interaction.response.send_message(embed=feed.play_embed(interaction.guild), view=play_view(feed.app_id))
+
+    @strip.command(name="feed", description="Post Strip highlights from this server's players in a channel")
+    @app_commands.describe(channel="Where to post (leave empty to see the current setting)", off="Turn the feed off")
+    @app_commands.default_permissions(manage_guild=True)
+    async def s_feed(self, interaction: discord.Interaction, channel: discord.TextChannel | None = None, off: bool = False) -> None:
+        feed = self.bot.get_cog("StripFeed")
+        ctx = await commands.Context.from_interaction(interaction)
+        await feed.set_feed(ctx, channel, "off" if off else None)
+
     @strip.command(name="balance", description="Your Players Club card: cash, chips, bank and net worth")
     @app_commands.describe(member="Whose card (defaults to you)")
     async def s_balance(self, interaction: discord.Interaction, member: discord.Member | None = None) -> None:
