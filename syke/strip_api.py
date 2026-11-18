@@ -33,6 +33,7 @@ from .casino_art import tier_for
 from .strip_casino import CasinoError, CasinoService
 from .strip_homes import HomeError, HomeService
 from .strip_life import LifeError, LifeService
+from .strip_phone import PhoneError, PhoneService
 
 log = logging.getLogger("syke.strip_api")
 
@@ -290,6 +291,7 @@ class StripAPI:
         self.casino = CasinoService(storage, self.svc.guard)
         self.homes = HomeService(storage, self.svc.guard)
         self.life = LifeService(storage, self.svc.guard)
+        self.phone = PhoneService(storage, self.svc.guard)
         self.secret = secret
 
     def add_routes(self, app: web.Application) -> None:
@@ -346,6 +348,17 @@ class StripAPI:
             "home_transfer": lambda g, u, b: self.homes.transfer(g, u, b.get("owner"), b.get("home"), b.get("item"), b.get("qty", 1), b.get("rid")),
             "home_storage_of": lambda g, u, b: self.homes.storage_of(g, u, b.get("owner"), b.get("home")),
             "life_reward": lambda g, u, b: self.life.reward(g, u, b.get("key"), b.get("amount")),
+            # the phone: storefront business and the player marketplace
+            "biz_list": lambda g, u, b: self.phone.biz_list(g, u),
+            "biz_buy": lambda g, u, b: self.phone.biz_buy(g, u, b.get("store")),
+            "biz_upgrade": lambda g, u, b: self.phone.biz_upgrade(g, u, b.get("store")),
+            "biz_collect": lambda g, u, b: self.phone.biz_collect(g, u),
+            "biz_sell": lambda g, u, b: self.phone.biz_sell(g, u, b.get("store")),
+            "market_browse": lambda g, u, b: self.phone.market_browse(g, u, b.get("item")),
+            "market_mine": lambda g, u, b: self.phone.market_mine(g, u),
+            "market_post": lambda g, u, b: self.phone.market_post(g, u, b.get("item"), b.get("qty", 1), b.get("price")),
+            "market_cancel": lambda g, u, b: self.phone.market_cancel(g, u, b.get("listing")),
+            "market_buy": lambda g, u, b: self.phone.market_buy(g, u, b.get("listing"), b.get("price")),
             "casino_rl_bet": lambda g, u, b: c.rl_bet(g, u, b.get("table"), b.get("round_id"), b.get("space"), b.get("amount"), b.get("rid"),
                                                      b.get("name", ""), bool(b.get("vip_ok"))),
             "casino_rl_clear": lambda g, u, b: c.rl_clear(g, u, b.get("table"), b.get("round_id"), b.get("rid")),
@@ -397,7 +410,7 @@ class StripAPI:
                 return web.json_response({"ok": False, "error": "bad_ids"}, status=400)
             try:
                 return web.json_response({"ok": True, **table_fn(gid, body)})
-            except (StripError, CasinoError, HomeError, LifeError) as e:
+            except (StripError, CasinoError, HomeError, LifeError, PhoneError) as e:
                 return web.json_response({"ok": False, "error": e.code, "message": e.message, **e.extra})
             except (TypeError, ValueError):
                 return web.json_response({"ok": False, "error": "bad_args"}, status=400)
@@ -410,7 +423,7 @@ class StripAPI:
         try:
             result = fn(gid, uid, body)
             return web.json_response({"ok": True, **result, "state": self.svc.state(gid, uid)})
-        except (StripError, CasinoError, HomeError, LifeError) as e:
+        except (StripError, CasinoError, HomeError, LifeError, PhoneError) as e:
             state = None
             try:
                 state = self.svc.state(gid, uid)

@@ -6,6 +6,8 @@ import types
 import pytest
 
 discord = pytest.importorskip("discord")
+if not getattr(discord, "__file__", None):   # the do-anything stand-in other Strip tests install: needs the real discord.py
+    pytest.skip("needs discord.py", allow_module_level=True)
 from syke import strip_feed as F  # noqa: E402
 
 
