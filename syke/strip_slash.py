@@ -29,11 +29,11 @@ class StripSlash(commands.Cog, name="StripSlash"):
         await getattr(target, command).callback(target, ctx, *args, **kwargs)
 
     # ── /strip ──
-    @strip.command(name="play", description="Post THE STRIP with a Play button and how many are on now")
+    @strip.command(name="play", description="Show off THE STRIP game, with screenshots and a Play button")
     async def s_play(self, interaction: discord.Interaction) -> None:
         feed = self.bot.get_cog("StripFeed")
-        from .strip_feed import play_view
-        await interaction.response.send_message(embed=feed.play_embed(interaction.guild), view=play_view(feed.app_id))
+        ctx = await commands.Context.from_interaction(interaction)
+        await feed.showcase(ctx)
 
     @strip.command(name="feed", description="Post Strip highlights from this server's players in a channel")
     @app_commands.describe(channel="Where to post (leave empty to see the current setting)", off="Turn the feed off")

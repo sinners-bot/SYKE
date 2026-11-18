@@ -10,7 +10,9 @@ at most one every 90 seconds and 25 a day per server. Nothing is stored about th
 from __future__ import annotations
 
 import logging
+import os
 import time
+from pathlib import Path
 
 import discord
 from discord import app_commands
@@ -37,6 +39,32 @@ def launch_url(app_id: str) -> str | None:
     return f"https://discord.com/activities/{app_id}" if app_id and app_id.isdigit() else None
 
 
+# the showcase: real screenshots from the game, one page per feature (syke/assets/strip/*.jpg)
+ASSETS = Path(__file__).parent / "assets" / "strip"
+SHOWCASE = [
+    ("cover", "🎰 THE STRIP", "A pixel Las Vegas you play **right here in Discord**, in one world shared by every server that has SYKE.\n\n"
+     "Work real shifts, hit the casino, set arcade records, buy a home, make friends, date, start a club, and get married. "
+     "**Your SYKE money is your Strip money.**"),
+    ("strip", "🌃 One Strip for all of Discord", "Neon storefronts, traffic, weather and a day–night cycle. Players from every server walk the same streets. "
+     "Chat with whoever's nearby, emote, drive your own car, and tap anyone to see their profile."),
+    ("casino", "🃏 The casino", "Blackjack, roulette, slots and Hi-Lo with your SYKE chips, plus a high-limit room, a bar and a daily payout at the Players Club. "
+     "Big wins get announced to the whole Strip."),
+    ("arcade", "🕹️ Pixel Palace", "Eight real arcade games with high-score boards, claw machines full of prizes, head-to-head matches, "
+     "a ghost of the record lap in Neon Rally, and a weekly cup with trophies."),
+    ("downtown", "💼 A life to live", "Clock in at any storefront and do the actual job. Careers level up with titles and uniforms. "
+     "Rent or buy a home and decorate it, own a storefront that earns every hour, and catch a community event every two hours."),
+    ("phone", "📱 Your phone", "Messages and calls, friends, groups for tonight and permanent clubs, StripSocial posts and photos, "
+     "a player market, maps with directions, a calendar and your profile, all in your pocket."),
+    ("profile", "💕 People", "Make friends, go on dates, propose and get married at the chapel, then move in together. "
+     "Profiles show off your trophies, homes and cars, with privacy you control."),
+]
+
+
+def showcase_file(key: str) -> discord.File | None:
+    path = ASSETS / f"{key}.jpg"
+    return discord.File(str(path), filename="strip.jpg") if path.exists() else None
+
+
 def play_view(app_id: str) -> discord.ui.View | None:
     url = launch_url(app_id)
     if not url:
@@ -52,15 +80,21 @@ class StripFeed(commands.Cog, name="StripFeed"):
     def __init__(self, bot) -> None:
         self.bot = bot
         self.online = 0
-        self.app_id = ""
+        # the Activity's id (for the Play link): an env override, else what the game last told us (kept across restarts)
+        saved = self.bot.storage.get_config(0, FEED_KEY) if getattr(self.bot, "storage", None) else {}
+        self.app_id = str(os.environ.get("STRIP_ACTIVITY_ID") or saved.get("app_id") or "")
         self._presence = (None, 0.0)       # (text, when)
         self._sent: dict[int, list[float]] = {}
 
     # ---------------------------------------------------------------- from the game server
     async def handle(self, body: dict) -> dict:
         app_id = str(body.get("app_id") or "")
-        if app_id.isdigit():
+        if app_id.isdigit() and app_id != self.app_id and not os.environ.get("STRIP_ACTIVITY_ID"):
             self.app_id = app_id
+            try:
+                self.bot.storage.update_config(0, FEED_KEY, app_id=app_id)
+            except Exception:
+                log.debug("could not keep the activity id", exc_info=True)
         try:
             self.online = max(0, min(100000, int(body.get("online", self.online) or 0)))
         except (TypeError, ValueError):
@@ -124,7 +158,7 @@ class StripFeed(commands.Cog, name="StripFeed"):
 
     async def _update_presence(self) -> None:
         prefix = self.bot.settings.default_prefix
-        text = f"THE STRIP · {self.online:,} playing | {prefix}thestrip" if self.online else None
+        text = f"THE STRIP · {self.online:,} playing | {prefix}play" if self.online else None
         last, when = self._presence
         if text == last or time.time() - when < 120:
             return
@@ -138,22 +172,37 @@ class StripFeed(commands.Cog, name="StripFeed"):
             log.debug("presence update failed", exc_info=True)
 
     # ---------------------------------------------------------------- commands
-    def play_embed(self, guild: discord.Guild | None) -> discord.Embed:
-        n = self.online
-        e = embed("🎰 THE STRIP",
-                  "A pixel Las Vegas you play right here in Discord, one world shared by every server.\n"
-                  "Work real shifts, hit the casino, set arcade records, buy a home, date and get married. "
-                  "Your SYKE money is your Strip money.\n\n"
-                  + (f"**{n:,}** playing right now." if n else "Be the first one on tonight.")
-                  + ("\n\nTap **Play** below, or start it from the 🚀 Activities button in any voice channel or DM." if launch_url(self.app_id)
-                     else "\n\nStart it from the 🚀 Activities button in any voice channel or DM."), GOLD)
+    def play_embed(self, guild: discord.Guild | None, page: int = 0) -> discord.Embed:
+        """One page of the showcase: a screenshot, what it is, how many are on, and how to play."""
+        key, title, text = SHOWCASE[page % len(SHOWCASE)]
+        n, url = self.online, launch_url(self.app_id)
+        e = embed(title, text, GOLD)
+        if page == 0:
+            e.add_field(name="🟢 Right now", value=f"**{n:,}** playing" if n else "Be the first one on tonight", inline=True)
+            e.add_field(name="💸 Money", value="Your SYKE wallet", inline=True)
+            e.add_field(name="🎁 New players", value="A tutorial and a welcome bonus", inline=True)
+            e.add_field(name="▶️ How to play", value=(f"Tap **Play THE STRIP** below, or open the 🚀 **Activities** button in any voice channel or DM."
+                                                       if url else "Open the 🚀 **Activities** button in any voice channel or DM and pick THE STRIP."), inline=False)
+        if (ASSETS / f"{key}.jpg").exists():
+            e.set_image(url="attachment://strip.jpg")
+        e.set_footer(text=f"Page {page % len(SHOWCASE) + 1}/{len(SHOWCASE)} · " + (f"{n:,} on the Strip now" if n else "One world for all of Discord"))
         return e
 
-    @commands.hybrid_command(name="thestrip", with_app_command=False, aliases=["playstrip", "stripplay"],
-                             description="Invite everyone to THE STRIP, with a Play button")
+    def showcase_view(self, page: int = 0, owner: int | None = None) -> discord.ui.View:
+        return ShowcaseView(self, page, owner)
+
+    async def showcase(self, ctx: commands.Context) -> None:
+        f = showcase_file(SHOWCASE[0][0])
+        view = self.showcase_view(0, getattr(ctx.author, "id", None))
+        msg = await ctx.reply(embed=self.play_embed(ctx.guild, 0), view=view, mention_author=False, **({"file": f} if f else {}))
+        view.message = msg
+
+    @commands.hybrid_command(name="play", aliases=["thestrip", "playstrip", "stripplay", "game", "strip"],
+                             description="Show off THE STRIP game, with screenshots and a Play button")
     @commands.guild_only()
-    async def thestrip(self, ctx: commands.Context) -> None:
-        await ctx.reply(embed=self.play_embed(ctx.guild), view=play_view(self.app_id), mention_author=False)
+    @commands.cooldown(1, 20, commands.BucketType.channel)
+    async def play(self, ctx: commands.Context) -> None:
+        await self.showcase(ctx)
 
     @commands.hybrid_command(name="stripfeed", with_app_command=False, description="Post Strip highlights in a channel (or turn them off)")
     @commands.guild_only()
@@ -186,6 +235,43 @@ class StripFeed(commands.Cog, name="StripFeed"):
         self.bot.storage.update_config(ctx.guild.id, FEED_KEY, channel=channel.id)
         await ctx.reply(embed=embed("📰 Strip feed on", f"Strip highlights from this server's players will show up in {channel.mention}.", OK), mention_author=False)
         try:
-            await channel.send(embed=self.play_embed(ctx.guild), view=play_view(self.app_id))
+            f = showcase_file("cover")
+            await channel.send(embed=self.play_embed(ctx.guild), view=play_view(self.app_id), **({"file": f} if f else {}))
+        except discord.HTTPException:
+            pass
+
+
+class ShowcaseView(discord.ui.View):
+    """Page through the showcase (anyone can), with the Play link always there."""
+
+    def __init__(self, feed: StripFeed, page: int = 0, owner: int | None = None) -> None:
+        super().__init__(timeout=900)
+        self.feed, self.page, self.message = feed, page, None
+        url = launch_url(feed.app_id)
+        if url:
+            self.add_item(discord.ui.Button(style=discord.ButtonStyle.link, label="Play THE STRIP", emoji="🎰", url=url, row=0))
+
+    async def _show(self, interaction: discord.Interaction, page: int) -> None:
+        self.page = page % len(SHOWCASE)
+        f = showcase_file(SHOWCASE[self.page][0])
+        await interaction.response.edit_message(embed=self.feed.play_embed(interaction.guild, self.page), view=self,
+                                                attachments=[f] if f else [])
+
+    @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._show(interaction, self.page - 1)
+
+    @discord.ui.button(label="Next", emoji="▶️", style=discord.ButtonStyle.primary, row=1)
+    async def next(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._show(interaction, self.page + 1)
+
+    async def on_timeout(self) -> None:   # keep the Play link, drop the page buttons
+        if self.message is None:
+            return
+        for item in list(self.children):
+            if not isinstance(item, discord.ui.Button) or item.style != discord.ButtonStyle.link:
+                self.remove_item(item)
+        try:
+            await self.message.edit(view=self if self.children else None)
         except discord.HTTPException:
             pass

@@ -28,7 +28,7 @@ build-backend = "setuptools.build_meta"
 packages = ["syke"]
 
 [tool.setuptools.package-data]
-syke = ["assets/fonts/*"]
+syke = ["assets/fonts/*", "assets/strip/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

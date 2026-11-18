@@ -76,3 +76,15 @@ def test_every_highlight_reads_well(kind, data):
     f, *_ = _setup()
     e = f.highlight_embed(kind, {"player": {"name": "Dee"}, "data": data})
     assert "Dee" in e.description and "{" not in e.description
+
+
+def test_showcase_pages_have_screenshots_and_a_play_link():
+    f, *_ = _setup()
+    f.app_id, f.online = "123456", 9
+    for i, (key, _, _) in enumerate(F.SHOWCASE):
+        e = f.play_embed(None, i)
+        assert e.image.url == "attachment://strip.jpg" and f"{i + 1}/{len(F.SHOWCASE)}" in e.footer.text
+        assert (F.ASSETS / f"{key}.jpg").exists()
+    assert any("9" in fld.value for fld in f.play_embed(None, 0).fields)
+    v = F.ShowcaseView(f, 0)
+    assert any(getattr(c, "url", None) == "https://discord.com/activities/123456" for c in v.children)
