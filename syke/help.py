@@ -96,9 +96,11 @@ CATALOG: list[Category] = [
             "woke": "AI-rewrites the message to be kind and inclusive — slurs become friendly words, hate flips "
                     "to love (e.g. \"I hate X\" → \"I love X\"). Falls back to an affirming slogan without AI.",
             "afflict": "Stick an effect on someone (Manage Messages): every message they send is rewritten in that "
-                       "effect, reposted as them via webhook. Effects: drunk, high, scramble, zalgo, uwu, mock, "
+                       "effect, reposted as them via webhook. Their original vanishes instantly, in a way snipe "
+                       "bots don't log, and they're locked to plain text — no files, links, embeds, apps, "
+                       "reactions, stickers or polls. Effects: drunk, high, scramble, zalgo, uwu, mock, "
                        "keysmash, leet, stutter, clap, reverse, woke. `afflict @user woke`.",
-            "cure": "Remove a user's active affliction and let them type normally again.",
+            "cure": "Remove a user's affliction: they type normally again and get files, links and apps back.",
             "afflicted": "List everyone who currently has a chat effect stuck on them.",
         },
     ),

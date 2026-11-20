@@ -214,6 +214,40 @@ def resolve_effect(name: str) -> str | None:
     return EFFECT_ALIASES.get(name)
 
 
+# Afflicted users can only type plain text. One role, denied everything else in every channel.
+AFFLICT_ROLE_NAME = "SYKE · afflicted"
+AFFLICT_CONFIG = "afflict"
+AFFLICT_DENY = tuple(p for p in (
+    "attach_files", "embed_links", "add_reactions", "use_external_emojis", "use_external_stickers",
+    "use_application_commands", "use_external_apps", "use_embedded_activities", "send_voice_messages",
+    "send_polls", "send_tts_messages", "create_public_threads", "create_private_threads", "mention_everyone",
+) if p in discord.Permissions.VALID_FLAGS)
+AFFLICT_REASON = "SYKE: afflicted users can only type plain text"
+
+
+async def vanish(message: discord.Message) -> bool:
+    """Delete a message so it doesn't end up in snipe logs.
+
+    Snipe bots record the ordinary one-message delete event. Deleting through Discord's bulk endpoint
+    fires a purge event instead, which they don't log. Bulk delete needs at least two IDs, and Discord
+    counts IDs that don't exist toward that minimum, so the message is paired with an empty placeholder.
+    Falls back to a normal delete if the bulk call isn't possible.
+    """
+    bulk = getattr(message.channel, "delete_messages", None)
+    if bulk is not None:
+        ghost = discord.Object(id=discord.utils.time_snowflake(discord.utils.utcnow(), high=True))
+        try:
+            await bulk([message, ghost], reason="SYKE: afflicted message")
+            return True
+        except discord.HTTPException:
+            pass
+    try:
+        await message.delete()
+        return True
+    except discord.HTTPException:
+        return False
+
+
 class TextFun(commands.Cog, name="TextFun"):
     def __init__(self, bot) -> None:
         self.bot = bot
@@ -332,11 +366,17 @@ class TextFun(commands.Cog, name="TextFun"):
             return
         self.bot.storage.set_effect(ctx.guild.id, member.id, eff, ctx.author.id)
         p = self.bot.display_prefix(ctx.guild.id)
-        extra = ""
+        locked = await self._lock_to_text(member)
+        warnings = []
         if ctx.guild.me is not None and not ctx.channel.permissions_for(ctx.guild.me).manage_webhooks:
-            extra = "\n\n⚠️ I need **Manage Webhooks** (and Manage Messages) to rewrite their messages."
+            warnings.append("I need **Manage Webhooks** (and Manage Messages) to rewrite their messages.")
+        if not locked:
+            warnings.append("Give me **Manage Roles** so I can lock them to plain text.")
+        extra = "".join(f"\n⚠️ {w}" for w in warnings)
+        rules = ("\nThey can only type plain text now: no files, links, embeds, apps, reactions, stickers, "
+                 "polls or voice messages." if locked else "")
         await ctx.reply(embed=notice("Afflicted 😈",
-                                     f"Every message {member.mention} sends will now come out **{eff}**'d. "
+                                     f"Every message {member.mention} sends will now come out **{eff}**'d.{rules}\n"
                                      f"Undo with `{p}cure {member.display_name}`.{extra}"))
 
     @commands.hybrid_command(name="cure", aliases=["uncurse"], description="Remove a user's chat effect")
@@ -344,6 +384,12 @@ class TextFun(commands.Cog, name="TextFun"):
     @moderator("manage_messages")
     async def cure_cmd(self, ctx: commands.Context, member: discord.Member) -> None:
         had = self.bot.storage.clear_effect(ctx.guild.id, member.id)
+        role = await self._affliction_role(ctx.guild, create=False)
+        if role is not None and role in member.roles:
+            try:
+                await member.remove_roles(role, reason="SYKE: cured")
+            except discord.HTTPException:
+                pass
         if had:
             await ctx.reply(embed=notice("Cured", f"{member.mention} is back to normal (was **{had}**)."))
         else:
@@ -359,6 +405,69 @@ class TextFun(commands.Cog, name="TextFun"):
             return
         lines = "\n".join(f"<@{uid}> — **{eff}**" for uid, eff in rows)
         await ctx.reply(embed=notice("Afflicted users", lines), ephemeral=True)
+
+    # ---- The text-only role ----
+
+    async def _affliction_role(self, guild: discord.Guild, *, create: bool = True) -> discord.Role | None:
+        """The server's "SYKE · afflicted" role, created (and denied everywhere) on first use."""
+        cfg = self.bot.storage.get_config(guild.id, AFFLICT_CONFIG)
+        role = guild.get_role(int(cfg.get("role_id") or 0))
+        if role is not None or not create:
+            return role
+        me = guild.me
+        if me is None or not me.guild_permissions.manage_roles:
+            return None
+        try:
+            role = await guild.create_role(name=AFFLICT_ROLE_NAME, permissions=discord.Permissions.none(),
+                                           mentionable=False, reason=AFFLICT_REASON)
+        except discord.HTTPException:
+            return None
+        self.bot.storage.update_config(guild.id, AFFLICT_CONFIG, role_id=role.id)
+        self.bot.spawn(self._deny_everywhere(guild, role))
+        return role
+
+    async def _deny_in(self, channel, role: discord.Role) -> bool:
+        overwrite = channel.overwrites_for(role)
+        if all(getattr(overwrite, p) is False for p in AFFLICT_DENY):
+            return False
+        for p in AFFLICT_DENY:
+            setattr(overwrite, p, False)
+        try:
+            await channel.set_permissions(role, overwrite=overwrite, reason=AFFLICT_REASON)
+        except discord.HTTPException:
+            return False
+        return True
+
+    async def _deny_everywhere(self, guild: discord.Guild, role: discord.Role) -> int:
+        changed = 0
+        for channel in sorted(guild.channels, key=lambda c: not isinstance(c, discord.CategoryChannel)):
+            changed += await self._deny_in(channel, role)
+        return changed
+
+    async def _lock_to_text(self, member: discord.Member) -> bool:
+        """Give an afflicted member the text-only role. False if SYKE can't manage roles."""
+        role = await self._affliction_role(member.guild)
+        if role is None:
+            return False
+        if role in member.roles:
+            return True
+        try:
+            await member.add_roles(role, reason=AFFLICT_REASON)
+        except discord.HTTPException:
+            return False
+        return True
+
+    @commands.Cog.listener()
+    async def on_guild_channel_create(self, channel) -> None:
+        role = await self._affliction_role(channel.guild, create=False)
+        if role is not None:
+            await self._deny_in(channel, role)
+
+    @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member) -> None:
+        # Leaving and rejoining doesn't shake off an affliction.
+        if not member.bot and self.bot.storage.get_effect(member.guild.id, member.id):
+            await self._lock_to_text(member)
 
     async def _webhook_for(self, channel: discord.TextChannel) -> discord.Webhook | None:
         """A reusable SYKE webhook in `channel` for reposting rewritten messages."""
@@ -383,35 +492,34 @@ class TextFun(commands.Cog, name="TextFun"):
     async def on_message(self, message: discord.Message) -> None:
         if message.guild is None or message.author.bot or message.webhook_id:
             return
-        content = message.content or ""
-        if not content.strip():
-            return  # nothing to rewrite (attachment/sticker-only) — leave it alone
-        prefix = self.bot.display_prefix(message.guild.id)
-        if content.startswith(prefix):
-            return  # don't mangle command invocations
         effect = self.bot.storage.get_effect(message.guild.id, message.author.id)
         fn = EFFECTS.get(effect) if effect else None
         if fn is None:
             return
-        # Webhooks live on the parent; threads are addressed via thread=.
-        parent = message.channel.parent if isinstance(message.channel, discord.Thread) else message.channel
-        thread = message.channel if isinstance(message.channel, discord.Thread) else discord.utils.MISSING
+        content = message.content or ""
+        if content.startswith(self.bot.display_prefix(message.guild.id)):
+            return  # don't mangle command invocations
         me = message.guild.me
         if me is None or not message.channel.permissions_for(me).manage_messages:
             return
+        # Gone instantly, and out of snipe's reach, before anything else happens.
+        await vanish(message)
+        text = clean_source(content)
+        if not text:
+            return  # files, stickers, polls, forwards: afflicted users only get to type text
+        # Webhooks live on the parent; threads are addressed via thread=.
+        parent = message.channel.parent if isinstance(message.channel, discord.Thread) else message.channel
+        thread = message.channel if isinstance(message.channel, discord.Thread) else discord.utils.MISSING
         hook = await self._webhook_for(parent)
         if hook is None:
             return
-        out = (await self._apply(fn, clean_source(content)))
+        out = await self._apply(fn, text)
         if not out:
             return
-        if message.attachments:
-            out = (out + "\n" + "\n".join(a.url for a in message.attachments))[:MAX_OUT]
         try:
-            await message.delete()
-            await hook.send(out, username=message.author.display_name[:80],
+            await hook.send(out[:MAX_OUT], username=message.author.display_name[:80],
                             avatar_url=getattr(getattr(message.author, "display_avatar", None), "url", None),
-                            thread=thread, allowed_mentions=discord.AllowedMentions.none())
+                            thread=thread, allowed_mentions=discord.AllowedMentions.none(), suppress_embeds=True)
         except discord.HTTPException:
             pass
 
