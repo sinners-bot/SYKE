@@ -37,6 +37,8 @@ async def world(tmp_path, owners=frozenset({1})):
     eco, strip = econ.Economy(bot), sw.StripWorld(bot)
     await bot.add_cog(eco)
     await bot.add_cog(strip)
+    from syke.strip_feed import StripFeed
+    await bot.add_cog(StripFeed(bot))
     bot.storage.update_config(GID, econ.CONFIG_KEY, open=True)
     return eco, strip, bot.storage
 
@@ -365,7 +367,8 @@ async def test_every_slash_subcommand_routes_to_a_real_command(tmp_path, monkeyp
             await sub.callback(slash, interaction, **args)
             called.append(sub.name)
             assert ctx.replies, f"/{group.name} {sub.name} didn't answer"
-    assert len(called) == 26
+    assert len(called) == len(slash.strip.commands) + len(slash.casino.commands)
+    assert len(slash.strip.commands) <= 25 and len(slash.casino.commands) <= 25   # Discord's per-group cap
 
 
 def test_old_databases_gain_the_new_wallet_columns(tmp_path):

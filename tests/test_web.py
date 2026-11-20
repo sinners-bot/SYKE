@@ -642,10 +642,13 @@ def test_strip_body_shows_state_and_leaderboard(dash):
     web, bot, guild = dash
     from syke.economy import CONFIG_KEY
     req = types.SimpleNamespace(query={})
-    # Closed, empty economy.
+    # A fresh server: the Strip is open by default, with no wallets yet.
     html = web._strip_body(guild, req)
-    assert "THE STRIP" in html and "CLOSED" in html and "No wallets yet" in html
-    # Open it and seed two wallets.
+    assert "THE STRIP" in html and "OPEN" in html and "No wallets yet" in html
+    # An admin closed it.
+    bot.storage.update_config(guild.id, CONFIG_KEY, open=False)
+    assert "CLOSED" in web._strip_body(guild, req)
+    # Reopen it and seed two wallets.
     bot.storage.update_config(guild.id, CONFIG_KEY, open=True)
     bot.storage.econ_adjust(guild.id, 7, cash=900, chips=100)   # net 1000
     bot.storage.econ_adjust(guild.id, 8, cash=200)              # net 200
