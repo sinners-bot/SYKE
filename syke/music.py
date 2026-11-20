@@ -164,6 +164,7 @@ class Player:
         before, options, codec = src.ffmpeg_args(track, position=position, volume=self.volume,
                                                  filters=FILTERS.get(self.filter, ""))
         bitrate = max(64, min(256, getattr(vc.channel, "bitrate", 128000) // 1000))
+        await self._wait_for_encryption(vc)
         try:
             source = discord.FFmpegOpusAudio(track.stream, before_options=before, options=options, codec=codec,
                                              bitrate=bitrate)
@@ -175,11 +176,59 @@ class Player:
             await self.say(problem("Couldn't play", "The voice connection isn't ready. Try `play` again."))
             return False
         self.base, self.t0, self.paused_at = position, time.monotonic(), None
+        log.info("Playing %r in %s from %s (%s)", track.label[:80], self.guild.id,
+                 "a downloaded file" if track.local else (track.source or "a stream"),
+                 "passthrough" if codec else "re-encoded")
+        asyncio.create_task(self._audio_check(track))
         self._cancel_idle()
         if position == 0:
             await self.now_playing_card()
         self._prefetch()
         return True
+
+    @staticmethod
+    async def _wait_for_encryption(vc, seconds: float = 6.0) -> None:
+        """Discord's end-to-end voice encryption (DAVE) takes a moment to set up after joining. Audio sent
+        before it's ready isn't encrypted and listeners' apps drop it, so wait for it (briefly)."""
+        conn = getattr(vc, "_connection", None)
+        if conn is None or not getattr(conn, "dave_protocol_version", 0):
+            return
+        waited = 0.0
+        while not getattr(conn, "can_encrypt", True) and waited < seconds:
+            await asyncio.sleep(0.25)
+            waited += 0.25
+        if waited:
+            log.info("Waited %.1fs for voice encryption (ready=%s)", waited, getattr(conn, "can_encrypt", None))
+
+    def voice_report(self) -> str:
+        vc = self.vc
+        if vc is None:
+            return "not connected"
+        conn = getattr(vc, "_connection", None)
+        player = getattr(vc, "_player", None)
+        me = getattr(self.guild, "me", None)
+        state = getattr(me, "voice", None)
+        bits = {
+            "connected": vc.is_connected(),
+            "playing": vc.is_playing(),
+            "paused": vc.is_paused(),
+            "packets": getattr(player, "loops", None),
+            "dave_version": getattr(conn, "dave_protocol_version", None),
+            "dave_ready": getattr(conn, "can_encrypt", None),
+            "mode": getattr(conn, "mode", None),
+            "endpoint": getattr(conn, "endpoint", None),
+            "latency_ms": round(vc.latency * 1000) if vc.latency != float("inf") else None,
+            "server_mute": getattr(state, "mute", None),
+            "suppress": getattr(state, "suppress", None),
+            "channel": getattr(vc.channel, "name", None),
+            "listeners": humans_in(vc.channel),
+        }
+        return ", ".join(f"{k}={v}" for k, v in bits.items())
+
+    async def _audio_check(self, track: Track) -> None:
+        await asyncio.sleep(6)
+        if self.current is track:
+            log.info("Audio check in %s: %s", self.guild.id, self.voice_report())
 
     def _after(self, error: Exception | None) -> None:
         if error:
@@ -780,6 +829,8 @@ class Music(commands.Cog):
         guild = member.guild
         me = guild.me
         if member.id == getattr(me, "id", None):
+            log.info("SYKE voice state in %s: channel=%s mute=%s deaf=%s suppress=%s", guild.id,
+                     getattr(after.channel, "name", None), after.mute, after.deaf, after.suppress)
             if after.channel is None and guild.id in self.players:
                 player = self.players.pop(guild.id)
                 player.stop()
@@ -1313,6 +1364,14 @@ class Music(commands.Cog):
     @app_commands.describe(query="What to search for")
     async def m_search(self, ctx: commands.Context, *, query: str) -> None:
         await self.do_search(ctx, query)
+
+    @commands.command(name="musicdebug", hidden=True)
+    @commands.guild_only()
+    async def musicdebug_cmd(self, ctx: commands.Context) -> None:
+        player = self.players.get(ctx.guild.id)
+        report = player.voice_report() if player else "no player"
+        missing = missing_parts()
+        await ctx.reply(f"```\n{report}\nmissing: {missing or 'nothing'}\nffmpeg: {shutil.which('ffmpeg')}\n```")
 
     @music.command(name="dj", description="Only this role (and Manage Channels) controls the music. Empty: everyone")
     @app_commands.describe(role="The DJ role, or leave empty to let everyone in voice control it")
