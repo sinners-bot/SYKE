@@ -41,6 +41,7 @@ from .strip_kitchen import KitchenError, KitchenService
 log = logging.getLogger("syke.strip_api")
 
 WORK_BONUS = (0.8, 1.2)    # how much a good or bad shift in the game can nudge SYKE's pay
+WORK_RANK = (1.0, 1.5)     # career rank in the game (Trainee x1.0 up to Manager x1.5)
 SPEND_MAX = 100_000        # biggest single cosmetic purchase (motel furniture, makeovers...)
 GRANT_MAX = 100            # biggest single in-game find (a wallet in a dumpster)
 GRANT_PER_HOUR = 300       # total in-game finds per player per hour
@@ -131,7 +132,7 @@ class StripService:
         self.db.econ_adjust(gid, uid, cash=amount, daily_at=now, streak=streak)
         return {"amount": amount, "streak": streak}
 
-    def work(self, gid: int, uid: int, bonus: float = 1.0) -> dict:
+    def work(self, gid: int, uid: int, bonus: float = 1.0, rank: float = 1.0) -> dict:
         w = self.guard(gid, uid)
         self.free(w)
         now = self.now()
@@ -145,9 +146,10 @@ class StripService:
                 boost *= sw.WORK_BUFFS[buff]
                 perks.append(buff)
         bonus = min(max(float(bonus), WORK_BONUS[0]), WORK_BONUS[1])
-        amount = int(base * boost * bonus)
+        rank = min(max(float(rank), WORK_RANK[0]), WORK_RANK[1])   # the game's career rank: a promotion raises the rate
+        amount = int(base * boost * bonus * rank)
         self.db.econ_adjust(gid, uid, cash=amount, work_at=now)
-        return {"amount": amount, "did": did.replace("**", ""), "boost": round(boost, 2), "bonus": round(bonus, 2),
+        return {"amount": amount, "did": did.replace("**", ""), "boost": round(boost, 2), "bonus": round(bonus, 2), "rank": round(rank, 2),
                 "perks": perks}
 
     # -- shops (mirror StripWorld.buy / use / pawn) --
@@ -331,7 +333,7 @@ class StripAPI:
         return {
             "state": lambda g, u, b: {},
             "daily": lambda g, u, b: s.daily(g, u),
-            "work": lambda g, u, b: s.work(g, u, b.get("bonus", 1.0)),
+            "work": lambda g, u, b: s.work(g, u, b.get("bonus", 1.0), b.get("rank", 1.0)),
             "buy": lambda g, u, b: s.buy(g, u, b.get("item"), b.get("qty", 1)),
             "use": lambda g, u, b: s.use(g, u, b.get("item")),
             "pawn": lambda g, u, b: s.pawn(g, u, b.get("item"), b.get("qty", 1)),

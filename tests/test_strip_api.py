@@ -134,6 +134,15 @@ def test_work_bonus_is_clamped(env):
     assert r["amount"] <= int(eco.WORK_HIGH * 1.2)
 
 
+def test_work_rank_raises_pay_and_is_clamped(env):
+    db, svc, clock = env
+    r = svc.work(G, U, bonus=1.0, rank=99)
+    assert r["rank"] == 1.5
+    clock.t += 10 ** 6
+    r2 = svc.work(G, U, bonus=1.0, rank=0.1)
+    assert r2["rank"] == 1.0
+
+
 def test_work_respects_buffs_and_jail(env):
     db, svc, clock = env
     db.econ_buff(G, U, "fed", clock.t + 3600)
