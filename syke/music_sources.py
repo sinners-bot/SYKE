@@ -61,12 +61,17 @@ class Track:
     acodec: str = ""
     is_live: bool = False
     resolved_at: float = 0.0
+    local: bool = False           # stream is a downloaded file on disk
 
     @property
     def label(self) -> str:
         return self.title or self.query or self.url
 
     def fresh(self) -> bool:
+        if self.local:
+            return os.path.exists(self.stream)
+        if is_youtube(self.url) and not self.is_live:
+            return False  # YouTube songs are always downloaded first (YouTube refuses FFmpeg's direct requests)
         return bool(self.stream) and time.time() - self.resolved_at < STREAM_TTL
 
     def video_id(self) -> str | None:
@@ -77,6 +82,11 @@ class Track:
         if "youtube.com" in host:
             return (parse_qs(parsed.query).get("v") or [None])[0]
         return None
+
+
+def is_youtube(url: str) -> bool:
+    host = urlparse(url or "").netloc.lower()
+    return host.endswith("youtube.com") or host.endswith("youtu.be")
 
 
 def classify(query: str) -> tuple[str, Any]:
@@ -314,18 +324,90 @@ def fill_stream(track: Track, info: dict) -> Track:
     return track
 
 
+CACHE_DIR = os.path.join(tempfile.gettempdir(), "syke-music")
+CACHE_BYTES = 1_500_000_000
+CACHE_SECONDS = 3 * 3600
+DOWNLOAD_MAX_SECONDS = 2 * 3600
+
+
+def _tidy_cache() -> None:
+    try:
+        files = [os.path.join(CACHE_DIR, f) for f in os.listdir(CACHE_DIR)]
+    except OSError:
+        return
+    files = sorted((f for f in files if os.path.isfile(f)), key=os.path.getmtime)
+    total = sum(os.path.getsize(f) for f in files)
+    now = time.time()
+    for f in files:
+        if now - os.path.getmtime(f) > CACHE_SECONDS or total > CACHE_BYTES:
+            try:
+                total -= os.path.getsize(f)
+                os.remove(f)
+            except OSError:
+                pass
+
+
+def _download(target: str) -> dict:
+    """Let yt-dlp fetch the audio to disk (it makes the requests YouTube accepts), returning its info."""
+    import yt_dlp
+
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    _tidy_cache()
+    options = ydl_options()
+    options.update(skip_download=False, outtmpl=os.path.join(CACHE_DIR, "%(id)s.%(ext)s"), noprogress=True,
+                   retries=5, fragment_retries=5, overwrites=False, continuedl=True,
+                   match_filter=yt_dlp.utils.match_filter_func(f"!is_live & duration <=? {DOWNLOAD_MAX_SECONDS}"))
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info = ydl.extract_info(target, download=True)
+        if info and info.get("_type") == "playlist":
+            info = next((e for e in info.get("entries") or [] if e), None)
+        if not info:
+            raise LookupError("No results.")
+        downloads = info.get("requested_downloads") or []
+        path = downloads[0].get("filepath") if downloads else None
+        path = path or ydl.prepare_filename(info)
+    if not path or not os.path.exists(path):
+        raise LookupError("too long or live")  # filtered out: stream it instead
+    os.utime(path)
+    info["_local_path"] = path
+    return info
+
+
 async def resolve_stream(track: Track) -> Track:
-    """Look up a track's stream address right before it plays (searching for it if it's just a name)."""
+    """Make a track playable right before it plays (searching for it if it's just a name).
+
+    YouTube songs are downloaded to a temporary file (a few MB, a second or two); anything else, and
+    very long or live YouTube videos, stream directly. If YouTube refuses, the same song is tried on
+    SoundCloud so the queue keeps going.
+    """
     if track.fresh():
         return track
-    targets = [track.url] if track.url and not track.query else []
-    if track.query:
-        targets += [SEARCH_PREFIX + track.query, FALLBACK_PREFIX + track.query]
     last: Exception | None = None
+    youtube_target = track.url if is_youtube(track.url) else (SEARCH_PREFIX + track.query if track.query else "")
+    if youtube_target and not track.is_live:
+        try:
+            info = await asyncio.to_thread(_download, youtube_target)
+            fill_stream(track, info)
+            track.stream, track.headers, track.local = info["_local_path"], {}, True
+            track.acodec = (info.get("acodec") or "").lower()
+            return track
+        except Exception as error:
+            last = error
+            log.info("YouTube download failed for %s: %s", youtube_target, error)
+            if "too long or live" in str(error) and track.url:
+                try:
+                    return fill_stream(track, await extract(track.url))
+                except Exception as stream_error:
+                    last = stream_error
+    targets = [] if is_youtube(track.url) or not track.url or track.query else [track.url]
+    fallback = track.query or (track.title if is_youtube(track.url) else "")
+    if fallback:
+        targets.append(FALLBACK_PREFIX + fallback)
     for target in targets:
         try:
             info = await extract(target)
             if info:
+                track.local = False
                 return fill_stream(track, info)
         except Exception as error:  # yt-dlp raises many kinds; try the next source
             last = error

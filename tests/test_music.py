@@ -83,7 +83,8 @@ def test_stream_details_and_errors():
                                               "http_headers": {"User-Agent": "UA", "Accept": "*/*"}}]}
     track = src.fill_stream(Track(title="", query="artist - song"), info)
     assert track.stream == "https://cdn/a.webm" and track.acodec == "opus" and track.title == "Song"
-    assert track.headers == {"User-Agent": "UA"} and track.url == "https://youtu.be/x" and track.fresh()
+    assert track.headers == {"User-Agent": "UA"} and track.url == "https://youtu.be/x"
+    assert not track.fresh()  # YouTube addresses are never streamed: the song gets downloaded first
     with pytest.raises(LookupError):
         src.fill_stream(Track(title="x"), {"_type": "playlist", "entries": []})
     assert "cookies" in src.clean_error(Exception("ERROR: Sign in to confirm you're not a bot"))
@@ -312,22 +313,56 @@ async def test_lookup_routes_each_kind(rig, monkeypatch):
     async def fake_extract(target, flat=False):
         extracted.append((target, flat))
         if target.startswith("ytsearch1:"):
-            return {"_type": "playlist", "entries": [{"title": "Found", "url": "https://cdn/f", "acodec": "opus",
-                                                      "webpage_url": "https://youtu.be/f", "ie_key": "Youtube"}]}
+            assert flat  # a light search: no player request
+            return {"_type": "playlist", "entries": [{"title": "Found", "url": "https://www.youtube.com/watch?v=f",
+                                                      "ie_key": "Youtube", "id": "f", "duration": 5}]}
         if "list=PL" in target:
             return {"_type": "playlist", "title": "My list", "entries": [
                 {"_type": "url", "ie_key": "Youtube", "id": "v1", "url": "https://www.youtube.com/watch?v=v1",
                  "title": "One", "duration": 10}, None]}
         return {"title": "Single", "url": "https://cdn/s", "acodec": "opus", "webpage_url": target}
 
+    async def fake_json(url):
+        assert "oembed" in url
+        return {"title": "Single", "author_name": "Rick"}
+
     monkeypatch.setattr(cog, "fetch_text", fake_text)
+    monkeypatch.setattr(cog, "fetch_json", fake_json)
     monkeypatch.setattr(src, "extract", fake_extract)
     tracks, name = await cog.lookup("https://open.spotify.com/playlist/abc", 7)
     assert name == "Mix" and tracks[0].query == "Artist - Song" and tracks[0].requester == 7
     assert seen[-1] == "https://open.spotify.com/embed/playlist/abc"
     tracks, name = await cog.lookup("https://www.youtube.com/watch?v=xyz&list=RDxyz&index=2", 7)
-    assert name is None and tracks[0].stream == "https://cdn/s" and extracted[-1][0].endswith("v=xyz")
+    assert name is None and tracks[0].title == "Single" and tracks[0].url.endswith("v=xyz") and not tracks[0].stream
     tracks, name = await cog.lookup("https://www.youtube.com/playlist?list=PL123", 7)
     assert name == "My list" and [t.url for t in tracks] == ["https://www.youtube.com/watch?v=v1"]
     tracks, name = await cog.lookup("lofi beats", 7)
-    assert tracks[0].title == "Found" and tracks[0].fresh()
+    assert tracks[0].title == "Found" and tracks[0].url.endswith("v=f")
+
+
+async def test_youtube_songs_download_and_fall_back_to_soundcloud(monkeypatch, tmp_path):
+    song = tmp_path / "abc.webm"
+    song.write_bytes(b"x")
+    calls = []
+
+    def fake_download(target):
+        calls.append(target)
+        if "blocked" in target:
+            raise Exception("ERROR: Sign in to confirm you're not a bot")
+        return {"_local_path": str(song), "acodec": "opus", "title": "Real Title", "url": "https://gv/x",
+                "webpage_url": "https://www.youtube.com/watch?v=abc", "duration": 200}
+
+    async def fake_extract(target, flat=False):
+        calls.append(target)
+        return {"_type": "playlist", "entries": [{"url": "https://sc/stream.mp3", "acodec": "mp3", "title": "SC"}]}
+
+    monkeypatch.setattr(src, "_download", fake_download)
+    monkeypatch.setattr(src, "extract", fake_extract)
+    track = await src.resolve_stream(Track(title="https://www.youtube.com/watch?v=abc", url="https://www.youtube.com/watch?v=abc"))
+    assert track.local and track.stream == str(song) and track.fresh() and track.title == "Real Title"
+    before, options, codec = src.ffmpeg_args(track)
+    assert "-reconnect" not in before and codec == "opus"
+    spotify = await src.resolve_stream(Track(title="Song — Artist", query="Artist - Song"))
+    assert spotify.local and calls[-1] == "ytsearch1:Artist - Song"
+    blocked = await src.resolve_stream(Track(title="Blocked Song", url="https://www.youtube.com/watch?v=blocked"))
+    assert not blocked.local and blocked.stream == "https://sc/stream.mp3" and calls[-1] == "scsearch1:Blocked Song"

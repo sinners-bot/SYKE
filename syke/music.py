@@ -26,6 +26,7 @@ import random
 import shutil
 import time
 from typing import Optional
+from urllib.parse import quote
 
 import discord
 from discord import app_commands
@@ -636,6 +637,8 @@ class Music(commands.Cog):
             url = value
             if "list=RD" in url and "v=" in url:  # a YouTube "mix" link: just the song
                 url = url.split("&list=")[0]
+            if src.is_youtube(url) and "list=" not in url:
+                return [await self._youtube_link(url, requester)], None
             try:
                 info = await src.extract(url, flat=True)
             except Exception as error:
@@ -648,21 +651,42 @@ class Music(commands.Cog):
                 tracks = [src.track_from_info(e, requester) for e in entries]
                 return [t for t in tracks if t.url], info.get("title") or "playlist"
             track = src.track_from_info(info or {}, requester)
+            if src.is_youtube(track.url) and not track.is_live:
+                return [track], None  # downloaded when it plays
             return [src.fill_stream(track, info)], None
         return [await self._search_one(value, requester)], None
 
+    async def _youtube_link(self, url: str, requester: int) -> Track:
+        """A single YouTube video: its title from YouTube's oEmbed (no player request, no bot check).
+        The audio is downloaded when it plays."""
+        track = Track(title=url, url=url, requester=requester, source="Youtube")
+        with contextlib.suppress(Exception):
+            data = await self.fetch_json(f"https://www.youtube.com/oembed?format=json&url={quote(url, safe='')}")
+            track.title = data.get("title") or url
+            track.uploader = data.get("author_name") or ""
+            track.thumbnail = data.get("thumbnail_url") or ""
+        return track
+
     async def _search_one(self, text: str, requester: int) -> Track:
+        """Find a song by name. A light YouTube search first (no player request, so no bot check); the
+        audio itself is fetched when it plays. SoundCloud if YouTube finds nothing."""
         last = None
-        for prefix in (src.SEARCH_PREFIX, src.FALLBACK_PREFIX):
-            try:
-                info = await src.extract(prefix + text)
-            except Exception as error:
-                last = error
-                continue
+        try:
+            info = await src.extract(src.SEARCH_PREFIX + text, flat=True)
             entries = [e for e in (info or {}).get("entries") or [] if e]
             if entries:
                 track = src.track_from_info(entries[0], requester)
-                return src.fill_stream(track, entries[0])
+                if track.url:
+                    return track
+        except Exception as error:
+            last = error
+        try:
+            info = await src.extract(src.FALLBACK_PREFIX + text)
+            entries = [e for e in (info or {}).get("entries") or [] if e]
+            if entries:
+                return src.fill_stream(src.track_from_info(entries[0], requester), entries[0])
+        except Exception as error:
+            last = error
         raise LookupError(src.clean_error(last) if last else f"No results for **{text[:100]}**.")
 
     async def _page_title(self, url: str) -> str:
