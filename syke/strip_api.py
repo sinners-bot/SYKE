@@ -20,6 +20,8 @@ Every successful reply includes the player's fresh `state`, so the game can redr
 
 from __future__ import annotations
 
+from . import strip_merge
+
 import hmac
 import logging
 import random
@@ -391,6 +393,8 @@ class StripAPI:
             "casino_bj_sweep": lambda g, b: c.bj_sweep(g),
             "casino_recent": lambda g, b: c.recent(g),
             "casino_config": lambda g, b: c.config(),
+            # the game moved from its game-only wallets (guild "from_guild") onto this server's wallets: once
+            "strip_merge": lambda g, b: strip_merge.merge(self.svc.db, int(b.get("from_guild")), g),
             "casino_sweep": lambda g, b: c.casino_sweep(g),
             "casino_rl_open": lambda g, b: c.rl_open(g, b.get("table")),
             "casino_rl_state": lambda g, b: c.rl_state(g, b.get("table")),
