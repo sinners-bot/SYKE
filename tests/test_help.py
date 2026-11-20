@@ -26,6 +26,12 @@ from syke.help import (
 from syke.moderation import Moderation
 from syke.security import Security
 from syke.textfun import TextFun
+from syke.tickets import Tickets
+from syke.quotes import Quotes
+from syke.starboard import Starboard
+from syke.notices import Notices
+from syke.rolemenus import RoleMenus
+from syke.music import Music
 from test_commands import run
 
 
@@ -36,7 +42,8 @@ def bot(tmp_path):
     b._connection.user = types.SimpleNamespace(id=999, mention="<@999>", name="SYKE")
     names = []
     for cog in (SykeCommands(b), Moderation(b), AutoMod(b), Security(b), TextFun(b), Community(b),
-                Economy(b), StripWorld(b), StripSlash(b), StripFeed(b), Love(b), DashboardCog(b)):
+                Economy(b), StripWorld(b), StripSlash(b), StripFeed(b), Love(b), DashboardCog(b),
+                Tickets(b), Quotes(b), Starboard(b), Notices(b), RoleMenus(b), Music(b)):
         run(b.add_cog(cog))
         names.append(cog.qualified_name)
     yield b

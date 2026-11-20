@@ -161,7 +161,7 @@ class StripFeed(commands.Cog, name="StripFeed"):
 
     async def _update_presence(self) -> None:
         prefix = self.bot.settings.default_prefix
-        text = f"THE STRIP · {self.online:,} playing | {prefix}play" if self.online else None
+        text = f"THE STRIP · {self.online:,} playing | {prefix}thestrip" if self.online else None
         last, when = self._presence
         if text == last or time.time() - when < 120:
             return
@@ -200,7 +200,7 @@ class StripFeed(commands.Cog, name="StripFeed"):
         msg = await ctx.reply(embed=self.play_embed(ctx.guild, 0), view=view, mention_author=False, **({"file": f} if f else {}))
         view.message = msg
 
-    @commands.hybrid_command(name="play", aliases=["thestrip", "playstrip", "stripplay", "game", "strip"],
+    @commands.hybrid_command(name="thestrip", aliases=["playstrip", "stripplay", "game", "strip"], with_app_command=False,
                              description="Show off THE STRIP game, with screenshots and a Play button")
     @commands.guild_only()
     @commands.cooldown(1, 20, commands.BucketType.channel)

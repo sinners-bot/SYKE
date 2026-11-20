@@ -187,7 +187,7 @@ CATALOG: list[Category] = [
         "A neon Vegas economy: earn, shop, scheme and own a storefront.",
         ["daily", "work", "hustle", "pay", "balance", "deposit", "withdraw", "rich",
          "shop", "buy", "use", "inventory", "pawn", "rob", "crime", "heist", "jail", "bail",
-         "property", "cashup", "play", "stripfeed", "economy", "house"],
+         "property", "cashup", "thestrip", "stripfeed", "economy", "house"],
         {
             "balance": "Your Players Club card — cash, chips, bank, net worth and tier (Bronze up to Black). "
                        "@mention someone to see theirs.",
@@ -215,9 +215,9 @@ CATALOG: list[Category] = [
             "property": "11 storefronts per server, one owner each. Buy one and it earns every hour into its register "
                         "(holds a day's takings), plus 10% of every sale inside. `property buy/upgrade/sell`.",
             "cashup": "Empty the registers of every storefront you own — before someone heists them.",
-            "play": "Show off THE STRIP game: real screenshots you can page through (the Strip, the casino, the arcade, "
+            "thestrip": "Show off THE STRIP game: real screenshots you can page through (the Strip, the casino, the arcade, "
                     "jobs and homes, the phone, people), how many are playing right now, and a Play button that opens "
-                    "the game. Also `/play` and `/strip play`.",
+                    "the game. Also `/strip play`. (`play` itself is the music player now.)",
             "stripfeed": "Admins: `stripfeed #channel` posts highlights from this server's players (arcade records, big "
                          "casino wins, weddings, cup champions, promotions, new arrivals) with a Play button. "
                          "`stripfeed off` stops it. Also `/strip feed`.",
@@ -231,7 +231,7 @@ CATALOG: list[Category] = [
                   ("Shops", ["shop", "buy", "use", "inventory", "pawn"]),
                   ("Crime", ["rob", "crime", "heist", "jail", "bail"]),
                   ("Property", ["property", "cashup"]),
-                  ("The game", ["play", "stripfeed"]),
+                  ("The game", ["thestrip", "stripfeed"]),
                   ("Admin", ["economy", "house"])],
         access_of={"economy": ADMIN, "house": OWNER, "stripfeed": ADMIN},
     ),
@@ -250,6 +250,61 @@ CATALOG: list[Category] = [
             "gift": "`gift @someone roses`: chocolates, roses, a teddy, perfume or a gold watch, paid from your cash, "
                     "and a free wildflower once a day. It lands in their pocket in the game. `shop chapel` lists them.",
         },
+    ),
+    Category(
+        "community", "🏘️", "Community", EVERYONE,
+        "Tickets, quote cards, a starboard, sticky messages, scheduled announcements and self-roles.",
+        ["ticket", "quote", "starboard", "sticky", "announce", "rolemenu"],
+        {
+            "ticket": "Private support tickets. Admins: `ticket setup #channel @staff #logs` posts a panel with an "
+                      "**Open a ticket** button. Members get a private thread with staff; **Claim** and **Close** "
+                      "buttons inside. Closing saves an HTML transcript to the log channel and DMs it to the member. "
+                      "In a ticket: `ticket close [reason]`, `ticket add @member`, `ticket remove @member`.",
+            "quote": "Reply to any message with `quote` (or right-click it → **Apps** → **Make a quote**) and SYKE turns "
+                     "it into a black-and-white quote card with the member's avatar. Buttons switch colour on, flip "
+                     "it, or delete it. Admins: `quote channel #quotes` also posts every card there.",
+            "starboard": "`starboard channel #hall-of-fame` turns it on. Messages with enough ⭐ get reposted there, "
+                         "and the count updates live. `starboard threshold 5`, `starboard emoji 🔥`, "
+                         "`starboard selfstar on`, `starboard ignore #channel`, `starboard off`.",
+            "sticky": "`sticky set #channel <text>` keeps a message at the bottom of a channel: SYKE reposts it a few "
+                      "seconds after people stop talking. `sticky remove #channel`, `sticky` lists them.",
+            "announce": "`announce add #channel <when> | <message>`. When: `in 2h`, `18:00`, `tomorrow 6pm`, "
+                        "`fri 20:00`, `24.12 18:00`; add `daily`, `weekly`, `monthly` or `hourly` to repeat. "
+                        "The slash version opens a form for the message. `announce` lists them, "
+                        "`announce cancel 3`, `announce test 3`. Times use the server's timezone.",
+            "rolemenu": "Self-roles. `rolemenu create <title> [buttons|dropdown|reactions] [exclusive]`, then "
+                        "`rolemenu add <number> @role 🎮 [label]`. Exclusive menus allow one role at a time. "
+                        "`rolemenu colors` makes 11 colour roles and a pick-one menu in one go. "
+                        "Also `rolemenu remove`, `edit`, `delete`.",
+        },
+        sections=[("Everyone", ["ticket", "quote"]),
+                  ("Admins", ["starboard", "sticky", "announce", "rolemenu"])],
+        access_of={"starboard": ADMIN, "sticky": MODERATOR, "announce": ADMIN, "rolemenu": MODERATOR},
+    ),
+    Category(
+        "music", "🎵", "Music", EVERYONE,
+        "Play songs in voice from YouTube, Spotify, SoundCloud, Apple Music, Deezer and more.",
+        ["play", "playnext", "skip", "queue", "nowplaying", "pause", "resume", "stop", "leave", "join", "volume",
+         "loop", "shuffle", "remove", "move", "seek", "clearqueue", "autoplay", "247", "fx", "search", "music"],
+        {
+            "play": "`play <song name or link>`: YouTube, YouTube Music, Spotify (songs, albums, playlists), "
+                    "SoundCloud, Apple Music, Deezer, Bandcamp, Twitch, Vimeo, TikTok, Mixcloud, radio streams and "
+                    "direct audio links. Playlists queue up to 200 songs. A now-playing card with buttons follows "
+                    "each song.",
+            "loop": "`loop track` repeats the song, `loop queue` repeats the whole queue, `loop off` stops. "
+                    "`loop` alone switches to the next mode.",
+            "fx": "Sound effects: `bassboost`, `nightcore`, `vaporwave`, `8d`, `slowed`, `speed`, `karaoke`, `treble`, "
+                  "`loud`, `off`.",
+            "247": "Stay in the voice channel even when nothing's playing (Manage Channels). Otherwise SYKE leaves "
+                   "after 3 idle minutes, or 2 minutes after everyone leaves.",
+            "music": "The music commands as slash commands (`/music pause`, `/music loop`…), plus "
+                     "`music dj @role` to let only a DJ role control playback.",
+            "autoplay": "When the queue runs out, keep playing songs like the last one.",
+        },
+        sections=[("Play", ["play", "playnext", "search", "queue", "nowplaying"]),
+                  ("Control", ["skip", "pause", "resume", "stop", "seek", "volume", "loop", "shuffle", "fx"]),
+                  ("Queue", ["remove", "move", "clearqueue", "autoplay"]),
+                  ("Voice", ["join", "leave", "247", "music"])],
     ),
     Category(
         "casino", "🎰", "Casino", EVERYONE,
@@ -357,6 +412,15 @@ BRIEF = {
     "blackjack": "Vegas rules, pays 3:2", "roulette": "European wheel", "slots": "Neon slots",
     "hilo": "Higher or lower", "flip": "Coinflip, pays 1.95×", "chips": "Cash → chips, free",
     "cashout": "Chips → cash, free",
+    "ticket": "Private support tickets", "quote": "Turn a message into a card", "starboard": "Hall of fame by stars",
+    "sticky": "Keep a message at the bottom", "announce": "Schedule announcements", "rolemenu": "Self-roles and colours",
+    "play": "Play a song or playlist", "playnext": "Play right after this one", "skip": "Skip the song",
+    "queue": "What's next", "nowplaying": "The song playing now", "pause": "Pause", "resume": "Resume",
+    "stop": "Stop and clear", "leave": "Leave voice", "join": "Join your voice channel", "volume": "Volume 0-200",
+    "loop": "Loop song or queue", "shuffle": "Shuffle the queue", "remove": "Remove a queued song",
+    "move": "Reorder the queue", "seek": "Jump to a time", "clearqueue": "Empty the queue",
+    "autoplay": "Keep similar songs coming", "247": "Stay in voice 24/7", "fx": "Bass boost, nightcore…",
+    "search": "Search and pick", "music": "Slash controls and DJ role",
     "help": "This menu", "about": "Bot stats", "invite": "Add SYKE to a server", "showcase": "Feature tour",
     "diagnose": "Fix prefix problems", "inviter": "Who invited someone", "scanme": "Count your older messages",
     "optout": "Stop SYKE reading you", "optin": "Opt back in", "servers": "Every server using SYKE",

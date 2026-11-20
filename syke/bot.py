@@ -45,6 +45,12 @@ from .stripworld import StripWorld
 from .love import Love
 from .strip_slash import StripSlash
 from .strip_feed import StripFeed
+from .tickets import Tickets
+from .quotes import Quotes
+from .starboard import Starboard
+from .notices import Notices
+from .rolemenus import RoleMenus
+from .music import Music
 from .moderation import Moderation, help_lines as moderation_help, pretty as pretty_permission
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
 from .scanner import Scanner, to_msg
@@ -369,6 +375,12 @@ class Syke(commands.Bot):
         await self.add_cog(StripFeed(self))
         await self.add_cog(Love(self))
         await self.add_cog(DashboardCog(self))
+        await self.add_cog(Tickets(self))
+        await self.add_cog(Quotes(self))
+        await self.add_cog(Starboard(self))
+        await self.add_cog(Notices(self))
+        await self.add_cog(RoleMenus(self))
+        await self.add_cog(Music(self))
         if self.settings.web_enabled:
             try:
                 from .web import WebDashboard

@@ -87,6 +87,35 @@ land in the game. Needs `SYKE_STRIP_GAME_URL` (see **Configuration**). Also `/lo
 | `!gift @member <gift>` | everyone | `flower` (free, once a day), `candy`, `roses`, `teddy`, `perfume`, `watch`. It lands in their pocket in the game. Alias: `!present` |
 | `!shop chapel` | everyone | The Little Chapel: every ring and gift with its price. `!shop` lists the rings next to the storefronts |
 
+### Community tools
+
+| Command | Who | What it does |
+| --- | --- | --- |
+| `!ticket` | everyone | **Private support tickets.** `!ticket setup #channel @staff #logs` (Manage Server) posts a panel with an **Open a ticket** button. Members fill in what they need and get a private thread with the staff role. **Claim** and **Close** buttons inside; closing saves an HTML transcript to the log channel, DMs it to the member, and locks and archives the thread. Also `!ticket <topic>`, `close [reason]`, `add @member`, `remove @member`, `claim`, `rename`, `panel`, `settings`, `off` |
+| `!quote` | everyone | **Quote cards.** Reply to a message with `!quote` (or right-click it → Apps → **Make a quote**, or `/quote make <link>`) for a 1200×630 card: the avatar fading in from the left, the words in white, signed with the name and @username. Buttons: colour on/off, flip, delete. `!quote channel #quotes` (Manage Server) also posts every card there with a link to the original. `!quote off` |
+| `!starboard` | Manage Server | **Hall of fame.** `!starboard channel #hall-of-fame`; messages with 3 ⭐ (change with `threshold`) get reposted with a jump button, and the count updates live. Own stars and bots don't count. `emoji 🔥`, `selfstar on`, `ignore #channel`, `off` |
+| `!sticky` | Manage Messages | **Sticky messages.** `!sticky set #channel <text>` keeps it at the bottom: SYKE reposts it a few seconds after the chat goes quiet. `!sticky remove #channel`, `!sticky` lists them (10 per server) |
+| `!announce` | Manage Server | **Scheduled announcements.** `!announce add #channel <when> \| <message>`. When: `in 2h`, `18:00`, `tomorrow 6pm`, `fri 20:00`, `24.12 18:00`; add `hourly`, `daily`, `weekly` or `monthly` to repeat. `/announce add` opens a form for multi-line messages. Server timezone. `!announce` lists, `cancel <n>`, `test <n>` |
+| `!rolemenu` | Manage Roles | **Self-roles.** `!rolemenu create "Pick your games" [buttons\|dropdown\|reactions] [exclusive]`, then `!rolemenu add <n> @role 🎮 [label]`. Exclusive menus allow one role at a time. `!rolemenu colors` makes 11 colour roles and a pick-one colour menu in one go. Only roles below SYKE and below you, never roles with moderator permissions. Also `remove`, `edit`, `delete`. Buttons keep working after restarts |
+
+### Music
+
+`!play <song or link>` joins your voice channel. Plays YouTube, YouTube Music, Spotify (songs, albums,
+playlists), SoundCloud, Apple Music, Deezer, Bandcamp, Twitch, Vimeo, TikTok, Mixcloud, radio streams and
+direct audio links. Spotify, Apple Music and Deezer links are read for song names and each song is found on
+YouTube. Every song gets a now-playing card with buttons (pause, skip, stop, loop, shuffle, queue, volume,
+autoplay).
+
+`!play` (`!pl`), `!playnext`, `!skip [n]`, `!queue`, `!np`, `!pause`, `!resume`, `!stop`, `!leave`, `!join`,
+`!volume 0-200`, `!loop off|track|queue`, `!shuffle`, `!remove <n>`, `!move <from> <to>`, `!seek 1:30|+15`,
+`!clearqueue`, `!autoplay`, `!247`, `!fx bassboost|nightcore|vaporwave|8d|slowed|speed|karaoke|treble|loud|off`,
+`!search <query>`. Slash: `/play`, `/skip`, `/queue` and `/music …` for the rest, plus `/music dj @role`
+(only that role, Manage Channels, and the song's requester can control playback).
+
+Quality: YouTube's Opus audio goes to Discord untouched (no re-encoding) unless volume or an effect is
+changed. The next song is looked up while the current one plays, FFmpeg reconnects on network blips, and a
+stream that dies mid-song is looked up again and resumes where it stopped.
+
 ### Moderation
 
 Each command needs the matching Discord permission (or Administrator, or `SYKE_OWNER_IDS`).
@@ -291,7 +320,10 @@ listens on Railway's `PORT`.
    - `SYKE_DEFAULT_TIMEZONE`, e.g. `Europe/London` (optional)
    - For the owner web dashboard (optional): `SYKE_WEB=1`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
      `SYKE_WEB_SECRET`, `SYKE_WEB_BASE_URL` (see **Owner web dashboard** above)
-4. Deploy. The **Deploy Logs** should show `Synced 2 global commands` and `SYKE online as ...`.
+   - For YouTube from a cloud server (optional, only if songs fail with "YouTube blocked the server"):
+     `SYKE_MUSIC_COOKIES` (the contents of a cookies.txt export from a throwaway YouTube account),
+     and/or `SYKE_MUSIC_PROXY`
+4. Deploy. `railpack.json` adds ffmpeg and Deno to the image for music. The **Deploy Logs** should show `Synced 2 global commands` and `SYKE online as ...`.
 
 No external database (Supabase, Postgres, etc.) is needed. SYKE stores watched channels,
 opt-outs, per-server settings, who invited each member, moderation cases and restrictions, and the
@@ -324,6 +356,8 @@ All settings live in `.env` (see `.env.example`):
 | `SYKE_STRIP_API_SECRET` | empty | Shared secret with THE STRIP game (the game's `SYKE_API_SECRET`) |
 | `SYKE_STRIP_GAME_URL` | empty | THE STRIP game server's address, e.g. `https://hometown-production.up.railway.app`. Turns on `!marry`, `!divorce`, `!partner`, `!gift` and the chapel in `!shop` |
 | `SYKE_WEB_BASE_URL` | empty | The dashboard's public URL, e.g. `https://syke.up.railway.app` |
+| `SYKE_MUSIC_COOKIES` | empty | Netscape cookies.txt contents for YouTube, for when YouTube asks the server to sign in. Use a throwaway account |
+| `SYKE_MUSIC_PROXY` | empty | A proxy for music lookups, e.g. `http://user:pass@host:port` |
 
 ## Development
 

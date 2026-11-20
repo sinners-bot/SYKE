@@ -776,6 +776,11 @@ class Storage:
             self._conn.commit()
         return data
 
+    def set_config(self, guild_id: int, key: str, data: dict) -> None:
+        """Replace a server's whole config blob for `key`."""
+        self._write("INSERT INTO guild_kv VALUES (?, ?, ?) ON CONFLICT(guild_id, key) DO UPDATE SET value = excluded.value",
+                    (guild_id, key, json.dumps(data)))
+
     def clear_config(self, guild_id: int, key: str) -> bool:
         return self._write("DELETE FROM guild_kv WHERE guild_id = ? AND key = ?", (guild_id, key)) > 0
 

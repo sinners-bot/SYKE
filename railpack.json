@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "packages": {
+    "deno": "2"
+  },
+  "deploy": {
+    "aptPackages": ["ffmpeg"]
+  }
+}
