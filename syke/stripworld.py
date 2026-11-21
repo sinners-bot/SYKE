@@ -134,6 +134,9 @@ ITEMS = [
     Item("bag", "Mystery Bag", "🛍️", "general", 400, "Could be anything on the Strip."),
     Item("cookie", "Fortune Cookie", "🥠", "dragon", 150, "A fortune and an hour of luck.", "lucky", 1),
     Item("lomein", "Lo Mein Combo", "🍜", "dragon", 300, "+25% work pay for 2 hours.", "fed", 2),
+    Item("latte", "Flat White", "☕", "cafe", 120, "Halves your hustle cooldown for 1 hour.", "chill", 1),
+    Item("croissant", "Warm Croissant", "🥐", "cafe", 90, "Buttery. Fills you up a little."),
+    Item("novel", "Paperback Novel", "📖", "books", 200, "An hour of luck. It is a good book.", "lucky", 1),
     Item("set", "Fresh Set", "💅", "nails", 500, "+15% work pay for 3 hours (better tips).", "glam", 3),
     Item("tarot", "Tarot Reading", "🔮", "rose", 600, "For an hour, crime can't land you in jail.", "foresight", 1),
     Item("charm", "Lucky Charm", "🍀", "rose", 1_500, "6 hours of better odds on hustles and crime.", "lucky", 6),
@@ -143,6 +146,8 @@ ITEMS = [
     Item("paintjob", "Paint Job", "🎨", "paint", 20_000, "Your own name colour: `use paintjob #ff3ea5`."),
 ]
 ITEM_BY_KEY = {i.key: i for i in ITEMS}
+# Shops that exist in THE STRIP (the game) but are not ownable storefronts on the property map.
+MIDTOWN_SHOPS = {"cafe": "Blossom Café", "books": "Fifth Avenue Books"}
 
 BUFF_INFO = {  # buff -> (emoji, label)
     "lucky": ("🍀", "Lucky — better odds on hustles, crimes and robberies"),
@@ -413,7 +418,7 @@ class StripWorld(commands.Cog, name="StripWorld"):
             return
         self.db.econ_item_add(ctx.guild.id, ctx.author.id, it.key, qty)
         self.tip_store(ctx.guild.id, it.store, int(total * OWNER_CUT), ctx.author.id)
-        store = STORE_BY_KEY[it.store]
+        store = STORE_BY_KEY.get(it.store) or Store(it.store, MIDTOWN_SHOPS.get(it.store, it.store.title()), (255, 255, 255), 0, 0, "")
         how = "It works automatically." if it.passive else f"Use it with `{self.p(ctx)}use {it.key}`."
         await ctx.reply(embed=embed(f"{it.emoji} Bought", f"{qty}× **{it.name}** from {store.name} for "
                                     f"{self.cash(total)}. {how}", OK))

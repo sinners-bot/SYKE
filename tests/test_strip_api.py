@@ -305,3 +305,15 @@ def test_bank_deposit_and_withdraw(env):
         svc.bank(G, U, "withdraw", 1000)
     with pytest.raises(StripError):
         svc.bank(G, U, "deposit", 0)
+
+
+def test_midtown_shop_items_are_buyable_without_a_storefront(env):
+    """The cafe and the bookshop live in the game only: their items are in the catalog and sell normally."""
+    db, svc, clock = env
+    svc.state(G, U)
+    cat = svc.catalog()
+    assert cat["items"]["latte"]["store"] == "cafe" and cat["items"]["novel"]["store"] == "books"
+    assert "cafe" not in cat["stores"] and "books" not in cat["stores"]
+    before = db.econ_wallet(G, U)["cash"]
+    svc.buy(G, U, "latte")
+    assert db.econ_items(G, U)["latte"] == 1 and db.econ_wallet(G, U)["cash"] == before - sw.ITEM_BY_KEY["latte"].price
