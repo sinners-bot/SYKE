@@ -112,7 +112,12 @@ autoplay).
 `!search <query>`. Slash: `/play`, `/skip`, `/queue` and `/music …` for the rest, plus `/music dj @role`
 (only that role, Manage Channels, and the song's requester can control playback).
 
-Quality: YouTube's Opus audio goes to Discord untouched (no re-encoding) unless volume or an effect is
+With `SYKE_LAVALINK_URL` set, SYKE plays through a Lavalink server instead (the setup big music bots use):
+Lavalink finds the songs (YouTube through its youtube-source plugin, SoundCloud, Bandcamp, Twitch, Vimeo),
+streams them, and applies volume, effects and seeking live. On Railway it runs as a second service from the
+`ghcr.io/lavalink-devs/lavalink:4` image, configured with environment variables.
+
+Without Lavalink: YouTube's Opus audio goes to Discord untouched (no re-encoding) unless volume or an effect is
 changed. The next song is looked up while the current one plays, FFmpeg reconnects on network blips, and a
 stream that dies mid-song is looked up again and resumes where it stopped.
 
@@ -357,6 +362,8 @@ All settings live in `.env` (see `.env.example`):
 | `SYKE_STRIP_GAME_URL` | empty | THE STRIP game server's address, e.g. `https://hometown-production.up.railway.app`. Turns on `!marry`, `!divorce`, `!partner`, `!gift` and the chapel in `!shop` |
 | `SYKE_WEB_BASE_URL` | empty | The dashboard's public URL, e.g. `https://syke.up.railway.app` |
 | `SYKE_MUSIC_COOKIES` | empty | Netscape cookies.txt contents for YouTube, for when YouTube asks the server to sign in. Use a throwaway account |
+| `SYKE_LAVALINK_URL` | empty | A Lavalink 4.2+ server to play music through (e.g. `http://lavalink.railway.internal:2333`). Without it SYKE plays with yt-dlp and FFmpeg itself |
+| `SYKE_LAVALINK_PASSWORD` | `youshallnotpass` | That Lavalink server's password |
 | `SYKE_MUSIC_PROXY` | empty | A proxy for music lookups, e.g. `http://user:pass@host:port` |
 
 ## Development

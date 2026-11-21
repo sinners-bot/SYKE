@@ -356,8 +356,12 @@ async def test_youtube_songs_download_and_fall_back_to_soundcloud(monkeypatch, t
         calls.append(target)
         return {"_type": "playlist", "entries": [{"url": "https://sc/stream.mp3", "acodec": "mp3", "title": "SC"}]}
 
+    async def no_probe(url, timeout=8.0):
+        return None
+
     monkeypatch.setattr(src, "_download", fake_download)
     monkeypatch.setattr(src, "extract", fake_extract)
+    monkeypatch.setattr(src, "probe_seconds", no_probe)
     track = await src.resolve_stream(Track(title="https://www.youtube.com/watch?v=abc", url="https://www.youtube.com/watch?v=abc"))
     assert track.local and track.stream == str(song) and track.fresh() and track.title == "Real Title"
     before, options, codec = src.ffmpeg_args(track)
@@ -365,7 +369,7 @@ async def test_youtube_songs_download_and_fall_back_to_soundcloud(monkeypatch, t
     spotify = await src.resolve_stream(Track(title="Song — Artist", query="Artist - Song"))
     assert spotify.local and calls[-1] == "ytsearch1:Artist - Song"
     blocked = await src.resolve_stream(Track(title="Blocked Song", url="https://www.youtube.com/watch?v=blocked"))
-    assert not blocked.local and blocked.stream == "https://sc/stream.mp3" and calls[-1] == "scsearch1:Blocked Song"
+    assert not blocked.local and blocked.stream == "https://sc/stream.mp3" and calls[-1] == "scsearch5:Blocked Song"
 
 
 def test_cards_link_and_colour_by_source(rig):
@@ -387,3 +391,31 @@ def test_cards_link_and_colour_by_source(rig):
     assert music.style(Track(title="x", source="Youtube"))[0] == "YouTube"
     assert music.link(Track(title="plain")) == "**plain**"
     p.current = None
+
+
+async def test_soundcloud_previews_are_skipped(monkeypatch):
+    entries = [
+        {"url": "https://sc/a", "format_id": "http_mp3_preview", "duration": 200, "title": "marked preview"},
+        {"url": "https://sc/b", "format_id": "http_mp3", "duration": 200, "title": "secret preview"},
+        {"url": "https://sc/c", "format_id": "http_mp3", "duration": 200, "title": "full song"},
+    ]
+
+    async def fake_extract(target, flat=False):
+        assert target == "scsearch5:Artist - Song"
+        return {"_type": "playlist", "entries": entries}
+
+    async def fake_probe(url, timeout=8.0):
+        return {"https://sc/b": 30.0, "https://sc/c": 199.5}[url]
+
+    monkeypatch.setattr(src, "extract", fake_extract)
+    monkeypatch.setattr(src, "probe_seconds", fake_probe)
+    assert (await src.soundcloud_full("Artist - Song"))["title"] == "full song"
+    entries.pop()
+    assert await src.soundcloud_full("Artist - Song") is None
+
+    def blocked(target):
+        raise Exception("ERROR: Sign in to confirm you're not a bot")
+
+    monkeypatch.setattr(src, "_download", blocked)
+    with pytest.raises(LookupError, match="30-second preview"):
+        await src.resolve_stream(Track(title="Song — Artist", query="Artist - Song"))

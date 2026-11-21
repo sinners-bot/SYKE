@@ -32,6 +32,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from . import lavalink as ll
 from . import music_sources as src
 from .moderation import BRAND, OK, WARN, embed, moderator, problem
 from .music_sources import FILTERS, Track, duration_text
@@ -62,6 +63,33 @@ def missing_parts() -> list[str]:
     except ImportError:
         missing.append("PyNaCl")
     return missing
+
+
+LL_FILTERS = {
+    "off": {},
+    "bassboost": {"equalizer": [{"band": b, "gain": g} for b, g in ((0, 0.3), (1, 0.25), (2, 0.18), (3, 0.1))]},
+    "nightcore": {"timescale": {"speed": 1.2, "pitch": 1.25, "rate": 1.0}},
+    "vaporwave": {"timescale": {"speed": 0.8, "pitch": 0.8, "rate": 1.0},
+                  "equalizer": [{"band": 0, "gain": 0.2}, {"band": 1, "gain": 0.15}]},
+    "8d": {"rotation": {"rotationHz": 0.15}},
+    "speed": {"timescale": {"speed": 1.25, "pitch": 1.0, "rate": 1.0}},
+    "slowed": {"timescale": {"speed": 0.85, "pitch": 0.92, "rate": 1.0}},
+    "karaoke": {"karaoke": {"level": 1.0, "monoLevel": 1.0, "filterBand": 220.0, "filterWidth": 100.0}},
+    "treble": {"equalizer": [{"band": b, "gain": 0.2} for b in (10, 11, 12, 13)]},
+    "loud": {"volume": 1.4},
+}
+LL_SPEED = {"nightcore": 1.2, "vaporwave": 0.8, "speed": 1.25, "slowed": 0.85}
+
+
+def ll_track(data: dict, requester: int = 0) -> Track:
+    """A Lavalink track as one of ours."""
+    info = data.get("info") or {}
+    stream = bool(info.get("isStream"))
+    return Track(title=info.get("title") or info.get("uri") or "Unknown", url=info.get("uri") or "",
+                 duration=None if stream else (info.get("length") or 0) / 1000 or None,
+                 uploader=info.get("author") or "", thumbnail=info.get("artworkUrl") or "",
+                 requester=requester, source=info.get("sourceName") or "", is_live=stream,
+                 encoded=data.get("encoded") or "")
 
 
 def progress_bar(position: float, total: float | None, width: int = 16) -> str:
@@ -142,6 +170,8 @@ class Player:
 
     @property
     def speed(self) -> float:
+        if isinstance(self.vc, ll.LavalinkVoice):
+            return LL_SPEED.get(self.filter, 1.0)
         return src.SPEED.get(self.filter, 1.0)
 
     def position(self) -> float:
@@ -189,6 +219,8 @@ class Player:
         track, vc = self.current, self.vc
         if track is None or vc is None:
             return False
+        if isinstance(vc, ll.LavalinkVoice):
+            return await self._play_lavalink(track, vc, position)
         try:
             await src.resolve_stream(track)
         except LookupError as error:
@@ -219,6 +251,29 @@ class Player:
         self._prefetch()
         return True
 
+    async def _play_lavalink(self, track: Track, vc, position: float) -> bool:
+        try:
+            encoded = await self.cog.ll_resolve(track)
+            self._loop = asyncio.get_running_loop()
+            self.skipping = self.stopped = False
+            await vc.play_track(encoded, position_ms=int(position * 1000), volume=self.volume,
+                                filters=LL_FILTERS.get(self.filter, {}), after=self._after)
+        except LookupError as error:
+            await self.say(problem("Skipped a song", f"**{track.label[:150]}**: {error}"))
+            return False
+        except Exception as error:
+            log.warning("Lavalink couldn't play in %s: %s", self.guild.id, error)
+            await self.say(problem("Couldn't play", "The music server didn't take the song. Try `play` again."))
+            return False
+        self.base, self.t0, self.paused_at = position, time.monotonic(), None
+        log.info("Playing %r in %s through Lavalink (%s)", track.label[:80], self.guild.id, track.source or "?")
+        asyncio.create_task(self._audio_check(track))
+        self._cancel_idle()
+        if position == 0:
+            await self.now_playing_card()
+        self._prefetch()
+        return True
+
     @staticmethod
     async def _wait_for_encryption(vc, seconds: float = 3.0) -> None:
         """Discord's end-to-end voice encryption (DAVE) takes a moment to set up after joining. Audio sent
@@ -237,6 +292,15 @@ class Player:
         vc = self.vc
         if vc is None:
             return "not connected"
+        if isinstance(vc, ll.LavalinkVoice):
+            node = vc.node
+            bits = {"backend": "lavalink", "node_ready": bool(node and node.available),
+                    "connected": vc.is_connected(), "playing": vc.is_playing(), "paused": vc.is_paused(),
+                    "position_ms": vc.position_ms, "ping_ms": vc.latency_ms, "last_end": vc.last_end_reason,
+                    "last_error": vc.last_exception, "channel": getattr(vc.channel, "name", None),
+                    "listeners": humans_in(vc.channel),
+                    "players_on_node": (node.stats or {}).get("players") if node else None}
+            return ", ".join(f"{k}={v}" for k, v in bits.items())
         conn = getattr(vc, "_connection", None)
         player = getattr(vc, "_player", None)
         me = getattr(self.guild, "me", None)
@@ -280,6 +344,21 @@ class Player:
                     await self._advance(user_skip=True)
                 return
             track = self.current
+            vc = self.vc
+            if isinstance(vc, ll.LavalinkVoice):
+                if track is not None and not self.skipping and vc.last_end_reason == "loadFailed":
+                    reason = vc.last_exception or "it wouldn't load"
+                    if not track.fallback:  # YouTube refused it: try the same song on SoundCloud
+                        track.fallback, track.encoded = True, ""
+                        track.query = track.query or track.title
+                        log.info("Lavalink couldn't load %s (%s), trying SoundCloud", track.label, reason)
+                        if await self._play(self.position()):
+                            return
+                    else:
+                        await self.say(problem("Skipped a song", f"**{track.label[:150]}**: {reason[:200]}"))
+                user_skip, self.skipping = self.skipping, False
+                await self._advance(user_skip=user_skip)
+                return
             if track is not None and not self.skipping:
                 position = self.position()
                 cut_short = track.duration and not track.is_live and position < track.duration - 6
@@ -296,13 +375,17 @@ class Player:
         if self.prefetch_task is not None and not self.prefetch_task.done():
             return
         upcoming = self.queue[0] if self.queue else None
-        if upcoming is None or upcoming.fresh():
+        lavalink = isinstance(self.vc, ll.LavalinkVoice)
+        if upcoming is None or (upcoming.encoded if lavalink else upcoming.fresh()):
             return
 
         async def run() -> None:
             await asyncio.sleep(3)
             with contextlib.suppress(Exception):
-                await src.resolve_stream(upcoming)
+                if lavalink:
+                    await self.cog.ll_resolve(upcoming)
+                else:
+                    await src.resolve_stream(upcoming)
 
         self.prefetch_task = asyncio.create_task(run())
 
@@ -310,6 +393,16 @@ class Player:
         """Replay the current song from `position` (after a seek, volume or effect change)."""
         vc = self.vc
         if vc is None or self.current is None:
+            return
+        if isinstance(vc, ll.LavalinkVoice):  # Lavalink changes volume, effects and position live
+            target = self.position() if position is None else position
+            self.base, self.t0 = target, time.monotonic()
+            if self.paused_at is not None:
+                self.paused_at = self.t0
+            body = {"volume": self.volume, "filters": LL_FILTERS.get(self.filter, {})}
+            if position is not None:
+                body["position"] = int(position * 1000)
+            asyncio.ensure_future(vc.set(**body))
             return
         self.replay_at = self.position() if position is None else position
         if vc.is_paused():
@@ -611,8 +704,15 @@ class Music(commands.Cog):
         self.players: dict[int, Player] = {}
         self._session = None
         self._alone: dict[int, asyncio.Task] = {}
+        self.node: ll.Node | None = None
 
     async def cog_load(self) -> None:
+        conf = ll.settings()
+        if conf is not None:
+            self.node = ll.Node(self.bot, *conf)
+            await self.node.start()
+            log.info("Music plays through Lavalink at %s", conf[0])
+            return
         missing = missing_parts()
         runtime = shutil.which("deno") or shutil.which("node")
         if missing:
@@ -629,6 +729,8 @@ class Music(commands.Cog):
                 await self.leave(guild, reason="unload")
         if self._session is not None:
             await self._session.close()
+        if self.node is not None:
+            await self.node.close()
 
     def p(self, ctx) -> str:
         return ctx.clean_prefix if getattr(ctx, "prefix", None) and ctx.prefix != "/" else "/"
@@ -669,6 +771,16 @@ class Music(commands.Cog):
         return f"Only the <@&{dj}> role controls the music here."
 
     async def ready_or_explain(self, ctx: commands.Context) -> bool:
+        if self.node is not None:
+            if self.node.available:
+                return True
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self.node.ready.wait(), 8)
+            if self.node.available:
+                return True
+            await self.say(ctx, embed=problem("Music server is starting", "SYKE's music server isn't connected yet. "
+                                                                          "Try again in a minute."), ephemeral=True)
+            return False
         missing = missing_parts()
         if missing:
             await self.say(ctx, embed=problem("Music isn't available yet",
@@ -703,6 +815,68 @@ class Music(commands.Cog):
         async with session.get(url) as resp:
             return await resp.json(content_type=None)
 
+    async def ll_load(self, identifier: str) -> tuple[list[dict], str | None, str | None]:
+        """(tracks, playlist name, error) from Lavalink."""
+        data = await self.node.load(identifier)
+        kind, body = data.get("loadType"), data.get("data")
+        if kind == "track":
+            return [body], None, None
+        if kind == "search":
+            return list(body or []), None, None
+        if kind == "playlist":
+            return list((body or {}).get("tracks") or []), ((body or {}).get("info") or {}).get("name"), None
+        if kind == "error":
+            return [], None, ((body or {}).get("message") or "couldn't load")[:200]
+        return [], None, None
+
+    async def ll_resolve(self, track: Track) -> str:
+        """The Lavalink id for a track, searching for it if it's just a name (Spotify, Apple Music, Deezer)."""
+        if track.encoded and not track.fallback:
+            return track.encoded
+        if track.encoded and track.fallback and "soundcloud" in (track.source or "").lower():
+            return track.encoded
+        text = track.query or track.title
+        prefixes = ["scsearch:"] if track.fallback else ["ytsearch:", "scsearch:"]
+        last = None
+        for prefix in prefixes:
+            try:
+                found, _, error = await self.ll_load(prefix + text)
+            except Exception as err:
+                found, error = [], str(err)
+            last = error or last
+            if found:
+                hit = ll_track(found[0])
+                track.encoded = hit.encoded
+                if not track.url or track.query or track.fallback:
+                    track.url = hit.url or track.url
+                track.source = hit.source or track.source
+                track.duration = track.duration or hit.duration
+                track.thumbnail = track.thumbnail or hit.thumbnail
+                if track.title == track.url:
+                    track.title = hit.title
+                return track.encoded
+        raise LookupError(src.clean_error(Exception(last)) if last else f"Couldn't find **{text[:100]}**.")
+
+    async def ll_lookup(self, kind: str, value: str, requester: int) -> tuple[list[Track], str | None]:
+        if kind == "url":
+            identifier = value.split("&list=")[0] if ("list=RD" in value and "v=" in value) else value
+        else:
+            identifier = "ytsearch:" + value
+        found, name, error = await self.ll_load(identifier)
+        if not found and kind == "search":
+            found, name, error2 = await self.ll_load("scsearch:" + value)
+            error = error2 or error
+        if not found:
+            if kind == "url":
+                title = await self._page_title(value)
+                if title:
+                    return [Track(title=title, query=title, requester=requester, source="Web")], None
+            raise LookupError(src.clean_error(Exception(error)) if error else
+                              f"No results for **{value[:100]}**.")
+        if kind == "search" or name is None:
+            found = found[:1]
+        return [ll_track(t, requester) for t in found[: src.PLAYLIST_MAX]], name
+
     async def lookup(self, query: str, requester: int) -> tuple[list[Track], str | None]:
         """(tracks, playlist name or None). Raises LookupError with a friendly reason."""
         kind, value = src.classify(query)
@@ -729,6 +903,8 @@ class Music(commands.Cog):
         except Exception as error:
             log.info("Couldn't read %s: %s", query, error)
             raise LookupError("Couldn't read that link. Is it public?") from error
+        if self.node is not None:
+            return await self.ll_lookup(kind, value, requester)
         if kind == "url":
             url = value
             if "list=RD" in url and "v=" in url:  # a YouTube "mix" link: just the song
@@ -777,10 +953,9 @@ class Music(commands.Cog):
         except Exception as error:
             last = error
         try:
-            info = await src.extract(src.FALLBACK_PREFIX + text)
-            entries = [e for e in (info or {}).get("entries") or [] if e]
-            if entries:
-                return src.fill_stream(src.track_from_info(entries[0], requester), entries[0])
+            entry = await src.soundcloud_full(text)
+            if entry is not None:
+                return src.fill_stream(src.track_from_info(entry, requester), entry)
         except Exception as error:
             last = error
         raise LookupError(src.clean_error(last) if last else f"No results for **{text[:100]}**.")
@@ -803,20 +978,27 @@ class Music(commands.Cog):
         """Autoplay: queue songs from YouTube's mix for the last song."""
         video = previous.video_id()
         if not video:
-            with contextlib.suppress(LookupError):
-                found = await self._search_one(previous.query or previous.title, 0)
-                video = found.video_id()
+            with contextlib.suppress(Exception):
+                if self.node is not None:
+                    hits, _, _ = await self.ll_load("ytsearch:" + (previous.query or previous.title))
+                    video = ll_track(hits[0]).video_id() if hits else None
+                else:
+                    found = await self._search_one(previous.query or previous.title, 0)
+                    video = found.video_id()
         if not video:
             return
         seen = {t.video_id() for t in player.history[-30:]} | {video}
+        mix = f"https://www.youtube.com/watch?v={video}&list=RD{video}"
         try:
-            info = await src.extract(f"https://www.youtube.com/watch?v={video}&list=RD{video}", flat=True)
+            if self.node is not None:
+                found, _, _ = await self.ll_load(mix)
+                candidates = [ll_track(t, 0) for t in found]
+            else:
+                info = await src.extract(mix, flat=True)
+                candidates = [src.track_from_info(e, 0) for e in (info or {}).get("entries") or [] if e]
         except Exception:
             return
-        for entry in (info or {}).get("entries") or []:
-            if not entry:
-                continue
-            track = src.track_from_info(entry, 0)
+        for track in candidates:
             if track.video_id() and track.video_id() not in seen:
                 player.queue.append(track)
                 if len(player.queue) >= 3:
@@ -844,7 +1026,10 @@ class Music(commands.Cog):
                                 ephemeral=True)
                 return None
             try:
-                await target.connect(self_deaf=True, timeout=20, reconnect=True)
+                if self.node is not None:
+                    await target.connect(cls=ll.LavalinkVoice, self_deaf=True, timeout=20, reconnect=True)
+                else:
+                    await target.connect(self_deaf=True, timeout=20, reconnect=True)
             except (discord.ClientException, asyncio.TimeoutError, RuntimeError) as error:
                 log.warning("Voice connect failed in %s: %s", ctx.guild.id, error)
                 await self.say(ctx, embed=problem("Couldn't join the voice channel", "Discord didn't let me in. Try again in "
@@ -962,7 +1147,8 @@ class Music(commands.Cog):
                 return
             player = self.players.get(ctx.guild.id)
             if player is None or player.current is None:  # fetch the first song while joining voice
-                prep = asyncio.create_task(src.resolve_stream(tracks[0]))
+                prep = asyncio.create_task(self.ll_resolve(tracks[0]) if self.node is not None
+                                           else src.resolve_stream(tracks[0]))
                 prep.add_done_callback(lambda t: t.cancelled() or t.exception())
             await self.enqueue(ctx, tracks, name, front=front, source_link=query.strip("<> ") if name else "")
 
@@ -1217,11 +1403,17 @@ class Music(commands.Cog):
             return
         await ctx.defer()
         try:
-            info = await src.extract(f"ytsearch5:{query}", flat=True)
+            if self.node is not None:
+                found, _, error = await self.ll_load(f"ytsearch:{query}")
+                if not found and error:
+                    raise Exception(error)
+                tracks = [ll_track(t, ctx.author.id) for t in found[:5]]
+            else:
+                info = await src.extract(f"ytsearch5:{query}", flat=True)
+                tracks = [src.track_from_info(e, ctx.author.id) for e in (info or {}).get("entries") or [] if e][:5]
         except Exception as error:
             await self.say(ctx, embed=problem("Search failed", src.clean_error(error)), ephemeral=True)
             return
-        tracks = [src.track_from_info(e, ctx.author.id) for e in (info or {}).get("entries") or [] if e][:5]
         if not tracks:
             await self.say(ctx, f"No results for **{query[:100]}**.", ephemeral=True)
             return

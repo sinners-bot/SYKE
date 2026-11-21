@@ -19,6 +19,7 @@ Owner settings (environment variables, set in Railway):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import json
 import logging
@@ -63,6 +64,8 @@ class Track:
     resolved_at: float = 0.0
     local: bool = False           # stream is a downloaded file on disk
     origin: str = ""              # the Spotify / Apple Music / Deezer link it came from
+    encoded: str = ""             # Lavalink's track id, when playing through Lavalink
+    fallback: bool = False        # Lavalink: YouTube failed, try SoundCloud next
 
     @property
     def label(self) -> str:
@@ -420,25 +423,69 @@ async def _resolve(track: Track) -> Track:
                     return fill_stream(track, await extract(track.url))
                 except Exception as stream_error:
                     last = stream_error
-    targets = [] if is_youtube(track.url) or not track.url or track.query else [track.url]
-    fallback = track.query or (track.title if is_youtube(track.url) else "")
-    if fallback:
-        targets.append(FALLBACK_PREFIX + fallback)
-    for target in targets:
+    if track.url and not is_youtube(track.url) and not track.query:
         try:
-            info = await extract(target)
+            info = await extract(track.url)
             if info:
                 track.local = False
-                if target.startswith(FALLBACK_PREFIX):  # it's SoundCloud's copy now: link and label that
-                    entry = next((e for e in info.get("entries") or [] if e), info)
-                    track.url = entry.get("webpage_url") or track.url
-                    track.source = "SoundCloud"
-                    track.resolved_at = 0
                 return fill_stream(track, info)
         except Exception as error:  # yt-dlp raises many kinds; try the next source
             last = error
-            log.info("Lookup failed for %s: %s", target, error)
+            log.info("Lookup failed for %s: %s", track.url, error)
+    fallback = track.query or (track.title if is_youtube(track.url) else "")
+    if fallback:
+        try:
+            entry = await soundcloud_full(fallback)
+        except Exception as error:
+            entry, last = None, error
+        if entry is not None:
+            track.local = False
+            track.url = entry.get("webpage_url") or track.url  # it's SoundCloud's copy now: link and label that
+            track.source = "SoundCloud"
+            track.resolved_at = 0
+            return fill_stream(track, entry)
+        if last is not None and "not a bot" in str(last):
+            raise LookupError("YouTube blocked the server and SoundCloud only has a 30-second preview of this "
+                              "song. Adding YouTube cookies (SYKE_MUSIC_COOKIES) fixes this.")
     raise LookupError(clean_error(last) if last else "Nothing playable found.")
+
+
+SOUNDCLOUD_CANDIDATES = 5
+
+
+def looks_like_preview(entry: dict) -> bool:
+    """SoundCloud hands out 30-second previews of many label tracks. yt-dlp marks most of them."""
+    fmt = " ".join(str(entry.get(k) or "") for k in ("format_id", "format", "format_note", "url")).lower()
+    return "preview" in fmt or "/preview/" in fmt
+
+
+async def probe_seconds(url: str, timeout: float = 8.0) -> float | None:
+    """How long a stream really is, asked of ffprobe (None if it can't tell)."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", url,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout)
+        return float(out.decode().strip() or "nan")
+    except Exception:
+        with contextlib.suppress(Exception):
+            proc.kill()
+        return None
+
+
+async def soundcloud_full(query: str) -> dict | None:
+    """The first SoundCloud result for `query` that's the whole song, not a 30-second preview."""
+    info = await extract(f"scsearch{SOUNDCLOUD_CANDIDATES}:{query}")
+    for entry in [e for e in (info or {}).get("entries") or [] if e]:
+        if not entry.get("url") or looks_like_preview(entry):
+            continue
+        listed = entry.get("duration") or 0
+        real = await probe_seconds(entry["url"])
+        if real is not None and real == real and real < 35 and listed > 45:
+            log.info("Skipping a SoundCloud preview (%.0fs of %.0fs) for %s", real, listed, query)
+            continue
+        return entry
+    return None
 
 
 def clean_error(error: Exception | None) -> str:
