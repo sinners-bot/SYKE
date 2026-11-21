@@ -187,7 +187,7 @@ class Player:
         return True
 
     @staticmethod
-    async def _wait_for_encryption(vc, seconds: float = 6.0) -> None:
+    async def _wait_for_encryption(vc, seconds: float = 3.0) -> None:
         """Discord's end-to-end voice encryption (DAVE) takes a moment to set up after joining. Audio sent
         before it's ready isn't encrypted and listeners' apps drop it, so wait for it (briefly)."""
         conn = getattr(vc, "_connection", None)

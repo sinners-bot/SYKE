@@ -1,4 +1,6 @@
 discord.py[voice]==2.7.1
+# davey 0.2 changed its key API and discord.py 2.7.1 doesn't call the new steps: bots go silent. Keep 0.1.x.
+davey>=0.1.7,<0.2
 aiohttp==3.11.11
 httpx==0.28.1
 Pillow==13.0.0
