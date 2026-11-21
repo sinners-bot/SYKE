@@ -176,11 +176,11 @@ def test_collect_reads_history_into_corpus(lab):
     cog, guild, channel = lab
     channel.messages += [fake_message(100 + i, 1, 300, f"collected line {i}") for i in range(20)]
     ctx = ctx_in(guild)
-    run(cog.collect.callback(cog, ctx, None, 50))
+    run(cog.collect.callback(cog, ctx, None, amount="50"))
     assert ctx.replies[-1].title == "Collection complete 🧫"
     assert "**32** new" in ctx.replies[-1].description
     assert cog.bot.storage.corpus_size(42) == (32, 2)
-    run(cog.collect.callback(cog, ctx, channel, 50))
+    run(cog.collect.callback(cog, ctx, channel, amount="50"))
     assert "**0** new" in ctx.replies[-1].description
 
     by_name = {c.name: c for c in cog.get_commands()}
@@ -191,7 +191,7 @@ def test_collect_reads_history_into_corpus(lab):
 def test_collect_skips_commands(lab):
     cog, guild, channel = lab
     channel.messages += [fake_message(200, 1, 300, "!profile @someone"), fake_message(201, 1, 300, "<@999> help")]
-    run(cog.collect.callback(cog, ctx_in(guild), channel, 50))
+    run(cog.collect.callback(cog, ctx_in(guild), channel, amount="50"))
     assert all(not text.startswith(("!", "<@")) for _, text in cog.bot.storage.corpus(42, 300))
 
 
@@ -597,3 +597,49 @@ def test_compose_reply_skips_recent_lines(monkeypatch):
     assert "SYKE ALREADY SAID" in seen["user"] and "pizza is elite" in seen["user"]
     assert "[0] pizza is elite" not in seen["user"]
     assert "[0] touch grass" in seen["user"]
+
+
+class DatedChannel(FakeChannel):
+    """History filtered by date, newest first, the way `collect since` reads it."""
+
+    async def history(self, limit=None, after=None, oldest_first=None):
+        picked = [m for m in sorted(self.messages, key=lambda m: m.id, reverse=True)
+                  if after is None or m.created_at > after]
+        for message in picked[:limit] if limit else picked:
+            await asyncio.sleep(0)
+            yield message
+
+
+def test_collect_since_reads_back_to_a_date(lab, monkeypatch):
+    cog, _, _ = lab
+    now = BASE + timedelta(days=400)
+    channel = DatedChannel(1, [fake_message(i, 1, 300 + i % 3, f"old line {i}") for i in range(10)])
+    for i, message in enumerate(channel.messages):   # one message every 60 days, the newest last
+        message.created_at = now - timedelta(days=60 * (len(channel.messages) - i))
+    guild = fake_guild(channel)
+    edits = []
+
+    async def reply(content=None, **kwargs):
+        ctx.replies.append(kwargs.get("embed"))
+
+        async def edit(**kw):
+            edits.append(kw["embed"])
+        return types.SimpleNamespace(edit=edit)
+
+    import syke.bot as botmod
+    real_datetime = botmod.datetime
+
+    class Frozen(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz else now
+
+    monkeypatch.setattr(botmod, "datetime", Frozen)
+    ctx = ctx_in(guild)
+    ctx.reply = reply
+    run(cog.collect.callback(cog, ctx, channel, amount="since 1y"))
+    done = edits[-1]
+    assert done.title == "Collection complete 🧫" and "**6** messages read" in done.description
+    assert cog.bot.storage.corpus_size(42)[0] >= 6
+    run(cog.collect.callback(cog, ctx, channel, amount="since whenever"))
+    assert ctx.replies[-1].title == "How far back?"

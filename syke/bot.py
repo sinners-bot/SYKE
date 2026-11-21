@@ -65,6 +65,7 @@ from .storage import Storage
 from .tldr import (
     TLDR_CAP,
     TLDR_FETCH,
+    span_label,
     TLDR_TARGET,
     Line,
     assemble,
@@ -133,6 +134,9 @@ MIN_MIMIC_MESSAGES = 10
 SERVER_LIST_LIMIT = 20
 COLLECT_DEFAULT = 5000
 COLLECT_MAX = 20000
+COLLECT_SINCE_CAP = 500_000      # per channel, for `collect since …` / `collect all`
+COLLECT_BATCH = 1000
+COLLECT_PROGRESS_SECONDS = 8
 YAP_REPLY_COOLDOWN = 4
 YAP_SEARCH = 150
 YAP_RANDOM = 40
@@ -2373,6 +2377,70 @@ class SykeCommands(commands.Cog, name="SYKE"):
             body += f"\n⚠️ Couldn't read {len(skipped)} channel(s). Check SYKE's permissions."
         await ctx.reply(embed=notice("Rescan complete 🔬", body, BRAND), ephemeral=True)
 
+    async def _collect_since(self, ctx: commands.Context, channels: list, unreadable: list, after) -> None:
+        """Read history back to a date (or everything), storing as it goes and editing a progress message."""
+        guild = ctx.guild
+        optouts = self.bot.storage.optouts(guild.id)
+        started = time.monotonic()
+        target = f"back to **{after.strftime('%d %B %Y')}**" if after else "**all the way back**"
+        read = kept = added = 0
+        capped: list = []
+        oldest: dict[int, datetime] = {}
+        current = channels[0]
+
+        def progress_text(done: bool = False) -> str:
+            lines = [f"{'Read' if done else 'Reading'} {', '.join(ch.mention for ch in channels)} {target}.",
+                     f"**{read:,}** messages read · **{added:,}** new stored · "
+                     f"{span_label(time.monotonic() - started)}"]
+            if not done:
+                reached = oldest.get(current.id)
+                lines.append(f"Now in {current.mention}" + (f", at {reached.strftime('%d %b %Y')}" if reached else ""))
+            return "\n".join(lines)
+
+        message = await ctx.reply(embed=notice("Collecting history ⏳", progress_text(), BRAND))
+        last_edit = time.monotonic()
+        for current in channels:
+            batch: list[tuple] = []
+            count = 0
+            try:
+                async for msg in current.history(limit=None, after=after, oldest_first=False):
+                    read += 1
+                    count += 1
+                    oldest[current.id] = msg.created_at
+                    if not msg.author.bot and msg.content and msg.author.id not in optouts \
+                            and not self.bot.is_command_text(guild.id, msg.content):
+                        batch.append(corpus_row(msg))
+                        kept += 1
+                    if len(batch) >= COLLECT_BATCH:
+                        added += await asyncio.to_thread(self.bot.storage.add_corpus, guild.id, batch)
+                        batch = []
+                    if count >= COLLECT_SINCE_CAP:
+                        capped.append(current)
+                        break
+                    if time.monotonic() - last_edit >= COLLECT_PROGRESS_SECONDS:
+                        last_edit = time.monotonic()
+                        with contextlib.suppress(discord.HTTPException):
+                            await message.edit(embed=notice("Collecting history ⏳", progress_text(), BRAND))
+            except discord.HTTPException as error:
+                log.warning("Collect since failed in #%s: %s", current.name, error)
+                unreadable.append(current)
+            if batch:
+                added += await asyncio.to_thread(self.bot.storage.add_corpus, guild.id, batch)
+        self.bot.bump_history(guild.id)
+        total, authors = self.bot.storage.corpus_size(guild.id)
+        log.info("Collected since %s: %d read, %d new in %s in %.0fs", after, read, added, guild.id,
+                 time.monotonic() - started)
+        body = progress_text(done=True) + f"\nSYKE now knows **{total:,}** messages from **{authors:,}** members."
+        if capped:
+            body += (f"\n⚠️ Stopped at {COLLECT_SINCE_CAP:,} messages in {', '.join(ch.mention for ch in capped)}.")
+        if unreadable:
+            body += f"\n⚠️ Couldn't read {', '.join(ch.mention for ch in unreadable)}."
+        done = notice("Collection complete 🧫", body, BRAND)
+        try:
+            await message.edit(embed=done)
+        except discord.HTTPException:
+            await ctx.channel.send(embed=done)
+
     async def _collect_channel(self, guild_id: int, channel, limit: int, optouts: set[int]) -> list[tuple[int, int, int, str]]:
         rows = []
         async for message in channel.history(limit=limit):
@@ -2383,12 +2451,28 @@ class SykeCommands(commands.Cog, name="SYKE"):
 
     @commands.hybrid_command(name="collect", description="Read channel history so mimic and yap have more to work with")
     @app_commands.describe(channel="Channel to read. Leave empty for all watched channels.",
-                           limit=f"Messages to read per channel, up to {COLLECT_MAX}")
+                           amount=f"Messages per channel (up to {COLLECT_MAX}), or 'since 1y', 'since 6m', "
+                                  f"'since 21.11.2025' or 'all'")
     @commands.cooldown(1, 30, commands.BucketType.guild)
     @admin()
-    async def collect(self, ctx: commands.Context, channel: discord.TextChannel | None = None,
-                      limit: int = COLLECT_DEFAULT) -> None:
-        limit = max(1, min(limit, COLLECT_MAX))
+    async def collect(self, ctx: commands.Context, channel: discord.TextChannel | None = None, *,
+                      amount: str = "") -> None:
+        text = amount.strip().lower()
+        since_mode = text in ("all", "everything", "full") or text.startswith("since") or \
+            bool(text) and not text.isdigit()
+        after = None
+        if since_mode and text not in ("all", "everything", "full"):
+            from .social import parse_back
+            when = text.removeprefix("since").strip()
+            now = datetime.now(self.bot.tz_for(ctx.guild.id))
+            after = parse_back(when, now) if when else None
+            if after is None or after >= now:
+                await ctx.reply(embed=notice("How far back?", f"Try `{self.p(ctx)}collect 20000`, "
+                                                              f"`{self.p(ctx)}collect since 1y`, `since 6m`, "
+                                                              f"`since 21.11.2025` or `{self.p(ctx)}collect all`."),
+                                ephemeral=True)
+                return
+        limit = max(1, min(int(text), COLLECT_MAX)) if text.isdigit() else COLLECT_DEFAULT
         if channel is not None:
             channels = [channel]
         else:
@@ -2405,6 +2489,20 @@ class SykeCommands(commands.Cog, name="SYKE"):
                 "I can't see in there 👀",
                 f"Give SYKE **View Channel** and **Read Message History** in {', '.join(ch.mention for ch in unreadable)}.",
             ), ephemeral=True)
+            return
+        if since_mode:
+            collecting = getattr(self, "_collecting", set())
+            self._collecting = collecting
+            if ctx.guild.id in collecting:
+                await ctx.reply(embed=notice("Already collecting", "A long collection is running here. SYKE edits "
+                                                                   "its progress message until it's done."),
+                                ephemeral=True)
+                return
+            collecting.add(ctx.guild.id)
+            try:
+                await self._collect_since(ctx, readable, unreadable, after)
+            finally:
+                collecting.discard(ctx.guild.id)
             return
 
         optouts = self.bot.storage.optouts(ctx.guild.id)

@@ -187,7 +187,11 @@ CATALOG: list[Category] = [
             "channels": "Shows SYKE's current settings and every channel it's reading.",
             "prefix": "Set a custom command prefix, switch to @mention-only, or reset to the default.",
             "dashboard": "Opens the in-Discord admin control panel with one-click buttons for everything.",
-            "collect": "Reads a channel's history so `mimic` and `yap` have more material to work with.",
+            "collect": "Reads channel history into SYKE's memory (for mimic, yap, wrapped, timemachine, quotebook, "
+                       "racist…). `collect` reads the newest 5,000 messages per watched channel, `collect 20000` "
+                       "up to 20,000. `collect since 1y` (or `since 6m`, `since 21.11.2025`) keeps reading back to "
+                       "that date, and `collect all` reads everything, with a live progress message. "
+                       "`collect #channel since 1y` for one channel.",
         },
     ),
     Category(
