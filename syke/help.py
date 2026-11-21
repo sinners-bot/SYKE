@@ -78,7 +78,7 @@ CATALOG: list[Category] = [
         "games", "🎮", "Fun & Games", EVERYONE,
         "Little games and text toys to mess around with. Reply to a message or pass your own text.",
         ["guess", "drunk", "high", "scramble", "zalgo", "uwu", "mock", "keysmash",
-         "leet", "stutter", "clap", "reverse", "woke", "afflict", "cure", "afflicted"],
+         "leet", "stutter", "clap", "reverse", "woke", "afflict", "puppet", "cure", "afflicted"],
         {
             "guess": "\"Who said this?\" — SYKE quotes a real message and you guess the author. "
                      "`guess top` shows the best guessers.",
@@ -99,7 +99,15 @@ CATALOG: list[Category] = [
                        "effect, reposted as them via webhook. Their original vanishes instantly, in a way snipe "
                        "bots don't log, and they're locked to plain text — no files, links, embeds, apps, "
                        "reactions, stickers or polls. Effects: drunk, high, scramble, zalgo, uwu, mock, "
-                       "keysmash, leet, stutter, clap, reverse, woke. `afflict @user woke`.",
+                       "keysmash, leet, stutter, clap, reverse, woke, plus:\n"
+                       "**censor** (words ████'d or ||spoilered||), **translator** (a random language each time), "
+                       "**narrator** (narrated like a novel), **truthserum** (what they *really* meant, underneath), "
+                       "**delay** (everything lands 30-60s late), **puppet** (they say lines you queue with "
+                       "`puppet`), **hex** (a cursed colour and a 💀 on every message; they can still talk).\n"
+                       "Add a duration to make it wear off: `afflict @user narrator 30m`. Puppet lasts 5m by default.",
+            "puppet": "Queue lines for a puppeted member: `puppet @user <line>`. Their next message comes out as "
+                      "that line. With an empty script they blurt out random embarrassing ones. `puppet @user` "
+                      "shows the script.",
             "cure": "Remove a user's affliction: they type normally again and get files, links and apps back.",
             "afflicted": "List everyone who currently has a chat effect stuck on them.",
         },
@@ -349,7 +357,7 @@ LAYOUT: dict[str, tuple[str, str, list[tuple[str, list[str]]]]] = {
         ("Games", ["guess"]),
         ("Text effects", ["drunk", "high", "scramble", "zalgo", "uwu", "mock", "keysmash", "leet", "stutter",
                           "clap", "reverse", "woke"]),
-        ("Afflictions", ["afflict", "cure", "afflicted"])]),
+        ("Afflictions", ["afflict", "puppet", "cure", "afflicted"])]),
     "emoji": ("Emojis", "Grow your emoji and sticker collection.", []),
     "mod": ("Moderation", "Every action is logged as a numbered case.", [
         ("Warnings", ["warn", "warnings", "history", "delwarn", "clearwarns"]),
@@ -369,7 +377,7 @@ LAYOUT: dict[str, tuple[str, str, list[tuple[str, list[str]]]]] = {
 }
 # Sections rendered as a single line of command names (they all work the same way).
 INLINE_SECTIONS = {"Text effects"}
-ACCESS_OF = {"afflict": MODERATOR, "cure": MODERATOR, "afflicted": MODERATOR, "yap": ADMIN, "servers": OWNER,
+ACCESS_OF = {"afflict": MODERATOR, "puppet": MODERATOR, "cure": MODERATOR, "afflicted": MODERATOR, "yap": ADMIN, "servers": OWNER,
              "verify": EVERYONE}
 
 BRIEF = {
@@ -377,7 +385,7 @@ BRIEF = {
     "ship": "How well two people match", "top": "Trait leaderboard", "tldr": "Catch up on the chat",
     "mimic": "Talk like someone", "dexify": "Dramatic… pedro… pauses",
     "ask": "Ask SYKE anything", "yap": "Let SYKE chime into chats",
-    "guess": "Who said it?", "afflict": "Stick an effect on someone", "cure": "Remove an effect",
+    "guess": "Who said it?", "afflict": "Stick an effect on someone", "puppet": "Script a puppet", "cure": "Remove an effect",
     "afflicted": "Who's afflicted",
     "emoji": "Add, steal or manage emojis", "sticker": "Add, steal or manage stickers",
     "steal": "Steal from a replied message",

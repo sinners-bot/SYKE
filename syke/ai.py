@@ -403,6 +403,47 @@ async def woke_rewrite(settings: Settings, text: str, timeout: float = 8.0) -> s
     return None
 
 
+AFFLICT_RULES = """Rules: keep it playful, never cruel. No slurs, nothing sexual, no comments on race, religion, \
+gender, sexuality, disability or bodies. Never @mention anyone. Keep links, numbers and names as written. \
+Reply with JSON only."""
+
+AFFLICT_PROMPTS = {
+    "translator": """Translate one Discord message into {language}, keeping its tone, slang level and emojis. \
+Translate everything, even if it's one word. """ + AFFLICT_RULES + """ Format: {{"text": "<translation>"}}""",
+    "narrator": """You are a dramatic novel narrator. Rewrite one Discord message by {name} as a single line of \
+third-person narration that quotes what they said (in quotes, unchanged or lightly trimmed) and adds a short, \
+funny storytelling touch about how they said it, e.g. *{name} leaned back and said, with no confidence \
+whatsoever:* "I'm good at this game." Use italics (*...*) for the narration, keep it under 45 words. """ \
++ AFFLICT_RULES + """ Format: {{"text": "<narration>"}}""",
+    "truthserum": """Someone named {name} is under a truth serum. Given one Discord message they sent, write what \
+they REALLY meant: a short, funny, honest-subtext version (under 25 words), first person, like an inner voice \
+spilling the truth. Light teasing only. """ + AFFLICT_RULES + """ Format: {{"text": "<what they really meant>"}}""",
+}
+
+LANGUAGES = [("🇯🇵", "Japanese"), ("🇫🇷", "French"), ("🇩🇪", "German"), ("🇪🇸", "Spanish"), ("🇮🇹", "Italian"),
+             ("🇧🇷", "Brazilian Portuguese"), ("🇷🇺", "Russian"), ("🇰🇷", "Korean"), ("🇳🇱", "Dutch"),
+             ("🇸🇪", "Swedish"), ("🇵🇱", "Polish"), ("🇹🇷", "Turkish"), ("🇬🇷", "Greek"), ("🇫🇮", "Finnish"),
+             ("🇮🇳", "Hindi"), ("🇨🇳", "Mandarin Chinese"), ("🇸🇦", "Arabic"), ("🇻🇳", "Vietnamese"),
+             ("🏴‍☠️", "pirate English"), ("🧝", "Shakespearean English")]
+
+
+async def afflict_rewrite(settings: Settings, kind: str, text: str, name: str, language: str = "",
+                          timeout: float = 8.0) -> str | None:
+    """The AI-powered afflictions: translator, narrator and truth serum. None if AI isn't available."""
+    prompt = AFFLICT_PROMPTS.get(kind)
+    if prompt is None or settings.ai_provider == "none" or not (text or "").strip():
+        return None
+    system = prompt.format(name=name or "they", language=language or "French")
+    try:
+        data = await _complete(settings, system, text[:600], temperature=0.9, timeout=timeout)
+    except Exception:
+        return None
+    out = (data or {}).get("text")
+    if isinstance(out, str) and out.strip():
+        return out.strip()[:1800]
+    return None
+
+
 async def _complete(settings: Settings, system: str, user: str, temperature: float, timeout: float) -> dict:
     if settings.ai_provider == "openai":
         reply = await _call_openai(settings, system, user, temperature, timeout)

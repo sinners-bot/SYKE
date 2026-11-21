@@ -369,3 +369,149 @@ def test_cure_lifts_the_text_only_lock(tcog):
     run(tcog.cure_cmd.callback(tcog, ctx, member))
     assert member.roles == [] and tcog.bot.storage.get_effect(42, 7) is None
     assert "Cured" in replies[-1].title
+
+
+# The newer afflictions: censor, translator, narrator, truth serum, delay, puppet, hex, and timed ones
+
+def test_censor_hides_some_words_but_keeps_links():
+    from syke.textfun import censor
+    out = censor("the plan is to meet at the secret base tonight https://x.y/z", random.Random(2))
+    assert out != "the plan is to meet at the secret base tonight https://x.y/z"
+    assert ("█" in out or "||" in out) and out.endswith("https://x.y/z")
+    assert censor("a the", random.Random(1)) == "a the"
+
+
+def test_new_effect_names_and_durations():
+    from syke.textfun import duration_words, parse_duration
+    assert resolve_effect("classified") == "censor" and resolve_effect("truth") == "truthserum"
+    assert resolve_effect("lag") == "delay" and resolve_effect("hexed") == "hex"
+    assert resolve_effect("narrate") == "narrator" and resolve_effect("translate") == "translator"
+    assert parse_duration("5m") == 300 and parse_duration("1h30m") == 5400 and parse_duration("2d") == 172800
+    assert parse_duration("forever") is None and parse_duration("5 apples") is None
+    assert duration_words(300) == "5m" and duration_words(5400) == "1h 30m"
+
+
+def test_ai_afflictions_rewrite_through_the_ai(tcog, monkeypatch):
+    from syke import ai
+    calls = []
+
+    async def fake_rewrite(settings, kind, text, name, language="", timeout=8.0):
+        calls.append((kind, text, name, language))
+        return {"translator": "bonjour le monde", "narrator": '*Ada sighed:* "hello world"',
+                "truthserum": "I need attention"}[kind]
+
+    monkeypatch.setattr(ai, "afflict_rewrite", fake_rewrite)
+    sent = _hook(tcog, monkeypatch)
+    for effect in ("translator", "narrator", "truthserum"):
+        tcog.bot.storage.set_effect(42, 7, effect, 1)
+        msg, _ = _afflicted_message("hello world")
+        run(tcog.on_message(msg))
+    translated, narrated, truth = (c for c, _ in sent)
+    assert translated.endswith("bonjour le monde") and translated.split(" ")[0] in {f for f, _ in ai.LANGUAGES}
+    assert narrated.startswith("*Ada sighed:*")
+    assert truth == "hello world\n-# 💉 what they really meant: I need attention"
+    assert calls[1][2] == "Ada"
+
+
+def test_ai_afflictions_fall_back_to_the_plain_text(tcog, monkeypatch):
+    from syke import ai
+
+    async def no_ai(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(ai, "afflict_rewrite", no_ai)
+    sent = _hook(tcog, monkeypatch)
+    tcog.bot.storage.set_effect(42, 7, "truthserum", 1)
+    msg, _ = _afflicted_message("hello world")
+    run(tcog.on_message(msg))
+    assert sent[-1][0] == "hello world"
+
+
+def test_puppet_says_the_script_then_random_lines(tcog, monkeypatch):
+    from syke.textfun import PUPPET_LINES
+    sent = _hook(tcog, monkeypatch)
+    tcog.bot.storage.set_effect(42, 7, "puppet", 1)
+    tcog._save_puppet(42, 7, ["I love SYKE", "second line"])
+    for text in ("what I really typed", "another one", "third"):
+        msg, state = _afflicted_message(text)
+        run(tcog.on_message(msg))
+        assert state["deleted"]
+    assert [c for c, _ in sent[:2]] == ["I love SYKE", "second line"]
+    assert sent[2][0] in PUPPET_LINES and tcog._puppet_lines(42, 7) == []
+
+
+def test_delayed_messages_land_late_and_in_order(tcog, monkeypatch):
+    import syke.textfun as tf
+    spawned = []
+    tcog.bot.spawn = lambda coro: spawned.append(coro)
+    _hook(tcog, monkeypatch)
+    tcog.bot.storage.set_effect(42, 7, "delay", 1)
+    monkeypatch.setattr(tf.random, "uniform", lambda a, b: 30.0)
+    for text in ("first", "second"):
+        msg, state = _afflicted_message(text)
+        run(tcog.on_message(msg))
+        assert state["deleted"]
+    first, second = (c.cr_frame.f_locals["land"] for c in spawned)
+    assert second > first >= tf.time.time() + 29
+    for c in spawned:
+        c.close()
+
+
+def test_hex_marks_without_deleting(tcog, monkeypatch):
+    tcog.bot.storage.set_effect(42, 7, "hex", 1)
+    reactions = []
+    marked = []
+
+    async def add_reaction(emoji):
+        reactions.append(emoji)
+
+    async def fake_hex(member):
+        marked.append(member.id)
+        return True
+
+    monkeypatch.setattr(tcog, "_hex", fake_hex)
+    msg, state = _afflicted_message("still talking")
+    msg.add_reaction = add_reaction
+    msg.guild.get_role = lambda i: None
+    msg.author.roles = []
+    run(tcog.on_message(msg))
+    assert state["deleted"] is False and reactions and reactions[0] in ("💀", "🕯️", "🪦") and marked == [7]
+
+
+def test_timed_afflictions_wear_off(tcog, monkeypatch):
+    import time as _time
+    sent = _hook(tcog, monkeypatch)
+    tcog.bot.storage.set_effect(42, 7, "mock", 1)
+    tcog._set_expiry(42, 7, _time.time() - 1)
+    msg, state = _afflicted_message("hello world")
+    msg.guild.get_member = lambda i: None
+    msg.guild.get_role = lambda i: None
+    run(tcog.on_message(msg))
+    assert not sent and state["deleted"] is False
+    assert tcog.bot.storage.get_effect(42, 7) is None and tcog._expiries(42) == {}
+
+
+def test_afflict_command_sets_duration_and_needs_ai_for_ai_effects(tcog, monkeypatch):
+    import time as _time
+    guild, _ = _guild_with_roles()
+    tcog.bot.spawn = lambda coro: coro.close()
+    tcog.bot.display_prefix = lambda gid: "!"
+    member = _member(guild)
+    member.mention, member.display_name = "<@7>", "Ada"
+    replies = []
+
+    async def reply(content=None, **kw):
+        replies.append(kw.get("embed"))
+
+    perms = types.SimpleNamespace(manage_webhooks=True, add_reactions=True)
+    ctx = types.SimpleNamespace(guild=guild, reply=reply, author=types.SimpleNamespace(id=1),
+                                channel=types.SimpleNamespace(permissions_for=lambda m: perms))
+    run(tcog.afflict_cmd.callback(tcog, ctx, member, "narrator", ""))
+    assert "Needs the AI" in replies[-1].title and tcog.bot.storage.get_effect(42, 7) is None
+    run(tcog.afflict_cmd.callback(tcog, ctx, member, "puppet", ""))
+    assert tcog.bot.storage.get_effect(42, 7) == "puppet"
+    assert 290 < tcog._expiries(42)["7"] - _time.time() <= 300   # puppets last 5 minutes by default
+    run(tcog.afflict_cmd.callback(tcog, ctx, member, "censor", "2h"))
+    assert "2h" in replies[-1].description and tcog._puppet_lines(42, 7) == []
+    run(tcog.afflict_cmd.callback(tcog, ctx, member, "censor", "whenever"))
+    assert "How long" in replies[-1].title
