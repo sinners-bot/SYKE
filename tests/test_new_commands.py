@@ -282,3 +282,62 @@ async def test_plays_are_counted_for_the_charts(bot):
     assert "Most played this week" in ctx.replies[-1].title and "youtu.be/A" in ctx.replies[-1].description
     await cog.do_top(ctx, "djs", "all")
     assert "<@1>" in ctx.replies[-1].description
+
+
+# Time machine and quote book
+
+def test_parse_back():
+    now = datetime(2026, 11, 21, 23, 0, tzinfo=ZoneInfo("Europe/Vienna"))
+    assert social.parse_back("", now).date() == date(2025, 11, 21)
+    assert social.parse_back("2y", now).date() == date(2024, 11, 21)
+    assert social.parse_back("6m", now).date() == date(2026, 5, 25)
+    assert social.parse_back("2 weeks ago", now).date() == date(2026, 11, 7)
+    assert social.parse_back("21.11.2025", now).date() == date(2025, 11, 21)
+    assert social.parse_back("31.02.2025", now) is None and social.parse_back("yesterday-ish", now) is None
+
+
+def _store(bot, rows):
+    bot.storage.add_corpus(GID, rows)
+
+
+async def test_time_machine_recaps_that_day(bot):
+    cog = social.Social(bot)
+    tz = bot.tz_for(GID)
+    year_ago = social.parse_back("", datetime.now(tz)).replace(hour=20, minute=0, second=0, microsecond=0)
+    base = year_ago.timestamp()
+    _store(bot, [(1000 + i, 10, 7 + i % 2, f"blackjack is rigged message {i}", base + i * 60,
+                  "Ada" if i % 2 == 0 else "Bo", 3 if i == 4 else 0, 5 if i == 4 else 0) for i in range(12)])
+    ctx = FakeCtx(gid=GID)
+    ctx.typing = lambda: _nullcontext()
+    await cog.timemachine(ctx, "")
+    card = ctx.replies[-1]
+    assert "Time machine" in card.title and "Messages" in [f.name for f in card.fields]
+    assert any("message 4" in f.value for f in card.fields if f.name == "🔥 Biggest moments")
+    await cog.timemachine(ctx, "3y")
+    assert "Nothing back then" in ctx.replies[-1].title
+
+
+class _nullcontext:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+async def test_quote_book_pages_through_the_most_reacted(bot):
+    cog = social.Social(bot)
+    _store(bot, [(2000 + i, 10, 7, f"quote number {i}", time.time() - i * 3600, "Ada", 0, i) for i in range(8)])
+    bot.storage.bump_reactions(GID, 2001, 10, 4)             # live reactions count too
+    ctx = FakeCtx(gid=GID)
+    ctx.guild = NS(id=GID, get_member=lambda i: None, get_channel_or_thread=lambda i: None)
+    await cog.quotebook(ctx, "all", None)
+    view = ctx.sent[-1].kwargs["view"]
+    first = ctx.replies[-1]
+    assert "quote number 1" in first.description and "page 1 of 6" in first.footer.text   # 3+ reactions only
+    assert view.jump.url.endswith("/10/2001") and view.back.disabled and not view.forward.disabled
+    view.page = 5
+    view._sync()
+    assert view.forward.disabled and "quote number 3" in view.card().description
+    await cog.quotebook(ctx, "decade", None)
+    assert "Which pages" in ctx.replies[-1].title

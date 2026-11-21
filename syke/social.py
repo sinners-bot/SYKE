@@ -32,7 +32,7 @@ from discord.ext import commands, tasks
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from . import ai
-from .lexicon import STOPWORDS
+from .lexicon import LAUGH_EMOJIS, STOPWORDS
 from .moderation import BRAND, OK, WARN, embed, moderator, problem
 from .tldr import (Line, digest, from_discord_message, offline_summary, prompt_facts, prompt_sample, span_label,
                    vibe_line)
@@ -56,6 +56,9 @@ EXTRA_SKIP = {"https", "http", "www", "com", "the", "and", "you", "that", "this"
               "not", "are", "was", "have", "its", "it's", "i'm", "dont", "don't", "like", "what", "yeah", "can",
               "get", "got", "all", "they", "she", "his", "her", "him", "about", "your", "one", "out", "how",
               "der", "die", "das", "und", "ist", "ich", "nicht", "mit", "was", "auf", "ein", "eine", "aber", "auch"}
+QUOTEBOOK_MIN = 3
+QUOTEBOOK_PAGES = 40
+TIME_SPANS = {"d": 1, "w": 7, "m": 30, "y": 365}
 DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 
@@ -313,6 +316,120 @@ def offline_vibe(lines: list[Line]) -> dict:
 def bar(value: int, width: int = 12) -> str:
     filled = round(max(0, min(100, value)) / 100 * width)
     return "█" * filled + "░" * (width - filled)
+
+
+def parse_back(text: str, now: datetime) -> datetime | None:
+    """When to look back to: "" or "1y" (a year ago), "6m", "2w", "30d", or a date like 21.11.2024."""
+    text = (text or "").strip().lower().removesuffix(" ago")
+    if not text:
+        text = "1y"
+    m = re.fullmatch(r"(\d{1,3})\s*(d|day|days|w|week|weeks|m|month|months|y|year|years)", text)
+    if m:
+        amount, unit = int(m.group(1)), m.group(2)[0]
+        if unit == "y":
+            try:
+                return now.replace(year=now.year - amount)
+            except ValueError:  # 29 Feb
+                return now.replace(year=now.year - amount, day=28)
+        return now - timedelta(days=amount * TIME_SPANS[unit])
+    m = re.fullmatch(r"(\d{1,2})[./](\d{1,2})[./](\d{2,4})|(\d{4})-(\d{1,2})-(\d{1,2})", text)
+    if m:
+        try:
+            if m.group(1):
+                year = int(m.group(3)) + (2000 if len(m.group(3)) == 2 else 0)
+                return now.replace(year=year, month=int(m.group(2)), day=int(m.group(1)))
+            return now.replace(year=int(m.group(4)), month=int(m.group(5)), day=int(m.group(6)))
+        except ValueError:
+            return None
+    return None
+
+
+def quote_page(row: tuple, index: int, total: int, guild, tz) -> discord.Embed:
+    message_id, channel_id, author_id, author_name, content, created, laughs, reactions = row
+    member = guild.get_member(author_id) if guild else None
+    name = getattr(member, "display_name", None) or author_name or "someone"
+    text = discord.utils.escape_mentions(re.sub(r"<@!?(\d+)>", "@someone", content or ""))
+    card = discord.Embed(description=f"### “{text[:900]}”", colour=discord.Colour.from_str("#F5B83D"))
+    card.set_author(name=f"— {name}", icon_url=getattr(getattr(member, "display_avatar", None), "url", None))
+    when = datetime.fromtimestamp(created, tz).strftime("%d %B %Y") if created else "some time ago"
+    card.add_field(name="Said", value=f"{when} in <#{channel_id}>")
+    card.add_field(name="Reactions", value=f"**{reactions}**" + (f" · 😂 {laughs}" if laughs else ""))
+    card.set_footer(text=f"📖 Quote book · page {index + 1} of {total}")
+    return card
+
+
+class QuoteBook(discord.ui.View):
+    def __init__(self, cog: "Social", guild, rows: list[tuple], owner: int) -> None:
+        super().__init__(timeout=300)
+        self.cog, self.guild, self.rows, self.owner = cog, guild, rows, owner
+        self.page = 0
+        self.message: discord.Message | None = None
+        self.jump = discord.ui.Button(label="Original", style=discord.ButtonStyle.link, url="https://discord.com", row=1)
+        self.add_item(self.jump)
+        self._sync()
+
+    def _sync(self) -> None:
+        row = self.rows[self.page]
+        self.jump.url = f"https://discord.com/channels/{self.guild.id}/{row[1]}/{row[0]}"
+        self.first.disabled = self.back.disabled = self.page == 0
+        self.forward.disabled = self.last.disabled = self.page >= len(self.rows) - 1
+
+    def card(self) -> discord.Embed:
+        return quote_page(self.rows[self.page], self.page, len(self.rows), self.guild,
+                          self.cog.bot.tz_for(self.guild.id))
+
+    async def _turn(self, interaction: discord.Interaction, page: int) -> None:
+        self.page = max(0, min(len(self.rows) - 1, page))
+        self._sync()
+        await interaction.response.edit_message(embed=self.card(), view=self)
+
+    @discord.ui.button(emoji="⏮️", style=discord.ButtonStyle.secondary)
+    async def first(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._turn(interaction, 0)
+
+    @discord.ui.button(emoji="◀️", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._turn(interaction, self.page - 1)
+
+    @discord.ui.button(emoji="🎲", style=discord.ButtonStyle.secondary)
+    async def random_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        import random as _random
+        await self._turn(interaction, _random.randrange(len(self.rows)))
+
+    @discord.ui.button(emoji="▶️", style=discord.ButtonStyle.secondary)
+    async def forward(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._turn(interaction, self.page + 1)
+
+    @discord.ui.button(emoji="⏭️", style=discord.ButtonStyle.secondary)
+    async def last(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._turn(interaction, len(self.rows) - 1)
+
+    @discord.ui.button(label="Make a quote card", emoji="🖼️", style=discord.ButtonStyle.primary, row=1)
+    async def card_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        quotes = self.cog.bot.get_cog("Quotes")
+        row = self.rows[self.page]
+        channel = self.guild.get_channel_or_thread(row[1])
+        if quotes is None or channel is None:
+            await interaction.response.send_message("Can't make a card for this one.", ephemeral=True)
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            original = await channel.fetch_message(row[0])
+        except discord.HTTPException:
+            await interaction.followup.send("That message was deleted, so there's no card for it.", ephemeral=True)
+            return
+        error = await quotes.post(interaction.channel, original, interaction.user, interaction=interaction)
+        if error:
+            await interaction.followup.send(error, ephemeral=True)
+
+    async def on_timeout(self) -> None:
+        if self.message is None:
+            return
+        for child in self.children:
+            if not getattr(child, "url", None):
+                child.disabled = True
+        with contextlib.suppress(discord.HTTPException):
+            await self.message.edit(view=self)
 
 
 class Social(commands.Cog, name="Social"):
@@ -733,6 +850,135 @@ class Social(commands.Cog, name="Social"):
     async def vibe_slash(self, interaction: discord.Interaction) -> None:
         ctx = await commands.Context.from_interaction(interaction)
         await self.vibe(ctx)
+
+    # Live reaction counts (for the quote book)
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload) -> None:
+        if payload.guild_id and getattr(payload, "user_id", None) != getattr(self.bot.user, "id", None):
+            laugh = 1 if str(payload.emoji) in LAUGH_EMOJIS else 0
+            await asyncio.to_thread(self.bot.storage.bump_reactions, payload.guild_id, payload.message_id, 1, laugh)
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_remove(self, payload) -> None:
+        if payload.guild_id:
+            laugh = 1 if str(payload.emoji) in LAUGH_EMOJIS else 0
+            await asyncio.to_thread(self.bot.storage.bump_reactions, payload.guild_id, payload.message_id, -1, -laugh)
+
+    # Time machine
+
+    async def timemachine(self, ctx: commands.Context, when: str) -> None:
+        guild = ctx.guild
+        tz = self.bot.tz_for(guild.id)
+        now = datetime.now(tz)
+        target = parse_back(when, now)
+        if target is None or target > now:
+            await ctx.reply(embed=problem("When to?", f"Try `{self.p(ctx)}timemachine` (a year ago), "
+                                                      f"`timemachine 6m`, `timemachine 2w` or `timemachine 21.11.2025`."),
+                            ephemeral=True)
+            return
+        day = target.replace(hour=0, minute=0, second=0, microsecond=0)
+        optouts = self.bot.storage.optouts(guild.id)
+        async with ctx.typing():
+            rows, used, spread = [], day, 0
+            for spread in (0, 1, 3, 7):  # nothing that day: widen to the days around it
+                start = (day - timedelta(days=spread)).timestamp()
+                end = (day + timedelta(days=spread + 1)).timestamp()
+                found = await asyncio.to_thread(self.bot.storage.corpus_between, guild.id, start, end)
+                rows = [r for r in found if r[2] not in optouts and r[4] and
+                        not self.bot.is_command_text(guild.id, r[4])]
+                if len(rows) >= 10:
+                    break
+            if len(rows) < 3:
+                await ctx.reply(embed=problem("Nothing back then", f"SYKE has no stored messages from around "
+                                                                   f"{day.strftime('%d %B %Y')}. It only remembers "
+                                                                   f"what it has collected from watched channels."),
+                                ephemeral=True)
+                return
+            lines = [Line(r[3] or "someone", r[4], r[5] or 0) for r in rows]
+            facts = await asyncio.to_thread(digest, lines)
+            sample = prompt_sample(lines)
+            written = await ai.write_tldr(self.bot.settings, "the server", [(l.author, l.text) for l in sample],
+                                          len(lines), prompt_facts(facts))
+            summary, vibe = written if written else offline_summary(lines, "the server", facts)
+        label = day.strftime("%A, %d %B %Y")
+        if spread:
+            label = f"the days around {day.strftime('%d %B %Y')}"
+        ago = span_label(now.timestamp() - day.timestamp()).split()[0]
+        card = embed(f"🕰️ Time machine: {label}", summary, discord.Colour.from_str("#38BDF8"))
+        best = sorted(rows, key=lambda r: (r[6], r[7]), reverse=True)[:3]
+        best = [r for r in best if r[7] or r[6]]
+        if best:
+            picks = []
+            for r in best:
+                snippet = discord.utils.escape_mentions(" ".join(r[4].split()))[:110]
+                link = f"https://discord.com/channels/{guild.id}/{r[1]}/{r[0]}"
+                picks.append(f"**{r[3] or 'someone'}**: {snippet} · [jump]({link})")
+            card.add_field(name="🔥 Biggest moments", value="\n".join(picks)[:1024], inline=False)
+        talkers = ", ".join(f"**{n}**" for n, _ in facts.talkers[:3])
+        if talkers:
+            card.add_field(name="Loudest", value=talkers)
+        card.add_field(name="Messages", value=f"{len(rows):,}")
+        if vibe:
+            card.set_footer(text=ai.public_text(vibe, 200))
+        await ctx.reply(embed=card, allowed_mentions=discord.AllowedMentions.none())
+
+    @commands.command(name="timemachine", aliases=["tm", "throwback", "yearago", "onthisday"],
+                      help="What the server was talking about a year ago today (or 6m, 2w, 21.11.2025)")
+    @commands.guild_only()
+    @commands.cooldown(1, 20, commands.BucketType.channel)
+    async def timemachine_cmd(self, ctx: commands.Context, *, when: str = "") -> None:
+        await self.timemachine(ctx, when)
+
+    @recap.command(name="timemachine", description="What the server was talking about a year ago (or another date)")
+    @app_commands.describe(when="How far back: 1y (default), 6m, 2w, 30d, or a date like 21.11.2025")
+    async def timemachine_slash(self, interaction: discord.Interaction, when: str = "") -> None:
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.timemachine(ctx, when)
+
+    # Quote book
+
+    async def quotebook(self, ctx: commands.Context, period: str, member: discord.Member | None) -> None:
+        guild = ctx.guild
+        days = {"week": 7, "month": 30, "year": 365, "all": 0, "ever": 0, "alltime": 0}.get((period or "all").lower())
+        if days is None:
+            await ctx.reply(embed=problem("Which pages?", "Pick `all`, `year`, `month` or `week`."), ephemeral=True)
+            return
+        since = time.time() - days * 86400 if days else 0
+        optouts = self.bot.storage.optouts(guild.id)
+        rows = await asyncio.to_thread(self.bot.storage.top_reacted, guild.id, since, QUOTEBOOK_MIN, 200)
+        rows = [r for r in rows if r[2] not in optouts and not self.bot.is_command_text(guild.id, r[4])
+                and (member is None or r[2] == member.id)
+                and not re.fullmatch(r"\s*(https?://\S+|<a?:\w+:\d+>|\W)\s*", r[4])][:QUOTEBOOK_PAGES]
+        if not rows:
+            who = f" from {member.display_name}" if member else ""
+            await ctx.reply(embed=problem("The book is empty", f"No messages{who} with {QUOTEBOOK_MIN}+ reactions "
+                                                               f"yet. React to the good ones and they'll land here."),
+                            ephemeral=True)
+            return
+        view = QuoteBook(self, guild, rows, ctx.author.id)
+        view.message = await ctx.reply(embed=view.card(), view=view, allowed_mentions=discord.AllowedMentions.none())
+
+    @commands.command(name="quotebook", aliases=["qb", "bestof", "hallofquotes"],
+                      help="The server's best quotes, picked by reactions: quotebook [all|year|month|week] [@user]")
+    @commands.guild_only()
+    async def quotebook_cmd(self, ctx: commands.Context, period: str = "all",
+                            member: discord.Member | None = None) -> None:
+        if period.lower() not in ("all", "ever", "alltime", "year", "month", "week") and member is None:
+            try:  # "$quotebook @user"
+                member = await commands.MemberConverter().convert(ctx, period)
+                period = "all"
+            except commands.BadArgument:
+                pass
+        await self.quotebook(ctx, period, member)
+
+    @recap.command(name="quotebook", description="The server's best quotes, picked by reactions")
+    @app_commands.describe(period="Which messages", member="Only this person's quotes")
+    @app_commands.choices(period=[app_commands.Choice(name=n, value=n) for n in ("all", "year", "month", "week")])
+    async def quotebook_slash(self, interaction: discord.Interaction, period: str = "all",
+                              member: discord.Member | None = None) -> None:
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.quotebook(ctx, period, member)
 
     # Catch-up
 

@@ -471,6 +471,30 @@ class Storage:
         return self._read("SELECT title, url FROM music_plays WHERE guild_id = ? ORDER BY played_at DESC LIMIT ?",
                           (guild_id, limit))
 
+    def corpus_between(self, guild_id: int, start: float, end: float, limit: int = 3000) -> list[tuple]:
+        """(message_id, channel_id, author_id, author_name, content, created_at, laugh_reactions, total_reactions)
+        stored between two times, oldest first."""
+        return self._read(
+            "SELECT message_id, channel_id, author_id, author_name, content, created_at, laugh_reactions, "
+            "total_reactions FROM corpus WHERE guild_id = ? AND created_at >= ? AND created_at < ? "
+            "ORDER BY created_at LIMIT ?", (guild_id, start, end, limit))
+
+    def top_reacted(self, guild_id: int, since: float, minimum: int = 3, limit: int = 60) -> list[tuple]:
+        """The most-reacted stored messages: same columns as corpus_between, best first."""
+        return self._read(
+            "SELECT message_id, channel_id, author_id, author_name, content, created_at, laugh_reactions, "
+            "total_reactions FROM corpus WHERE guild_id = ? AND COALESCE(created_at, 0) >= ? "
+            "AND total_reactions >= ? AND length(content) BETWEEN 6 AND 400 "
+            "ORDER BY total_reactions DESC, laugh_reactions DESC, created_at DESC LIMIT ?",
+            (guild_id, since, minimum, limit))
+
+    def bump_reactions(self, guild_id: int, message_id: int, total: int, laugh: int) -> None:
+        """Keep a stored message's reaction counts current as people react."""
+        self._write(
+            "UPDATE corpus SET total_reactions = MAX(0, total_reactions + ?), "
+            "laugh_reactions = MAX(0, laugh_reactions + ?) WHERE guild_id = ? AND message_id = ?",
+            (total, laugh, guild_id, message_id))
+
     def corpus_contents(self, guild_id: int, limit: int) -> list[str]:
         """Newest stored messages, for building the server's vocabulary and Markov voice."""
         rows = self._read(
