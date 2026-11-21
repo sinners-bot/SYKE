@@ -336,7 +336,7 @@ CATALOG: list[Category] = [
     Category(
         "social", "💬", "Social", EVERYONE,
         "AFK, birthdays, your year in review, memories, the channel's vibe and what you missed.",
-        ["afk", "birthday", "wrapped", "vibe", "catchup", "timemachine", "quotebook"],
+        ["afk", "birthday", "wrapped", "vibe", "catchup", "timemachine", "quotebook", "racist"],
         {
             "afk": "`afk [reason]`: anyone who pings you is told you're away (and your name gets [AFK] if SYKE can "
                    "change it). Send any message to come back and see who pinged you, with links.",
@@ -355,11 +355,14 @@ CATALOG: list[Category] = [
             "quotebook": "The server's best quotes, picked by reactions, as a book you page through (◀ ▶, 🎲 for a "
                          "random page, and a button to turn one into a quote card). `quotebook year`, "
                          "`quotebook @user`. Also `/recap quotebook`.",
+            "racist": "How many racist slurs someone has used in the messages SYKE stores (common spellings "
+                      "included, words shown censored), with a breakdown and their rank. `racist @user`, and "
+                      "`racist top` for the server ranking.",
             "catchup": "What happened in this channel since you last talked, plus everyone who mentioned you (here "
                        "and in other watched channels) with links. Also `/recap catchup`.",
         },
         sections=[("Away", ["afk", "catchup"]), ("Celebrate", ["birthday", "wrapped"]),
-                  ("Memories", ["timemachine", "quotebook"]), ("Read the room", ["vibe"])],
+                  ("Memories", ["timemachine", "quotebook"]), ("Read the room", ["vibe", "racist"])],
     ),
     Category(
         "casino", "🎰", "Casino", EVERYONE,
@@ -457,7 +460,7 @@ BRIEF = {
     "job": "Work a mini-game shift", "stocks": "Server stock market", "radio": "Endless music by genre",
     "songquiz": "Name that song", "topsongs": "Most played and top DJs", "afk": "Go away politely",
     "birthday": "Birthdays", "wrapped": "Your year in review", "vibe": "Channel mood check",
-    "catchup": "What you missed", "timemachine": "A year ago today", "quotebook": "Best quotes book", "work": "Clock a shift", "hustle": "Risky quick cash", "pay": "Send cash",
+    "catchup": "What you missed", "timemachine": "A year ago today", "quotebook": "Best quotes book", "racist": "Slur counter", "work": "Clock a shift", "hustle": "Risky quick cash", "pay": "Send cash",
     "balance": "Players Club card", "deposit": "Bank it (robber-proof)", "withdraw": "Take cash out",
     "rich": "Richest on the Strip",
     "shop": "Browse the storefronts", "buy": "Buy an item", "use": "Use an item", "inventory": "Items and buffs",

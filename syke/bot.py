@@ -53,6 +53,7 @@ from .rolemenus import RoleMenus
 from .music import Music
 from .social import Social
 from .strip_extras import StripExtras
+from .slurs import SlurCount
 from .moderation import Moderation, help_lines as moderation_help, pretty as pretty_permission
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
 from .scanner import Scanner, to_msg
@@ -385,6 +386,7 @@ class Syke(commands.Bot):
         await self.add_cog(Music(self))
         await self.add_cog(Social(self))
         await self.add_cog(StripExtras(self))
+        await self.add_cog(SlurCount(self))
         if self.settings.web_enabled:
             try:
                 from .web import WebDashboard
