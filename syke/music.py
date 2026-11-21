@@ -22,7 +22,9 @@ import asyncio
 import contextlib
 import logging
 import math
+import difflib
 import random
+import re
 import shutil
 import time
 from typing import Optional
@@ -33,6 +35,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from . import lavalink as ll
+from . import music_lists as lists
 from . import music_sources as src
 from .moderation import BRAND, OK, WARN, embed, moderator, problem
 from .music_sources import FILTERS, Track, duration_text
@@ -46,6 +49,12 @@ IDLE_SECONDS = 180
 ALONE_SECONDS = 120
 PAGE = 10
 RETRIES = 2
+QUIZ_CLIP = 15
+QUIZ_GRACE = 5
+QUIZ_PRIZE = 150
+QUIZ_ROUNDS = 5
+QUIZ_MAX_ROUNDS = 15
+RADIO_BATCH = 5
 LOOPS = ("off", "track", "queue")
 LOOP_ICON = {"off": "➡️", "track": "🔂", "queue": "🔁"}
 
@@ -90,6 +99,26 @@ def ll_track(data: dict, requester: int = 0) -> Track:
                  uploader=info.get("author") or "", thumbnail=info.get("artworkUrl") or "",
                  requester=requester, source=info.get("sourceName") or "", is_live=stream,
                  encoded=data.get("encoded") or "")
+
+
+def normal(text: str) -> str:
+    """Lowercase, no brackets (feat., remix…), no punctuation: how quiz answers are compared."""
+    text = re.sub(r"[\(\[].*?[\)\]]", " ", (text or "").lower())
+    text = re.sub(r"\b(feat|ft)\b.*", " ", text)
+    text = text.replace("&", " and ")
+    return " ".join(re.sub(r"[^\w\s]", " ", text).split())
+
+
+def quiz_match(guess: str, title: str, artist: str = "") -> bool:
+    g, t = normal(guess), normal(title)
+    if not g or not t:
+        return False
+    if len(t) >= 3 and (t == g or f" {t} " in f" {g} "):
+        return True
+    if difflib.SequenceMatcher(None, g, t).ratio() >= 0.82:
+        return True
+    a = normal(artist)
+    return bool(a) and difflib.SequenceMatcher(None, g, f"{t} {a}").ratio() >= 0.85
 
 
 def progress_bar(position: float, total: float | None, width: int = 16) -> str:
@@ -163,6 +192,8 @@ class Player:
         self.idle_task: asyncio.Task | None = None
         self.prefetch_task: asyncio.Task | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self.radio: str | None = None          # genre radio: keeps the queue topped up
+        self.quiz = False                      # a song quiz owns the voice connection
 
     @property
     def vc(self) -> discord.VoiceClient | None:
@@ -186,6 +217,8 @@ class Player:
     # Playback
 
     async def start_or_queue(self) -> None:
+        if self.quiz:
+            return  # songs wait until the quiz is over
         async with self.lock:
             if self.current is None and self.vc is not None:
                 await self._advance(user_skip=False)
@@ -201,6 +234,8 @@ class Player:
             del self.history[:-HISTORY_MAX]
         self.current = None
         while True:
+            if len(self.queue) < 2 and self.radio:
+                await self.cog.radio_fill(self)
             if not self.queue and self.autoplay and previous is not None:
                 await self.cog.add_related(self, previous)
                 previous = None  # one try at related songs per run-out
@@ -247,6 +282,7 @@ class Player:
         asyncio.create_task(self._audio_check(track))
         self._cancel_idle()
         if position == 0:
+            self.cog.record_play(self.guild.id, track)
             await self.now_playing_card()
         self._prefetch()
         return True
@@ -270,6 +306,7 @@ class Player:
         asyncio.create_task(self._audio_check(track))
         self._cancel_idle()
         if position == 0:
+            self.cog.record_play(self.guild.id, track)
             await self.now_playing_card()
         self._prefetch()
         return True
@@ -336,7 +373,7 @@ class Player:
 
     async def _on_end(self) -> None:
         async with self.lock:
-            if self.stopped:
+            if self.stopped or self.quiz:
                 return
             if self.replay_at is not None:
                 position, self.replay_at = self.replay_at, None
@@ -418,6 +455,7 @@ class Player:
     def stop(self) -> None:
         self.queue.clear()
         self.loop = "off"
+        self.radio = None
         self.stopped = True
         self.replay_at = None
         vc = self.vc
@@ -509,6 +547,8 @@ class Player:
             bits.append(f"✨ {self.filter}")
         if self.autoplay:
             bits.append("♾️ Autoplay")
+        if self.radio:
+            bits.append(f"📻 {self.radio} radio")
         if self.queue:
             bits.append(f"{len(self.queue)} in queue · {duration_text(self.queue_seconds())}")
         card.set_footer(text="  •  ".join(bits))
@@ -1420,6 +1460,274 @@ class Music(commands.Cog):
         lines = [f"`{i}.` {t.label[:80]} `{duration_text(t.duration)}`" for i, t in enumerate(tracks, 1)]
         await self.say(ctx, embed=embed(f"🔎 {query[:100]}", "\n".join(lines)), view=SearchPick(self, ctx, tracks))
 
+    # Play history, radio, song quiz
+
+    def record_play(self, guild_id: int, track: Track) -> None:
+        player = self.players.get(guild_id)
+        if player is not None and player.quiz:
+            return
+        try:
+            self.bot.storage.record_play(guild_id, track.label, track.url or track.origin, track.requester)
+        except Exception:
+            log.warning("Couldn't record a play in %s", guild_id, exc_info=True)
+
+    async def radio_fill(self, player: Player, count: int = RADIO_BATCH) -> None:
+        genre = player.radio
+        if not genre:
+            return
+        recent = {t.label.lower() for t in player.history[-60:]} | {t.label.lower() for t in player.queue}
+        if player.current is not None:
+            recent.add(player.current.label.lower())
+        if genre in lists.GENRES:
+            pool = [(a, t) for a, t in lists.GENRES[genre] if f"{t} — {a}".lower() not in recent]
+            if len(pool) < count:  # gone through the list: start over, minus what just played
+                pool = [(a, t) for a, t in lists.GENRES[genre]
+                        if f"{t} — {a}".lower() not in {x.label.lower() for x in player.history[-8:]}]
+            random.shuffle(pool)
+            for artist, title in pool[:count]:
+                player.queue.append(Track(title=f"{title} — {artist}", query=f"{artist} - {title}", uploader=artist,
+                                          source="Radio"))
+            return
+        seeds = list(lists.RADIO_SEARCHES.get(genre, []))
+        random.shuffle(seeds)
+        added = 0
+        for seed in seeds:
+            try:
+                if self.node is not None:
+                    found, _, _ = await self.ll_load(f"ytsearch:{seed}")
+                    candidates = [ll_track(t) for t in found]
+                else:
+                    info = await src.extract(f"ytsearch10:{seed}", flat=True)
+                    candidates = [src.track_from_info(e) for e in (info or {}).get("entries") or [] if e]
+            except Exception:
+                continue
+            random.shuffle(candidates)
+            for track in candidates:
+                if track.label.lower() in recent or (track.duration and track.duration > 900):
+                    continue
+                recent.add(track.label.lower())
+                player.queue.append(track)
+                added += 1
+                if added >= count:
+                    return
+                break  # one per search, so the mix stays varied
+
+    async def do_radio(self, ctx, genre: str | None) -> None:
+        p = self.p(ctx)
+        genres = ", ".join(f"`{g}`" for g in lists.all_genres())
+        if not genre:
+            player = self.players.get(ctx.guild.id)
+            on = f"📻 **{player.radio}** radio is on. " if player and player.radio else ""
+            await self.say(ctx, f"{on}Start one with `{p}radio <genre>`: {genres}. Stop with `{p}radio off`.")
+            return
+        if genre.lower() in ("off", "stop", "none"):
+            player = self.players.get(ctx.guild.id)
+            if player is None or not player.radio:
+                await self.say(ctx, "No radio is on.", ephemeral=True)
+                return
+            if await self.check_control(ctx) is None:
+                return
+            player.radio = None
+            await self.say(ctx, "📻 Radio off. The queue plays out, then stops.")
+            await player.refresh_card()
+            return
+        key = lists.resolve_genre(genre)
+        if key is None:
+            await self.say(ctx, f"No **{discord.utils.escape_markdown(genre[:40])}** station. Try: {genres}.",
+                           ephemeral=True)
+            return
+        if not await self.ready_or_explain(ctx):
+            return
+        player = self.players.get(ctx.guild.id)
+        if player is not None and player.quiz:
+            await self.say(ctx, "A song quiz is running. Radio can start after it.", ephemeral=True)
+            return
+        if ctx.guild.voice_client is not None and self.control_problem(ctx.guild, ctx.author):
+            await self.say(ctx, self.control_problem(ctx.guild, ctx.author), ephemeral=True)
+            return
+        await ctx.defer()
+        player = await self.connect(ctx)
+        if player is None:
+            return
+        player.radio, player.autoplay = key, False
+        if len(player.queue) < 2:
+            await self.radio_fill(player)
+        await self.say(ctx, f"📻 **{key.title()} radio** is on: songs keep coming until you `{p}radio off`.")
+        await player.start_or_queue()
+        await player.refresh_card()
+
+    async def play_clip(self, player: Player, track: Track) -> bool:
+        """Start a quiz clip of `track` (a stretch from its middle). False if it couldn't be played."""
+        vc = player.vc
+        if vc is None:
+            return False
+        try:
+            if isinstance(vc, ll.LavalinkVoice):
+                encoded = await self.ll_resolve(track)
+                start = 45.0 if not track.duration or track.duration > 120 else max(0.0, track.duration * 0.3)
+                await vc.play_track(encoded, position_ms=int(start * 1000), volume=player.volume, filters={}, after=None)
+                return True
+            await src.resolve_stream(track)
+            start = 45.0 if not track.duration or track.duration > 120 else max(0.0, track.duration * 0.3)
+            before, options, codec = src.ffmpeg_args(track, position=start, volume=player.volume)
+            await player._wait_for_encryption(vc)
+            if vc.is_playing() or vc.is_paused():
+                vc.stop()
+            vc.play(discord.FFmpegOpusAudio(track.stream, before_options=before, options=f"{options} -t {QUIZ_CLIP + 2}",
+                                            codec=codec))
+            return True
+        except Exception as error:
+            log.info("Quiz clip failed for %s: %s", track.label, error)
+            return False
+
+    async def do_quiz(self, ctx, genre: str | None, rounds: int) -> None:
+        p = self.p(ctx)
+        if not await self.ready_or_explain(ctx):
+            return
+        if getattr(getattr(ctx.author, "voice", None), "channel", None) is None:
+            await self.say(ctx, "Join a voice channel first: the quiz plays the songs there.", ephemeral=True)
+            return
+        player = self.players.get(ctx.guild.id)
+        if player is not None and player.quiz:
+            await self.say(ctx, "A song quiz is already running.", ephemeral=True)
+            return
+        if player is not None and (player.current is not None or player.queue):
+            await self.say(ctx, f"Music is playing. `{p}stop` it first, then start the quiz.", ephemeral=True)
+            return
+        key = lists.resolve_genre(genre) if genre else None
+        if genre and (key is None or key not in lists.GENRES):
+            names = ", ".join(f"`{g}`" for g in lists.GENRES)
+            await self.say(ctx, f"Pick a genre: {names}, or leave it empty for a mix.", ephemeral=True)
+            return
+        rounds = max(1, min(QUIZ_MAX_ROUNDS, rounds))
+        pool = [(a, t) for g, songs in lists.GENRES.items() if key in (None, g) for a, t in songs]
+        random.shuffle(pool)
+        await ctx.defer()
+        player = await self.connect(ctx)
+        if player is None:
+            return
+        player.quiz = True
+        player._cancel_idle()
+        eco = self.bot.get_cog("Economy")
+        paying = eco is not None and eco._open(ctx.guild.id)
+        scores: dict[int, int] = {}
+        intro = note(f"🎧 **Song quiz** · {rounds} round{'s' if rounds != 1 else ''} · "
+                     f"{key.title() if key else 'mixed genres'}\nI play {QUIZ_CLIP} seconds of a song in "
+                     f"{player.vc.channel.mention}. First to type the **song title** here wins the round"
+                     + (f" and {eco.money(QUIZ_PRIZE)}." if paying else "."))
+        await self.say(ctx, embed=intro)
+        channel = ctx.channel
+        played = 0
+        try:
+            while played < rounds and pool:
+                artist, title = pool.pop()
+                track = Track(title=f"{title} — {artist}", query=f"{artist} - {title}", uploader=artist)
+                if not await self.play_clip(player, track):
+                    continue
+                played += 1
+                await channel.send(embed=note(f"🎵 **Round {played}/{rounds}**: name that song! "
+                                              f"*{QUIZ_CLIP + QUIZ_GRACE} seconds.*"))
+                started = time.monotonic()
+
+                def check(message: discord.Message) -> bool:
+                    return (message.channel.id == channel.id and not message.author.bot
+                            and quiz_match(message.content or "", title, artist))
+
+                winner = None
+                try:
+                    hit = await self.bot.wait_for("message", check=check, timeout=QUIZ_CLIP + QUIZ_GRACE)
+                    winner = hit.author
+                except asyncio.TimeoutError:
+                    pass
+                took = time.monotonic() - started
+                vc = player.vc
+                if vc is not None:
+                    vc.stop()
+                answer = link(track)
+                if winner is not None:
+                    scores[winner.id] = scores.get(winner.id, 0) + 1
+                    prize = ""
+                    if paying:
+                        self.bot.storage.econ_touch(ctx.guild.id, winner.id, 0)
+                        self.bot.storage.econ_adjust(ctx.guild.id, winner.id, cash=QUIZ_PRIZE)
+                        prize = f" +{eco.money(QUIZ_PRIZE)}"
+                    text = f"✅ {winner.mention} got it in {took:.1f}s!{prize}\nIt was {answer}."
+                    colour = OK
+                else:
+                    text, colour = f"⏱️ Nobody got it. It was {answer}.", WARN
+                await channel.send(embed=note(text, colour), allowed_mentions=discord.AllowedMentions.none())
+                await asyncio.sleep(2)
+        finally:
+            player.quiz = False
+            vc = player.vc
+            if vc is not None and (vc.is_playing() or vc.is_paused()):
+                vc.stop()
+        if scores:
+            board = sorted(scores.items(), key=lambda kv: -kv[1])
+            medals = ["🥇", "🥈", "🥉"]
+            lines = [f"{medals[i] if i < 3 else f'`{i + 1}.`'} <@{uid}> · **{pts}**" for i, (uid, pts) in enumerate(board)]
+            final = note("🏁 **Quiz over!**\n" + "\n".join(lines))
+        else:
+            final = note("🏁 **Quiz over!** Nobody scored. Tough crowd.", WARN)
+        await channel.send(embed=final, allowed_mentions=discord.AllowedMentions.none())
+        if player.queue:
+            await player.start_or_queue()
+        else:
+            player._arm_idle()
+
+    async def do_top(self, ctx, what: str = "songs", period: str = "week") -> None:
+        days = {"week": 7, "month": 30, "day": 1, "today": 1, "all": 36500, "ever": 36500}.get(period.lower(), 7)
+        since = time.time() - days * 86400
+        label = {1: "today", 7: "this week", 30: "this month"}.get(days, "of all time")
+        if what.lower().startswith("dj"):
+            rows = await asyncio.to_thread(self.bot.storage.top_djs, ctx.guild.id, since, 10)
+            if not rows:
+                await self.say(ctx, f"No DJs {label} yet. Queue something with `{self.p(ctx)}play`.")
+                return
+            medals = ["🥇", "🥈", "🥉"]
+            lines = [f"{medals[i] if i < 3 else f'`{i + 1}.`'} <@{uid}> · **{n}** song{'s' if n != 1 else ''}"
+                     for i, (uid, n) in enumerate(rows)]
+            card = discord.Embed(title=f"🎧 Biggest DJs {label}", description="\n".join(lines), colour=BRAND)
+        else:
+            rows = await asyncio.to_thread(self.bot.storage.top_songs, ctx.guild.id, since, 10)
+            if not rows:
+                await self.say(ctx, f"Nothing played {label} yet. Start with `{self.p(ctx)}play`.")
+                return
+            lines = []
+            for i, (title, url, n) in enumerate(rows, 1):
+                track = Track(title=title, url=url or "")
+                lines.append(f"`{i:>2}.` {link(track, 70)} · **{n}** play{'s' if n != 1 else ''}")
+            card = discord.Embed(title=f"🏆 Most played {label}", description="\n".join(lines), colour=BRAND)
+        card.set_footer(text=f"{self.p(ctx)}topsongs [songs|djs] [day|week|month|all]")
+        await self.say(ctx, embed=card)
+
+    @commands.command(name="radio", aliases=["station"], help="Endless music by genre: radio drill, radio lofi, radio off")
+    @commands.guild_only()
+    async def radio_cmd(self, ctx: commands.Context, *, genre: str | None = None) -> None:
+        await self.do_radio(ctx, genre)
+
+    @commands.command(name="songquiz", aliases=["musicquiz", "sq", "namethatsong"],
+                      help="Guess the song from 15 seconds of it: songquiz [genre] [rounds]")
+    @commands.guild_only()
+    async def songquiz_cmd(self, ctx: commands.Context, *args: str) -> None:
+        genre, rounds = None, QUIZ_ROUNDS
+        for arg in args:
+            if arg.isdigit():
+                rounds = int(arg)
+            else:
+                genre = f"{genre} {arg}".strip() if genre else arg
+        await self.do_quiz(ctx, genre, rounds)
+
+    @commands.command(name="topsongs", aliases=["charts", "topdjs", "musictop"],
+                      help="Most played songs and biggest DJs: topsongs [songs|djs] [day|week|month|all]")
+    @commands.guild_only()
+    async def topsongs_cmd(self, ctx: commands.Context, what: str = "songs", period: str = "week") -> None:
+        if ctx.invoked_with and ctx.invoked_with.lower() == "topdjs":
+            what, period = "djs", (what if what != "songs" else period)
+        if what.lower() in ("day", "today", "week", "month", "all", "ever"):
+            what, period = "songs", what
+        await self.do_top(ctx, what, period)
+
     # Top-level commands
 
     @commands.hybrid_command(name="play", aliases=["pl", "sing"], description="Play a song or playlist in your voice channel")
@@ -1513,7 +1821,7 @@ class Music(commands.Cog):
     async def clear_cmd(self, ctx: commands.Context) -> None:
         await self.do_clear(ctx)
 
-    @commands.command(name="autoplay", aliases=["ap", "radio"], help="Keep playing similar songs when the queue ends")
+    @commands.command(name="autoplay", aliases=["ap"], help="Keep playing similar songs when the queue ends")
     @commands.guild_only()
     async def autoplay_cmd(self, ctx: commands.Context, enabled: Optional[bool] = None) -> None:
         await self.do_autoplay(ctx, enabled)
@@ -1646,6 +1954,30 @@ class Music(commands.Cog):
         report = player.voice_report() if player else "no player"
         missing = missing_parts()
         await self.say(ctx, f"```\n{report}\nmissing: {missing or 'nothing'}\nffmpeg: {shutil.which('ffmpeg')}\n```")
+
+    @music.command(name="radio", description="Endless music by genre (or 'off')")
+    @app_commands.describe(genre="drill, deutschrap, rap, pop, rnb, throwback, rock, afro, edm, lofi, phonk, chill, off")
+    async def m_radio(self, ctx: commands.Context, genre: str) -> None:
+        await self.do_radio(ctx, genre)
+
+    @m_radio.autocomplete("genre")
+    async def _radio_genres(self, interaction: discord.Interaction, current: str):
+        return [app_commands.Choice(name=g, value=g) for g in [*lists.all_genres(), "off"]
+                if current.lower() in g][:25]
+
+    @music.command(name="quiz", description="Guess the song from 15 seconds of it, for Strip cash")
+    @app_commands.describe(genre="A genre, or leave empty for a mix", rounds="How many songs (1-15)")
+    @app_commands.choices(genre=[app_commands.Choice(name=g, value=g) for g in lists.GENRES])
+    async def m_quiz(self, ctx: commands.Context, genre: str | None = None,
+                     rounds: app_commands.Range[int, 1, 15] = QUIZ_ROUNDS) -> None:
+        await self.do_quiz(ctx, genre, rounds)
+
+    @music.command(name="top", description="Most played songs or biggest DJs")
+    @app_commands.choices(what=[app_commands.Choice(name="songs", value="songs"),
+                                app_commands.Choice(name="djs", value="djs")],
+                          period=[app_commands.Choice(name=p, value=p) for p in ("day", "week", "month", "all")])
+    async def m_top(self, ctx: commands.Context, what: str = "songs", period: str = "week") -> None:
+        await self.do_top(ctx, what, period)
 
     @music.command(name="dj", description="Only this role (and Manage Channels) controls the music. Empty: everyone")
     @app_commands.describe(role="The DJ role, or leave empty to let everyone in voice control it")

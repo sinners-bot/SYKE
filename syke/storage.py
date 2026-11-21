@@ -26,6 +26,10 @@ WALLET_EXTRA_COLUMNS = (
     ("crime_at", "REAL NOT NULL DEFAULT 0"),
     ("heist_at", "REAL NOT NULL DEFAULT 0"),
     ("jail_until", "REAL NOT NULL DEFAULT 0"),
+    ("week_at", "REAL NOT NULL DEFAULT 0"),
+    ("week_streak", "INTEGER NOT NULL DEFAULT 0"),
+    ("job_at", "REAL NOT NULL DEFAULT 0"),
+    ("job_shifts", "INTEGER NOT NULL DEFAULT 0"),
 )
 # (message_id, channel_id, author_id, content[, created_at, author_name, laugh_reactions, total_reactions])
 CorpusRow = tuple
@@ -162,6 +166,14 @@ CREATE TABLE IF NOT EXISTS effects (
     created_at   REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (guild_id, user_id)
 );
+CREATE TABLE IF NOT EXISTS music_plays (
+    guild_id   INTEGER NOT NULL,
+    played_at  REAL NOT NULL,
+    title      TEXT NOT NULL,
+    url        TEXT NOT NULL DEFAULT '',
+    requester  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS music_plays_time ON music_plays (guild_id, played_at);
 CREATE TABLE IF NOT EXISTS econ_wallets (
     guild_id  INTEGER NOT NULL,
     user_id   INTEGER NOT NULL,
@@ -402,6 +414,62 @@ class Storage:
         return self._read(
             "SELECT author_id, content FROM corpus WHERE guild_id = ? AND author_id = ?", (guild_id, author_id)
         )
+
+    def author_rows(self, guild_id: int, author_id: int, since: float) -> list[tuple]:
+        """(message_id, channel_id, content, created_at, laugh_reactions, total_reactions) for one member."""
+        return self._read(
+            "SELECT message_id, channel_id, content, created_at, laugh_reactions, total_reactions FROM corpus "
+            "WHERE guild_id = ? AND author_id = ? AND created_at IS NOT NULL AND created_at >= ?",
+            (guild_id, author_id, since),
+        )
+
+    def channel_activity(self, guild_id: int, channel_ids: list[int], since: float, limit: int = 250_000) -> list[tuple]:
+        """(channel_id, author_id, author_name, created_at) in these channels, oldest first."""
+        if not channel_ids:
+            return []
+        marks = ", ".join("?" for _ in channel_ids)
+        return self._read(
+            "SELECT channel_id, author_id, author_name, created_at FROM corpus WHERE guild_id = ? "
+            f"AND created_at IS NOT NULL AND created_at >= ? AND channel_id IN ({marks}) "
+            "ORDER BY created_at LIMIT ?",
+            (guild_id, since, *channel_ids, limit),
+        )
+
+    def author_counts(self, guild_id: int, since: float) -> list[tuple[int, int]]:
+        """(author_id, messages) since a time, busiest first."""
+        return self._read(
+            "SELECT author_id, COUNT(*) AS n FROM corpus WHERE guild_id = ? AND created_at >= ? "
+            "GROUP BY author_id ORDER BY n DESC", (guild_id, since),
+        )
+
+    def mentions_since(self, guild_id: int, user_id: int, since: float, limit: int = 20) -> list[tuple]:
+        """(message_id, channel_id, author_id, author_name, content, created_at) mentioning someone."""
+        return self._read(
+            "SELECT message_id, channel_id, author_id, author_name, content, created_at FROM corpus "
+            "WHERE guild_id = ? AND created_at >= ? AND author_id != ? AND (content LIKE ? OR content LIKE ?) "
+            "ORDER BY created_at DESC LIMIT ?",
+            (guild_id, since, user_id, f"%<@{user_id}>%", f"%<@!{user_id}>%", limit),
+        )
+
+    def record_play(self, guild_id: int, title: str, url: str, requester: int) -> None:
+        self._write("INSERT INTO music_plays VALUES (?, ?, ?, ?, ?)", (guild_id, time.time(), title[:200], url or "",
+                                                                        requester or 0))
+
+    def top_songs(self, guild_id: int, since: float, limit: int = 10) -> list[tuple[str, str, int]]:
+        """(title, url, plays) since a time, most played first."""
+        return self._read(
+            "SELECT title, MAX(url), COUNT(*) AS n FROM music_plays WHERE guild_id = ? AND played_at >= ? "
+            "GROUP BY lower(title) ORDER BY n DESC, MAX(played_at) DESC LIMIT ?", (guild_id, since, limit))
+
+    def top_djs(self, guild_id: int, since: float, limit: int = 10) -> list[tuple[int, int]]:
+        """(requester, songs queued that played) since a time."""
+        return self._read(
+            "SELECT requester, COUNT(*) AS n FROM music_plays WHERE guild_id = ? AND played_at >= ? AND requester != 0 "
+            "GROUP BY requester ORDER BY n DESC LIMIT ?", (guild_id, since, limit))
+
+    def recent_plays(self, guild_id: int, limit: int = 30) -> list[tuple[str, str]]:
+        return self._read("SELECT title, url FROM music_plays WHERE guild_id = ? ORDER BY played_at DESC LIMIT ?",
+                          (guild_id, limit))
 
     def corpus_contents(self, guild_id: int, limit: int) -> list[str]:
         """Newest stored messages, for building the server's vocabulary and Markov voice."""
@@ -799,8 +867,9 @@ class Storage:
     # Economy — THE STRIP
 
     _WALLET_COLS = ("cash", "chips", "bank", "streak", "daily_at", "work_at", "hustle_at", "seen",
-                    "rob_at", "crime_at", "heist_at", "jail_until")
-    _WALLET_TIMES = {"streak", "daily_at", "work_at", "hustle_at", "rob_at", "crime_at", "heist_at", "jail_until"}
+                    "rob_at", "crime_at", "heist_at", "jail_until", "week_at", "week_streak", "job_at", "job_shifts")
+    _WALLET_TIMES = {"streak", "daily_at", "work_at", "hustle_at", "rob_at", "crime_at", "heist_at", "jail_until",
+                     "week_at", "week_streak", "job_at", "job_shifts"}
 
     def _wallet_row(self, conn, guild_id: int, user_id: int) -> dict:
         row = conn.execute(
@@ -809,7 +878,7 @@ class Storage:
         ).fetchone()
         if row is None:
             blank = {c: 0.0 for c in self._WALLET_COLS}
-            blank.update(cash=0, chips=0, bank=0, streak=0, seen=0)
+            blank.update(cash=0, chips=0, bank=0, streak=0, seen=0, week_streak=0, job_shifts=0)
             return blank
         return dict(zip(self._WALLET_COLS, row))
 

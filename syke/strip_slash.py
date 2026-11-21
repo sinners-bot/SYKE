@@ -132,6 +132,43 @@ class StripSlash(commands.Cog, name="StripSlash"):
     async def s_cashup(self, interaction: discord.Interaction) -> None:
         await self.run(interaction, "StripWorld", "cashup")
 
+    @strip.command(name="weekly", description="Claim your weekly cash (claim every week for more)")
+    async def s_weekly(self, interaction: discord.Interaction) -> None:
+        await self.run(interaction, "StripExtras", "weekly")
+
+    @strip.command(name="jobs", description="See the Strip's jobs, or switch to one you've unlocked")
+    @app_commands.describe(job="The job to switch to (leave empty to see them all)")
+    @app_commands.choices(job=[app_commands.Choice(name=n, value=n) for n in
+                               ("valet", "bartender", "dealer", "bouncer", "dj")])
+    async def s_jobs(self, interaction: discord.Interaction, job: str = "") -> None:
+        await self.run(interaction, "StripExtras", "jobs", job=job)
+
+    @strip.command(name="job", description="Work a shift at your job: a quick mini-game for cash")
+    async def s_job(self, interaction: discord.Interaction) -> None:
+        await self.run(interaction, "StripExtras", "job")
+
+    @strip.command(name="stocks", description="The Strip Stock Exchange: prices move with the server's activity")
+    @app_commands.describe(action="See the market, buy, sell, or your portfolio", ticker="SYKE, LOL, VOX, CHIP, NITE, DRMA",
+                           amount="Shares (a number, or all/half)", member="Whose portfolio")
+    @app_commands.choices(action=[app_commands.Choice(name=n, value=n) for n in ("market", "buy", "sell", "portfolio")],
+                          ticker=[app_commands.Choice(name=t, value=t) for t in
+                                  ("SYKE", "LOL", "VOX", "CHIP", "NITE", "DRMA")])
+    async def s_stocks(self, interaction: discord.Interaction, action: str = "market", ticker: str = "",
+                       amount: str = "", member: discord.Member | None = None) -> None:
+        cog = self.bot.get_cog("StripExtras")
+        ctx = await commands.Context.from_interaction(interaction)
+        if action in ("buy", "sell") and not ticker:
+            await interaction.response.send_message("Pick a ticker to trade.", ephemeral=True)
+            return
+        if action == "buy":
+            await cog.trade(ctx, ticker, amount or "1", buying=True)
+        elif action == "sell":
+            await cog.trade(ctx, ticker, amount or "all", buying=False)
+        elif action == "portfolio":
+            await cog.stocks_portfolio.callback(cog, ctx, member)
+        else:
+            await cog.stocks.callback(cog, ctx)
+
     # ── /casino ──
     @casino.command(name="blackjack", description="Real Vegas Strip blackjack — 3:2, dealer stands on 17")
     @app_commands.describe(bet="Chips to bet (a number, or all/half)")

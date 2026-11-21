@@ -38,7 +38,9 @@ async def world(tmp_path, owners=frozenset({1})):
     await bot.add_cog(eco)
     await bot.add_cog(strip)
     from syke.strip_feed import StripFeed
+    from syke.strip_extras import StripExtras
     await bot.add_cog(StripFeed(bot))
+    await bot.add_cog(StripExtras(bot))
     bot.storage.update_config(GID, econ.CONFIG_KEY, open=True)
     return eco, strip, bot.storage
 

@@ -466,8 +466,15 @@ class Economy(commands.Cog, name="Economy"):
         self.bot.storage.econ_adjust(ctx.guild.id, ctx.author.id, cash=amount,
                                      daily_at=now, streak=streak)
         body = f"You picked up {self.money(amount)}."
-        if streak > 1:
+        lost = int(w["streak"]) if streak == 1 and w["daily_at"] else 0
+        if lost >= 2:
+            missed = daily_reward(min(lost + 1, DAILY_STREAK_CAP + 1)) - daily_reward(1)
+            body += (f"\n💔 **You lost your {lost}-day streak.** That's {self.money(missed)} less than you'd have "
+                     f"got today. Back to day 1.")
+        elif streak > 1:
             body += f"\n🔥 **{streak}-day streak** — keep it going for bigger payouts."
+        ready = int(now + DAILY_COOLDOWN)
+        body += f"\nNext daily <t:{ready}:R> · claim within 2 days or the streak resets."
         await ctx.reply(embed=embed(f"{self.e('cash')} Daily collected", body, OK))
 
     # -- work --

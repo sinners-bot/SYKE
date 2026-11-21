@@ -51,6 +51,8 @@ from .starboard import Starboard
 from .notices import Notices
 from .rolemenus import RoleMenus
 from .music import Music
+from .social import Social
+from .strip_extras import StripExtras
 from .moderation import Moderation, help_lines as moderation_help, pretty as pretty_permission
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
 from .scanner import Scanner, to_msg
@@ -381,6 +383,8 @@ class Syke(commands.Bot):
         await self.add_cog(Notices(self))
         await self.add_cog(RoleMenus(self))
         await self.add_cog(Music(self))
+        await self.add_cog(Social(self))
+        await self.add_cog(StripExtras(self))
         if self.settings.web_enabled:
             try:
                 from .web import WebDashboard
@@ -1584,11 +1588,17 @@ class SykeCommands(commands.Cog, name="SYKE"):
         )
 
     @commands.hybrid_command(name="top", aliases=["leaderboard", "lb"], description="Server leaderboard for a trait")
-    @app_commands.describe(trait="funny, toxic, cringe, freaky, serious, chaotic, active, iq or aura")
+    @app_commands.describe(trait="funny, toxic, cringe, freaky, serious, chaotic, active, iq, aura, songs or djs",
+                           period="For songs and djs: day, week, month or all")
     @commands.cooldown(1, 15, commands.BucketType.member)
     @public()
-    async def top(self, ctx: commands.Context, trait: str = "funny") -> None:
+    async def top(self, ctx: commands.Context, trait: str = "funny", period: str = "week") -> None:
         assert ctx.guild is not None
+        if trait.lower().strip() in ("songs", "song", "music", "tracks", "djs", "dj"):  # $top songs / $top djs
+            music = self.bot.get_cog("Music")
+            if music is not None:
+                await music.do_top(ctx, "djs" if trait.lower().startswith("dj") else "songs", period)
+                return
         key = TRAIT_ALIASES.get(trait.lower().strip())
         if key is None:
             options = ", ".join(f"`{t}`" for t in [*TRAITS, "active", "iq", "aura"])

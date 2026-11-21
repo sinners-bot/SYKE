@@ -98,6 +98,21 @@ land in the game. Needs `SYKE_STRIP_GAME_URL` (see **Configuration**). Also `/lo
 | `!announce` | Manage Server | **Scheduled announcements.** `!announce add #channel <when> \| <message>`. When: `in 2h`, `18:00`, `tomorrow 6pm`, `fri 20:00`, `24.12 18:00`; add `hourly`, `daily`, `weekly` or `monthly` to repeat. `/announce add` opens a form for multi-line messages. Server timezone. `!announce` lists, `cancel <n>`, `test <n>` |
 | `!rolemenu` | Manage Roles | **Self-roles.** `!rolemenu create "Pick your games" [buttons\|dropdown\|reactions] [exclusive]`, then `!rolemenu add <n> @role 🎮 [label]`. Exclusive menus allow one role at a time. `!rolemenu colors` makes 11 colour roles and a pick-one colour menu in one go. Only roles below SYKE and below you, never roles with moderator permissions. Also `remove`, `edit`, `delete`. Buttons keep working after restarts |
 
+### Social
+
+| Command | What it does |
+| --- | --- |
+| `!afk [reason]` | Anyone who pings you hears you're away (your name gets `[AFK]` if SYKE can change it). Your next message brings you back, with a list of who pinged you |
+| `!birthday set 24.12` | SYKE wishes you in the birthday channel on the day, gives the birthday role for 24 hours and a cash gift when the Strip is open. `birthday list/remove/@user`; admins `birthday channel/role/off` |
+| `!wrapped [@user]` | Your year on the server as a Wrapped card (messages, words, busiest hour, top words, favourite emoji, who you talk to most, rank). Also `/recap wrapped` |
+| `!vibe` | Scores the last 100 messages here: hype, chaos, wholesome, toxic, drama, brainrot. Also `/recap vibe` |
+| `!catchup` | What happened here since you last talked, plus who mentioned you. Also `/recap catchup` |
+
+The Strip also has `!weekly` (a growing weekly payout), `!jobs` / `!job` (shifts are quick mini-games; better jobs
+unlock as you work) and `!stocks` (six tickers that move every 15 minutes with the server's chat, laughs, voice,
+casino action, late nights and deleted messages). Music has `!radio <genre>`, `!songquiz [genre] [rounds]` and
+`!topsongs` (also `!top songs`, `!top djs`).
+
 ### Music
 
 `!play <song or link>` joins your voice channel. Plays YouTube, YouTube Music, Spotify (songs, albums,

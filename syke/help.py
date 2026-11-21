@@ -193,13 +193,23 @@ CATALOG: list[Category] = [
     Category(
         "economy", "💸", "The Strip", EVERYONE,
         "A neon Vegas economy: earn, shop, scheme and own a storefront.",
-        ["daily", "work", "hustle", "pay", "balance", "deposit", "withdraw", "rich",
+        ["daily", "weekly", "work", "jobs", "job", "hustle", "stocks", "pay", "balance", "deposit", "withdraw", "rich",
          "shop", "buy", "use", "inventory", "pawn", "rob", "crime", "heist", "jail", "bail",
          "property", "cashup", "thestrip", "stripfeed", "economy", "house"],
         {
             "balance": "Your Players Club card — cash, chips, bank, net worth and tier (Bronze up to Black). "
                        "@mention someone to see theirs.",
-            "daily": "Claim your daily cash — claim on consecutive days to build a streak for bigger payouts.",
+            "daily": "Claim your daily cash — claim on consecutive days to build a streak for bigger payouts. Miss two "
+                     "days and the streak is gone (SYKE tells you how much it cost you).",
+            "weekly": "A big weekly payout. Claim every week and it grows by 500 a week (up to 8 weeks); skip a week "
+                      "and you're back to week 1.",
+            "jobs": "The Strip's jobs: valet and bartender to start, card dealer after 10 shifts, bouncer after 25, "
+                    "DJ after 45. `jobs dealer` switches job.",
+            "job": "Work a shift at your job: a quick mini-game (find the car key, know the cocktail, count the hand, "
+                   "spot the fake ID, read the crowd). Right and fast pays most. Every 45 minutes.",
+            "stocks": "The Strip Stock Exchange: SYKE, LOL, VOX, CHIP, NITE and DRMA move every 15 minutes with what "
+                      "happens in the server (chat, laughs, voice, casino, late nights, deleted messages). "
+                      "`stocks buy LOL 10`, `stocks sell LOL all`, `stocks portfolio`.",
             "work": "Clock a themed shift on the Strip for cash. Hourly cooldown. Food and a fresh set of nails "
                     "boost your pay.",
             "hustle": "A risky earn: usually pays, sometimes flops, occasionally backfires.",
@@ -234,7 +244,8 @@ CATALOG: list[Category] = [
                      "`open`/`close`/`wipe` servers, `ban` (86) players, `jail`/`free`, `happyhour <x> [hours]` "
                      "and `maintenance on/off` for the casino.",
         },
-        sections=[("Earn", ["daily", "work", "hustle", "pay"]),
+        sections=[("Earn", ["daily", "weekly", "work", "jobs", "job", "hustle", "pay"]),
+                  ("Invest", ["stocks"]),
                   ("Wallet", ["balance", "deposit", "withdraw", "rich"]),
                   ("Shops", ["shop", "buy", "use", "inventory", "pawn"]),
                   ("Crime", ["rob", "crime", "heist", "jail", "bail"]),
@@ -293,7 +304,8 @@ CATALOG: list[Category] = [
         "music", "🎵", "Music", EVERYONE,
         "Play songs in voice from YouTube, Spotify, SoundCloud, Apple Music, Deezer and more.",
         ["play", "playnext", "skip", "queue", "nowplaying", "pause", "resume", "stop", "leave", "join", "volume",
-         "loop", "shuffle", "remove", "move", "seek", "clearqueue", "autoplay", "247", "fx", "search", "music"],
+         "loop", "shuffle", "remove", "move", "seek", "clearqueue", "autoplay", "247", "fx", "search", "music",
+         "radio", "songquiz", "topsongs"],
         {
             "play": "`play <song name or link>`: YouTube, YouTube Music, Spotify (songs, albums, playlists), "
                     "SoundCloud, Apple Music, Deezer, Bandcamp, Twitch, Vimeo, TikTok, Mixcloud, radio streams and "
@@ -308,11 +320,39 @@ CATALOG: list[Category] = [
             "music": "The music commands as slash commands (`/music pause`, `/music loop`…), plus "
                      "`music dj @role` to let only a DJ role control playback.",
             "autoplay": "When the queue runs out, keep playing songs like the last one.",
+            "radio": "Endless music by genre: `radio drill`, `radio deutschrap`, `radio rap`, `pop`, `rnb`, "
+                     "`throwback`, `rock`, `afro`, `edm`, `lofi`, `phonk`, `chill`. `radio off` stops it.",
+            "songquiz": "SYKE plays 15 seconds of a song in voice; first to type the title wins the round (and Strip "
+                        "cash when the economy's open). `songquiz drill 10` for 10 drill songs.",
+            "topsongs": "The server's most played songs and biggest DJs: `topsongs`, `topsongs djs month`. "
+                        "Also `top songs` and `top djs`.",
         },
-        sections=[("Play", ["play", "playnext", "search", "queue", "nowplaying"]),
+        sections=[("Play", ["play", "playnext", "search", "queue", "nowplaying", "radio"]),
+                  ("Fun", ["songquiz", "topsongs"]),
                   ("Control", ["skip", "pause", "resume", "stop", "seek", "volume", "loop", "shuffle", "fx"]),
                   ("Queue", ["remove", "move", "clearqueue", "autoplay"]),
                   ("Voice", ["join", "leave", "247", "music"])],
+    ),
+    Category(
+        "social", "💬", "Social", EVERYONE,
+        "AFK, birthdays, your year in review, the channel's vibe and what you missed.",
+        ["afk", "birthday", "wrapped", "vibe", "catchup"],
+        {
+            "afk": "`afk [reason]`: anyone who pings you is told you're away (and your name gets [AFK] if SYKE can "
+                   "change it). Send any message to come back and see who pinged you, with links.",
+            "birthday": "`birthday set 24.12` saves yours. On the day SYKE wishes you in the birthday channel, gives "
+                        "you the birthday role for 24 hours and a cash gift if the Strip is open. "
+                        "`birthday list`, `birthday @user`, `birthday remove`. Admins: `birthday channel #ch`, "
+                        "`birthday role @role`, `birthday off`.",
+            "wrapped": "Your year on the server as a Wrapped card: messages, words, busiest hour, favourite day, top "
+                       "words, favourite emoji, who you talk to most, your rank and your funniest message. "
+                       "`wrapped @user` for someone else. Also `/recap wrapped`.",
+            "vibe": "Reads the last 100 messages here and scores the mood: hype, chaos, wholesome, toxic, drama, "
+                    "brainrot. Also `/recap vibe`.",
+            "catchup": "What happened in this channel since you last talked, plus everyone who mentioned you (here "
+                       "and in other watched channels) with links. Also `/recap catchup`.",
+        },
+        sections=[("Away", ["afk", "catchup"]), ("Celebrate", ["birthday", "wrapped"]), ("Read the room", ["vibe"])],
     ),
     Category(
         "casino", "🎰", "Casino", EVERYONE,
@@ -406,7 +446,11 @@ BRIEF = {
     "channels": "Settings and watched channels", "rescan": "Re-read watched channels",
     "collect": "Read older history", "prefix": "Change the prefix", "timezone": "Server timezone",
     "dashboard": "Every setting, with buttons", "demo": "Add fake test members", "sample": "A demo member's report",
-    "daily": "Daily cash and streak", "work": "Clock a shift", "hustle": "Risky quick cash", "pay": "Send cash",
+    "daily": "Daily cash and streak", "weekly": "Weekly cash and streak", "jobs": "Pick a job",
+    "job": "Work a mini-game shift", "stocks": "Server stock market", "radio": "Endless music by genre",
+    "songquiz": "Name that song", "topsongs": "Most played and top DJs", "afk": "Go away politely",
+    "birthday": "Birthdays", "wrapped": "Your year in review", "vibe": "Channel mood check",
+    "catchup": "What you missed", "work": "Clock a shift", "hustle": "Risky quick cash", "pay": "Send cash",
     "balance": "Players Club card", "deposit": "Bank it (robber-proof)", "withdraw": "Take cash out",
     "rich": "Richest on the Strip",
     "shop": "Browse the storefronts", "buy": "Buy an item", "use": "Use an item", "inventory": "Items and buffs",
