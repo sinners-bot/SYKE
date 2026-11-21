@@ -68,7 +68,40 @@ def progress_bar(position: float, total: float | None, width: int = 16) -> str:
     if not total:
         return "🔴 LIVE"
     done = max(0, min(width, int(width * position / total)))
-    return "▬" * done + "🔘" + "▬" * (width - done)
+    return "━" * done + "●" + "─" * (width - done)
+
+
+SOURCES = {
+    "youtube": ("YouTube", "#FF0033", "▶️"),
+    "soundcloud": ("SoundCloud", "#FF5500", "☁️"),
+    "spotify": ("Spotify", "#1DB954", "🟢"),
+    "apple music": ("Apple Music", "#FA2D48", "🍎"),
+    "deezer": ("Deezer", "#A238FF", "🎧"),
+    "bandcamp": ("Bandcamp", "#1DA0C3", "💿"),
+    "twitch": ("Twitch", "#9146FF", "📺"),
+    "vimeo": ("Vimeo", "#1AB7EA", "🎬"),
+    "mixcloud": ("Mixcloud", "#5000FF", "🎚️"),
+}
+
+
+def style(track: Track) -> tuple[str, discord.Colour, str]:
+    """(service name, colour, icon). Spotify/Apple/Deezer songs keep their own look."""
+    key = (track.source or "").lower()
+    for name, (label, colour, icon) in SOURCES.items():
+        if key.startswith(name.replace(" ", "")) or key.startswith(name):
+            return label, discord.Colour.from_str(colour), icon
+    return (track.source or "Web"), BRAND, "🎵"
+
+
+def link(track: Track, limit: int = 80) -> str:
+    """The song's title as a clickable link (markdown-safe)."""
+    title = discord.utils.escape_markdown(track.label[:limit]).replace("[", "(").replace("]", ")")
+    url = track.url if track.url.startswith("http") else track.origin
+    return f"[{title}]({url})" if url.startswith("http") else f"**{title}**"
+
+
+def note(text: str, colour: discord.Colour = BRAND) -> discord.Embed:
+    return discord.Embed(description=text, colour=colour)
 
 
 def humans_in(channel) -> int:
@@ -353,31 +386,39 @@ class Player:
     def now_card(self) -> discord.Embed:
         track = self.current
         if track is None:
-            return embed("Nothing playing", "Queue something with `play`.")
-        link = f"[{track.label[:200]}]({track.url})" if track.url.startswith("http") else track.label[:200]
-        card = discord.Embed(title="Now playing", description=f"**{link}**", colour=BRAND)
-        if track.uploader:
-            card.description += f"\nby {track.uploader[:100]}"
+            return note("Nothing's playing. Queue something with `play`.")
+        service, colour, icon = style(track)
+        card = discord.Embed(title=track.label[:250], url=track.url if track.url.startswith("http") else None,
+                             colour=colour)
+        requester = self.guild.get_member(track.requester) if track.requester else None
+        card.set_author(name="Now playing" + (" · paused" if self.paused_at is not None else ""),
+                        icon_url=getattr(getattr(requester, "display_avatar", None), "url", None))
         position = self.position()
         total = None if track.is_live else track.duration
-        card.add_field(name="​", value=f"`{duration_text(position)}` {progress_bar(position, total)} "
-                                            f"`{duration_text(total)}`", inline=False)
-        if track.requester:
-            card.add_field(name="Requested by", value=f"<@{track.requester}>")
+        lines = []
+        if track.uploader:
+            lines.append(f"by **{discord.utils.escape_markdown(track.uploader[:80])}**")
+        lines.append(f"\n`{duration_text(position)}` {progress_bar(position, total)} `{duration_text(total)}`")
+        card.description = "\n".join(lines)
+        played_from = f"{icon} [{service}]({track.url})" if track.url.startswith("http") else f"{icon} {service}"
+        if track.origin and service in ("Spotify", "Apple Music", "Deezer"):
+            played_from = f"{icon} [{service}]({track.origin})"
+        card.add_field(name="Source", value=played_from)
+        card.add_field(name="Requested by", value=f"<@{track.requester}>" if track.requester else "Autoplay")
+        card.add_field(name="Volume", value=f"{self.volume}%")
         if self.queue:
-            card.add_field(name="Up next", value=self.queue[0].label[:100])
+            nxt = self.queue[0]
+            card.add_field(name="Up next", value=f"{link(nxt, 60)} · `{duration_text(nxt.duration)}`", inline=False)
         if track.thumbnail:
             card.set_thumbnail(url=track.thumbnail)
-        bits = [f"{LOOP_ICON[self.loop]} loop {self.loop}", f"🔊 {self.volume}%"]
+        bits = [f"{LOOP_ICON[self.loop]} Loop {self.loop}"]
         if self.filter != "off":
             bits.append(f"✨ {self.filter}")
         if self.autoplay:
-            bits.append("♾️ autoplay")
+            bits.append("♾️ Autoplay")
         if self.queue:
-            bits.append(f"{len(self.queue)} queued · {duration_text(self.queue_seconds())}")
-        if track.source:
-            bits.append(track.source.replace("Youtube", "YouTube").replace("Soundcloud", "SoundCloud"))
-        card.set_footer(text=" · ".join(bits))
+            bits.append(f"{len(self.queue)} in queue · {duration_text(self.queue_seconds())}")
+        card.set_footer(text="  •  ".join(bits))
         return card
 
     async def now_playing_card(self) -> None:
@@ -418,6 +459,12 @@ class Controls(discord.ui.View):
             self.pause_button.emoji = "▶️" if paused else "⏸️"
             self.loop_button.emoji = LOOP_ICON[player.loop]
             self.loop_button.style = discord.ButtonStyle.secondary if player.loop == "off" else discord.ButtonStyle.primary
+            track = player.current
+            if track is not None:
+                service, _, _ = style(track)
+                target = track.origin if track.origin and service in ("Spotify", "Apple Music", "Deezer") else track.url
+                if target.startswith("http"):
+                    self.add_item(discord.ui.Button(label=f"Open on {service}"[:80], url=target, row=2))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         problem_text = self.cog.control_problem(interaction.guild, interaction.user)
@@ -445,9 +492,9 @@ class Controls(discord.ui.View):
         if player is None or player.current is None:
             await interaction.response.send_message("Nothing's playing.", ephemeral=True)
             return
-        title = player.current.label
+        title = link(player.current)
         player.skip()
-        await interaction.response.send_message(f"⏭️ {interaction.user.mention} skipped **{title[:100]}**",
+        await interaction.response.send_message(embed=note(f"⏭️ {interaction.user.mention} skipped {title}"),
                                                 allowed_mentions=discord.AllowedMentions.none())
 
     @discord.ui.button(label="Stop", emoji="⏹️", style=discord.ButtonStyle.danger, row=0)
@@ -457,8 +504,8 @@ class Controls(discord.ui.View):
             await interaction.response.send_message("Nothing's playing.", ephemeral=True)
             return
         player.stop()
-        await interaction.response.edit_message(embed=embed("Stopped", f"{interaction.user.mention} stopped the music "
-                                                                       f"and cleared the queue.", WARN), view=None)
+        await interaction.response.edit_message(embed=note(f"⏹️ {interaction.user.mention} stopped the music "
+                                                                f"and cleared the queue.", WARN), view=None)
         player.np = None
         player._arm_idle()
 
@@ -624,7 +671,7 @@ class Music(commands.Cog):
     async def ready_or_explain(self, ctx: commands.Context) -> bool:
         missing = missing_parts()
         if missing:
-            await ctx.reply(embed=problem("Music isn't available yet",
+            await self.say(ctx, embed=problem("Music isn't available yet",
                                           f"The bot's host is missing {', '.join(missing)}. The bot owner needs to "
                                           f"redeploy with the music packages."), ephemeral=True)
             return False
@@ -633,7 +680,7 @@ class Music(commands.Cog):
     async def check_control(self, ctx: commands.Context) -> Player | None:
         text = self.control_problem(ctx.guild, ctx.author)
         if text:
-            await ctx.reply(text, ephemeral=True)
+            await self.say(ctx, text, ephemeral=True)
             return None
         return self.players.get(ctx.guild.id) or self.player(ctx.guild)
 
@@ -780,27 +827,27 @@ class Music(commands.Cog):
     async def connect(self, ctx: commands.Context) -> Player | None:
         voice = getattr(ctx.author, "voice", None)
         if voice is None or voice.channel is None:
-            await ctx.reply("Join a voice channel first.", ephemeral=True)
+            await self.say(ctx, "Join a voice channel first.", ephemeral=True)
             return None
         target = voice.channel
         vc = ctx.guild.voice_client
         player = self.player(ctx.guild)
         if vc is not None and vc.channel != target:
             if humans_in(vc.channel) and (vc.is_playing() or vc.is_paused()):
-                await ctx.reply(f"I'm already playing in {vc.channel.mention}.", ephemeral=True)
+                await self.say(ctx, f"I'm already playing in {vc.channel.mention}.", ephemeral=True)
                 return None
             await vc.move_to(target)
         elif vc is None:
             perms = target.permissions_for(ctx.guild.me)
             if not (perms.connect and perms.speak):
-                await ctx.reply(embed=problem("I can't join", f"Give SYKE **Connect** and **Speak** in {target.mention}."),
+                await self.say(ctx, embed=problem("I can't join", f"Give SYKE **Connect** and **Speak** in {target.mention}."),
                                 ephemeral=True)
                 return None
             try:
                 await target.connect(self_deaf=True, timeout=20, reconnect=True)
             except (discord.ClientException, asyncio.TimeoutError, RuntimeError) as error:
                 log.warning("Voice connect failed in %s: %s", ctx.guild.id, error)
-                await ctx.reply(embed=problem("Couldn't join the voice channel", "Discord didn't let me in. Try again in "
+                await self.say(ctx, embed=problem("Couldn't join the voice channel", "Discord didn't let me in. Try again in "
                                                                                  "a moment."), ephemeral=True)
                 return None
             if isinstance(target, discord.StageChannel):
@@ -855,32 +902,43 @@ class Music(commands.Cog):
     # Queueing
 
     async def enqueue(self, ctx: commands.Context, tracks: list[Track], name: str | None, *, front: bool = False,
-                      announce: bool = True) -> None:
+                      announce: bool = True, source_link: str = "") -> None:
         player = await self.connect(ctx)
         if player is None:
             return
         room = QUEUE_MAX - len(player.queue)
         tracks = tracks[:max(0, room)]
         if not tracks:
-            await ctx.reply(f"The queue is full ({QUEUE_MAX} songs).", ephemeral=True)
+            await self.say(ctx, f"The queue is full ({QUEUE_MAX} songs).", ephemeral=True)
             return
+        was_idle = player.current is None
+        wait = (max(0.0, (player.current.duration or 0) - player.position()) if player.current else 0.0)
+        wait += sum(t.duration or 0 for t in (player.queue[:0] if front else player.queue))
         if front:
             player.queue[0:0] = tracks
         else:
             player.queue.extend(tracks)
-        was_idle = player.current is None
+        position = 1 if front else len(player.queue) - len(tracks) + 1
         await player.start_or_queue()
         if not announce:
             return
+        first = tracks[0]
+        _, colour, icon = style(first)
         if name:
-            card = embed("Playlist queued 📜", f"**{len(tracks)}** songs from **{name[:150]}**", OK)
+            title = f"[{discord.utils.escape_markdown(name[:120])}]({source_link})" if source_link.startswith("http") \
+                else f"**{discord.utils.escape_markdown(name[:120])}**"
+            total = sum(t.duration or 0 for t in tracks)
+            card = note(f"📜 Queued **{len(tracks)}** songs from {title}" +
+                        (f" · `{duration_text(total)}`" if total else ""), colour)
         elif was_idle:
-            card = embed("Playing ▶️", f"**{tracks[0].label[:200]}**", OK)
+            if ctx.interaction is None:
+                return  # the now-playing card is the answer
+            card = note(f"{icon} Starting {link(first)}", colour)
         else:
-            where = 1 if front else len(player.queue)
-            card = embed("Queued", f"**{tracks[0].label[:200]}** · #{where} in the queue · "
-                                   f"{duration_text(tracks[0].duration)}", OK)
-        await ctx.reply(embed=card, mention_author=False)
+            card = note(f"{icon} Added {link(first)} · `{duration_text(first.duration)}`", colour)
+            card.set_footer(text=f"#{position} in the queue" + (f"  •  plays in about {duration_text(wait)}"
+                                                                 if wait else ""))
+        await self.say(ctx, embed=card)
         if not was_idle:
             await player.refresh_card()
 
@@ -888,35 +946,59 @@ class Music(commands.Cog):
         if not await self.ready_or_explain(ctx):
             return
         if getattr(getattr(ctx.author, "voice", None), "channel", None) is None:
-            await ctx.reply("Join a voice channel first.", ephemeral=True)
+            await self.say(ctx, "Join a voice channel first.", ephemeral=True)
             return
         vc = ctx.guild.voice_client
         if front and vc is not None and self.control_problem(ctx.guild, ctx.author):
-            await ctx.reply(self.control_problem(ctx.guild, ctx.author), ephemeral=True)
+            await self.say(ctx, self.control_problem(ctx.guild, ctx.author), ephemeral=True)
             return
         await ctx.defer()
-        try:
-            tracks, name = await self.lookup(query, ctx.author.id)
-        except LookupError as error:
-            await ctx.reply(embed=problem("Couldn't play that", str(error)), ephemeral=True)
-            return
-        await self.enqueue(ctx, tracks, name, front=front)
+        typing = ctx.typing() if ctx.interaction is None else contextlib.nullcontext()
+        async with typing:  # "SYKE is typing…" until the song starts or is queued
+            try:
+                tracks, name = await self.lookup(query, ctx.author.id)
+            except LookupError as error:
+                await self.say(ctx, embed=problem("Couldn't play that", str(error)), ephemeral=True)
+                return
+            player = self.players.get(ctx.guild.id)
+            if player is None or player.current is None:  # fetch the first song while joining voice
+                prep = asyncio.create_task(src.resolve_stream(tracks[0]))
+                prep.add_done_callback(lambda t: t.cancelled() or t.exception())
+            await self.enqueue(ctx, tracks, name, front=front, source_link=query.strip("<> ") if name else "")
 
     def queue_card(self, player: Player | None, page: int) -> discord.Embed:
         if player is None or (player.current is None and not player.queue):
-            return embed("📜 Queue is empty", "Add songs with `play`.")
+            return note("📜 The queue is empty. Add songs with `play`.")
         lines = []
+        colour = BRAND
         if player.current is not None:
-            lines.append(f"**Now:** {player.current.label[:90]} `{duration_text(player.position())}/"
-                         f"{duration_text(player.current.duration)}`\n")
+            _, colour, icon = style(player.current)
+            lines.append(f"**Now playing**\n{icon} {link(player.current)} · "
+                         f"`{duration_text(player.position())} / {duration_text(player.current.duration)}`")
         start = page * PAGE
-        for i, track in enumerate(player.queue[start:start + PAGE], start=start + 1):
-            lines.append(f"`{i}.` {track.label[:80]} `{duration_text(track.duration)}`")
+        upcoming = player.queue[start:start + PAGE]
+        if upcoming:
+            lines.append("\n**Up next**")
+        for i, track in enumerate(upcoming, start=start + 1):
+            who = f" · <@{track.requester}>" if track.requester else ""
+            lines.append(f"`{i:>2}.` {link(track, 60)} · `{duration_text(track.duration)}`{who}")
+        if not player.queue:
+            lines.append("\nNothing after this song.")
         pages = max(1, math.ceil(len(player.queue) / PAGE))
-        card = embed("📜 Queue", "\n".join(lines) or "Nothing after this song.")
-        card.set_footer(text=f"Page {page + 1}/{pages} · {len(player.queue)} songs · "
-                             f"{duration_text(player.queue_seconds())} · loop {player.loop}")
+        card = discord.Embed(title="📜 Queue", description="\n".join(lines), colour=colour)
+        card.set_footer(text=f"Page {page + 1}/{pages}  •  {len(player.queue)} songs  •  "
+                             f"{duration_text(player.queue_seconds())} total  •  loop {player.loop}")
         return card
+
+    async def say(self, ctx, text: str | None = None, *, embed: discord.Embed | None = None, view=None,
+                  ephemeral: bool = False, mention_author: bool = False, colour: discord.Colour | None = None):
+        """Every music reply as a tidy embed: warnings in amber, the rest in SYKE purple."""
+        if embed is None:
+            embed = note(text or "", colour or (WARN if ephemeral else BRAND))
+        kwargs = {"embed": embed, "mention_author": False, "ephemeral": ephemeral}
+        if view is not None:
+            kwargs["view"] = view
+        return await ctx.reply(**kwargs)
 
     # The commands (shared by the top-level prefix commands and the /music group)
 
@@ -925,25 +1007,25 @@ class Music(commands.Cog):
         if player is None:
             return
         if player.current is None:
-            await ctx.reply("Nothing's playing.", ephemeral=True)
+            await self.say(ctx, "Nothing's playing.", ephemeral=True)
             return
-        title = player.current.label
+        title = link(player.current)
         if count > 1:
             del player.queue[:count - 1]
         player.skip()
         extra = f" and {count - 1} more" if count > 1 else ""
-        await ctx.reply(f"⏭️ Skipped **{title[:150]}**{extra}.", mention_author=False)
+        await self.say(ctx, f"⏭️ Skipped {title}{extra}.")
 
     async def do_pause(self, ctx) -> None:
         player = await self.check_control(ctx)
         if player is not None:
-            await ctx.reply("⏸️ Paused." if player.pause() else "Nothing's playing.", mention_author=False)
+            await self.say(ctx, "⏸️ Paused." if player.pause() else "Nothing's playing.", mention_author=False)
             await player.refresh_card()
 
     async def do_resume(self, ctx) -> None:
         player = await self.check_control(ctx)
         if player is not None:
-            await ctx.reply("▶️ Resumed." if player.resume() else "Nothing's paused.", mention_author=False)
+            await self.say(ctx, "▶️ Resumed." if player.resume() else "Nothing's paused.", mention_author=False)
             await player.refresh_card()
 
     async def do_stop(self, ctx) -> None:
@@ -956,16 +1038,16 @@ class Music(commands.Cog):
                 await player.np.edit(view=None)
             player.np = None
         player._arm_idle()
-        await ctx.reply("⏹️ Stopped and cleared the queue.", mention_author=False)
+        await self.say(ctx, "⏹️ Stopped and cleared the queue.", mention_author=False)
 
     async def do_leave(self, ctx) -> None:
         if ctx.guild.voice_client is None:
-            await ctx.reply("I'm not in a voice channel.", ephemeral=True)
+            await self.say(ctx, "I'm not in a voice channel.", ephemeral=True)
             return
         if await self.check_control(ctx) is None:
             return
         await self.leave(ctx.guild)
-        await ctx.reply("👋 Bye.", mention_author=False)
+        await self.say(ctx, "👋 Bye.", mention_author=False)
 
     async def do_join(self, ctx) -> None:
         if not await self.ready_or_explain(ctx):
@@ -973,17 +1055,17 @@ class Music(commands.Cog):
         player = await self.connect(ctx)
         if player is not None:
             player._arm_idle()
-            await ctx.reply(f"Joined {ctx.guild.voice_client.channel.mention}. Queue something with `{self.p(ctx)}play`.",
+            await self.say(ctx, f"Joined {ctx.guild.voice_client.channel.mention}. Queue something with `{self.p(ctx)}play`.",
                             mention_author=False)
 
     async def do_now(self, ctx) -> None:
         player = self.players.get(ctx.guild.id)
         if player is None or player.current is None:
-            await ctx.reply("Nothing's playing.", ephemeral=True)
+            await self.say(ctx, "Nothing's playing.", ephemeral=True)
             return
         player.channel_id = ctx.channel.id
         if ctx.interaction:
-            await ctx.reply("Here it is 👇", ephemeral=True)
+            await self.say(ctx, "Here it is 👇", ephemeral=True)
         await player.now_playing_card()
 
     async def do_queue(self, ctx, page: int = 1) -> None:
@@ -991,12 +1073,12 @@ class Music(commands.Cog):
         pages = max(1, math.ceil(len(player.queue) / PAGE)) if player else 1
         page = max(1, min(page, pages)) - 1
         view = QueueView(self, ctx.guild.id, ctx.author.id, page) if pages > 1 else None
-        await ctx.reply(embed=self.queue_card(player, page), view=view, mention_author=False)
+        await self.say(ctx, embed=self.queue_card(player, page), view=view, mention_author=False)
 
     async def do_volume(self, ctx, level: int | None) -> None:
         player = self.players.get(ctx.guild.id)
         if level is None:
-            await ctx.reply(f"🔊 Volume is **{player.volume if player else self.config(ctx.guild.id).get('volume') or 100}%**.",
+            await self.say(ctx, f"🔊 Volume is **{player.volume if player else self.config(ctx.guild.id).get('volume') or 100}%**.",
                             mention_author=False)
             return
         player = await self.check_control(ctx)
@@ -1005,7 +1087,7 @@ class Music(commands.Cog):
         player.volume = max(0, min(200, level))
         self.bot.storage.update_config(ctx.guild.id, CONFIG, volume=player.volume)
         player.restart()
-        await ctx.reply(f"🔊 Volume set to **{player.volume}%**.", mention_author=False)
+        await self.say(ctx, f"🔊 Volume set to **{player.volume}%**.", mention_author=False)
 
     async def do_loop(self, ctx, mode: str | None) -> None:
         player = await self.check_control(ctx)
@@ -1016,7 +1098,7 @@ class Music(commands.Cog):
         if mode not in LOOPS:
             mode = LOOPS[(LOOPS.index(player.loop) + 1) % len(LOOPS)]
         player.loop = mode
-        await ctx.reply(f"{LOOP_ICON[mode]} Loop: **{mode}**.", mention_author=False)
+        await self.say(ctx, f"{LOOP_ICON[mode]} Loop: **{mode}**.", mention_author=False)
         await player.refresh_card()
 
     async def do_shuffle(self, ctx) -> None:
@@ -1024,10 +1106,10 @@ class Music(commands.Cog):
         if player is None:
             return
         if len(player.queue) < 2:
-            await ctx.reply("Need at least two songs queued to shuffle.", ephemeral=True)
+            await self.say(ctx, "Need at least two songs queued to shuffle.", ephemeral=True)
             return
         random.shuffle(player.queue)
-        await ctx.reply(f"🔀 Shuffled {len(player.queue)} songs.", mention_author=False)
+        await self.say(ctx, f"🔀 Shuffled {len(player.queue)} songs.", mention_author=False)
         await player.refresh_card()
 
     async def do_remove(self, ctx, position: int) -> None:
@@ -1035,10 +1117,10 @@ class Music(commands.Cog):
         if player is None:
             return
         if not 1 <= position <= len(player.queue):
-            await ctx.reply(f"Pick a number from 1 to {len(player.queue)}.", ephemeral=True)
+            await self.say(ctx, f"Pick a number from 1 to {len(player.queue)}.", ephemeral=True)
             return
         track = player.queue.pop(position - 1)
-        await ctx.reply(f"Removed **{track.label[:150]}**.", mention_author=False)
+        await self.say(ctx, f"🗑️ Removed {link(track)}.")
 
     async def do_move(self, ctx, start: int, to: int) -> None:
         player = await self.check_control(ctx)
@@ -1046,47 +1128,47 @@ class Music(commands.Cog):
             return
         size = len(player.queue)
         if not (1 <= start <= size and 1 <= to <= size):
-            await ctx.reply(f"Pick numbers from 1 to {size}.", ephemeral=True)
+            await self.say(ctx, f"Pick numbers from 1 to {size}.", ephemeral=True)
             return
         track = player.queue.pop(start - 1)
         player.queue.insert(to - 1, track)
-        await ctx.reply(f"Moved **{track.label[:150]}** to #{to}.", mention_author=False)
+        await self.say(ctx, f"↕️ Moved {link(track)} to **#{to}**.")
 
     async def do_seek(self, ctx, when: str) -> None:
         player = await self.check_control(ctx)
         if player is None or player.current is None:
             if player is not None:
-                await ctx.reply("Nothing's playing.", ephemeral=True)
+                await self.say(ctx, "Nothing's playing.", ephemeral=True)
             return
         text = when.strip()
         relative = text[:1] in "+-"
         seconds = src.parse_time(text.lstrip("+-"))
         if seconds is None:
-            await ctx.reply("Try `1:30`, `90`, `+15` or `-10`.", ephemeral=True)
+            await self.say(ctx, "Try `1:30`, `90`, `+15` or `-10`.", ephemeral=True)
             return
         if relative:
             seconds = player.position() + (seconds if text[0] == "+" else -seconds)
         if player.current.is_live:
-            await ctx.reply("Can't seek in a live stream.", ephemeral=True)
+            await self.say(ctx, "Can't seek in a live stream.", ephemeral=True)
             return
         total = player.current.duration or 0
         seconds = max(0, min(seconds, max(0, total - 1)))
         player.restart(seconds)
-        await ctx.reply(f"⏩ Jumped to `{duration_text(seconds)}`.", mention_author=False)
+        await self.say(ctx, f"⏩ Jumped to `{duration_text(seconds)}`.", mention_author=False)
 
     async def do_clear(self, ctx) -> None:
         player = await self.check_control(ctx)
         if player is not None:
             count = len(player.queue)
             player.queue.clear()
-            await ctx.reply(f"🧹 Cleared {count} songs from the queue.", mention_author=False)
+            await self.say(ctx, f"🧹 Cleared {count} songs from the queue.", mention_author=False)
 
     async def do_autoplay(self, ctx, enabled: bool | None) -> None:
         player = await self.check_control(ctx)
         if player is None:
             return
         player.autoplay = (not player.autoplay) if enabled is None else enabled
-        await ctx.reply(f"♾️ Autoplay **{'on' if player.autoplay else 'off'}**"
+        await self.say(ctx, f"♾️ Autoplay **{'on' if player.autoplay else 'off'}**"
                         + (": similar songs keep coming when the queue runs out." if player.autoplay else "."),
                         mention_author=False)
         await player.refresh_card()
@@ -1094,7 +1176,7 @@ class Music(commands.Cog):
     async def do_stay(self, ctx, enabled: bool | None) -> None:
         perms = getattr(ctx.author, "guild_permissions", None)
         if not (perms and (perms.manage_guild or perms.manage_channels)):
-            await ctx.reply("You need **Manage Channels** to change 24/7 mode.", ephemeral=True)
+            await self.say(ctx, "You need **Manage Channels** to change 24/7 mode.", ephemeral=True)
             return
         current = bool(self.config(ctx.guild.id).get("stay"))
         value = (not current) if enabled is None else enabled
@@ -1106,20 +1188,20 @@ class Music(commands.Cog):
                 player._cancel_idle()
             elif player.current is None:
                 player._arm_idle()
-        await ctx.reply(f"🌙 24/7 mode **{'on' if value else 'off'}**"
+        await self.say(ctx, f"🌙 24/7 mode **{'on' if value else 'off'}**"
                         + (": I'll stay in voice even when nothing's playing." if value else "."), mention_author=False)
 
     async def do_filter(self, ctx, name: str | None) -> None:
         options = ", ".join(f"`{f}`" for f in FILTERS)
         if not name:
             player = self.players.get(ctx.guild.id)
-            await ctx.reply(f"✨ Effect: **{player.filter if player else 'off'}**. Options: {options}.", mention_author=False)
+            await self.say(ctx, f"✨ Effect: **{player.filter if player else 'off'}**. Options: {options}.", mention_author=False)
             return
         name = name.lower().replace(" ", "").replace("-", "")
         name = {"bass": "bassboost", "boost": "bassboost", "none": "off", "clear": "off", "reset": "off",
                 "8": "8d", "fast": "speed", "slow": "slowed", "slowedreverb": "slowed"}.get(name, name)
         if name not in FILTERS:
-            await ctx.reply(f"Pick one of {options}.", ephemeral=True)
+            await self.say(ctx, f"Pick one of {options}.", ephemeral=True)
             return
         player = await self.check_control(ctx)
         if player is None:
@@ -1128,7 +1210,7 @@ class Music(commands.Cog):
         player.filter = name
         player.base, player.t0 = position, time.monotonic()
         player.restart(position)
-        await ctx.reply(f"✨ Effect: **{name}**.", mention_author=False)
+        await self.say(ctx, f"✨ Effect: **{name}**.", mention_author=False)
 
     async def do_search(self, ctx, query: str) -> None:
         if not await self.ready_or_explain(ctx):
@@ -1137,14 +1219,14 @@ class Music(commands.Cog):
         try:
             info = await src.extract(f"ytsearch5:{query}", flat=True)
         except Exception as error:
-            await ctx.reply(embed=problem("Search failed", src.clean_error(error)), ephemeral=True)
+            await self.say(ctx, embed=problem("Search failed", src.clean_error(error)), ephemeral=True)
             return
         tracks = [src.track_from_info(e, ctx.author.id) for e in (info or {}).get("entries") or [] if e][:5]
         if not tracks:
-            await ctx.reply(f"No results for **{query[:100]}**.", ephemeral=True)
+            await self.say(ctx, f"No results for **{query[:100]}**.", ephemeral=True)
             return
         lines = [f"`{i}.` {t.label[:80]} `{duration_text(t.duration)}`" for i, t in enumerate(tracks, 1)]
-        await ctx.reply(embed=embed(f"🔎 {query[:100]}", "\n".join(lines)), view=SearchPick(self, ctx, tracks))
+        await self.say(ctx, embed=embed(f"🔎 {query[:100]}", "\n".join(lines)), view=SearchPick(self, ctx, tracks))
 
     # Top-level commands
 
@@ -1276,7 +1358,7 @@ class Music(commands.Cog):
                 "Vimeo, TikTok, Mixcloud, radio streams and direct audio links.")
         dj = self.config(ctx.guild.id).get("dj")
         body += f"\n\nOnly <@&{dj}> controls the music here." if dj else ""
-        await ctx.reply(embed=embed("🎵 Music", body), ephemeral=True)
+        await self.say(ctx, embed=embed("🎵 Music", body), ephemeral=True)
 
     @music.command(name="playnext", description="Queue a song to play right after this one")
     @app_commands.describe(query="A song name or link")
@@ -1371,7 +1453,7 @@ class Music(commands.Cog):
         player = self.players.get(ctx.guild.id)
         report = player.voice_report() if player else "no player"
         missing = missing_parts()
-        await ctx.reply(f"```\n{report}\nmissing: {missing or 'nothing'}\nffmpeg: {shutil.which('ffmpeg')}\n```")
+        await self.say(ctx, f"```\n{report}\nmissing: {missing or 'nothing'}\nffmpeg: {shutil.which('ffmpeg')}\n```")
 
     @music.command(name="dj", description="Only this role (and Manage Channels) controls the music. Empty: everyone")
     @app_commands.describe(role="The DJ role, or leave empty to let everyone in voice control it")
@@ -1380,4 +1462,4 @@ class Music(commands.Cog):
         self.bot.storage.update_config(ctx.guild.id, CONFIG, dj=role.id if role else None)
         text = (f"Only {role.mention}, people with Manage Channels, and whoever requested the current song can "
                 f"control the music." if role else "Everyone in the voice channel can control the music.")
-        await ctx.reply(embed=embed("DJ role saved 🎧", text, OK), ephemeral=True)
+        await self.say(ctx, embed=embed("DJ role saved 🎧", text, OK), ephemeral=True)

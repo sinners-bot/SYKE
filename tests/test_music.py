@@ -74,7 +74,7 @@ def test_times():
     assert src.parse_time("1:30") == 90 and src.parse_time("90") == 90 and src.parse_time("1:02:03") == 3723
     assert src.parse_time("1m30s") == 90 and src.parse_time("abc") is None
     assert src.duration_text(65) == "1:05" and src.duration_text(3725) == "1:02:05" and src.duration_text(None) == "LIVE"
-    assert music.progress_bar(50, 100, 10).index("🔘") == 5 and music.progress_bar(0, None) == "🔴 LIVE"
+    assert music.progress_bar(50, 100, 10).index("●") == 5 and music.progress_bar(0, None) == "🔴 LIVE"
 
 
 def test_stream_details_and_errors():
@@ -366,3 +366,24 @@ async def test_youtube_songs_download_and_fall_back_to_soundcloud(monkeypatch, t
     assert spotify.local and calls[-1] == "ytsearch1:Artist - Song"
     blocked = await src.resolve_stream(Track(title="Blocked Song", url="https://www.youtube.com/watch?v=blocked"))
     assert not blocked.local and blocked.stream == "https://sc/stream.mp3" and calls[-1] == "scsearch1:Blocked Song"
+
+
+def test_cards_link_and_colour_by_source(rig):
+    p = rig.player
+    p.guild.get_member = lambda i: None
+    track = Track(title="Blinding Lights — The Weeknd", query="The Weeknd - Blinding Lights", url="https://youtu.be/x",
+                  origin="https://open.spotify.com/track/abc", source="Spotify", duration=200, requester=5)
+    p.current = track
+    p.queue = [Track(title="Next [Remix]", url="https://soundcloud.com/a/b", source="soundcloud", duration=90)]
+    card = p.now_card()
+    assert card.url == "https://youtu.be/x" and card.colour == discord.Colour.from_str("#1DB954")
+    fields = {f.name: f.value for f in card.fields}
+    assert "(https://open.spotify.com/track/abc)" in fields["Source"]
+    assert fields["Up next"].startswith("[Next (Remix)](https://soundcloud.com/a/b)")
+    view = music.Controls(rig.cog, p.guild.id)
+    assert any(getattr(b, "url", None) == "https://open.spotify.com/track/abc" for b in view.children)
+    queue = rig.cog.queue_card(p, 0)
+    assert "[Next (Remix)](https://soundcloud.com/a/b)" in queue.description
+    assert music.style(Track(title="x", source="Youtube"))[0] == "YouTube"
+    assert music.link(Track(title="plain")) == "**plain**"
+    p.current = None

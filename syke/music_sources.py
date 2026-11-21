@@ -62,6 +62,7 @@ class Track:
     is_live: bool = False
     resolved_at: float = 0.0
     local: bool = False           # stream is a downloaded file on disk
+    origin: str = ""              # the Spotify / Apple Music / Deezer link it came from
 
     @property
     def label(self) -> str:
@@ -148,11 +149,11 @@ def spotify_tracks(page: str, kind: str) -> tuple[str, list[Track]]:
     if kind == "track":
         artists = ", ".join(a.get("name", "") for a in entity.get("artists") or []) or entity.get("subtitle", "")
         tracks.append(_named(entity.get("name") or entity.get("title") or "", artists,
-                             (entity.get("duration") or 0) / 1000 or None, "Spotify"))
+                             (entity.get("duration") or 0) / 1000 or None, "Spotify", _spotify_link(entity.get("uri"))))
     else:
         for item in entity.get("trackList") or []:
             tracks.append(_named(item.get("title", ""), item.get("subtitle", ""),
-                                 (item.get("duration") or 0) / 1000 or None, "Spotify"))
+                                 (item.get("duration") or 0) / 1000 or None, "Spotify", _spotify_link(item.get("uri"))))
     image = ""
     for img in ((entity.get("visualIdentity") or {}).get("image") or entity.get("coverArt", {}).get("sources") or []):
         image = img.get("url", "")
@@ -162,11 +163,16 @@ def spotify_tracks(page: str, kind: str) -> tuple[str, list[Track]]:
     return name, [t for t in tracks if t.title][:PLAYLIST_MAX]
 
 
-def _named(title: str, artist: str, duration: float | None, source: str) -> Track:
-    artist = artist.replace(" ", " ").strip()
+def _spotify_link(uri: str | None) -> str:
+    m = re.fullmatch(r"spotify:(track|album|playlist|episode):(\w+)", uri or "")
+    return f"https://open.spotify.com/{m.group(1)}/{m.group(2)}" if m else ""
+
+
+def _named(title: str, artist: str, duration: float | None, source: str, origin: str = "") -> Track:
+    artist = artist.replace("\u00a0", " ").strip()
     query = f"{artist} - {title}" if artist else title
     return Track(title=f"{title} — {artist}" if artist else title, query=query, duration=duration, uploader=artist,
-                 source=source)
+                 source=source, origin=origin or "")
 
 
 def apple_tracks(page: str) -> tuple[str, list[Track]]:
@@ -181,14 +187,15 @@ def apple_tracks(page: str) -> tuple[str, list[Track]]:
         for node in data if isinstance(data, list) else [data]:
             kind = node.get("@type")
             if kind == "MusicRecording":
-                found.append(_named(node.get("name", ""), _artist(node), _iso_seconds(node.get("duration")), "Apple Music"))
+                found.append(_named(node.get("name", ""), _artist(node), _iso_seconds(node.get("duration")), "Apple Music",
+                                    node.get("url", "")))
                 name = name or node.get("name", "")
             elif kind in ("MusicAlbum", "MusicPlaylist"):
                 name = node.get("name", "")
                 for rec in node.get("tracks") or node.get("track") or []:
                     if isinstance(rec, dict):
                         found.append(_named(rec.get("name", ""), _artist(rec) or _artist(node),
-                                            _iso_seconds(rec.get("duration")), "Apple Music"))
+                                            _iso_seconds(rec.get("duration")), "Apple Music", rec.get("url", "")))
     if not found:
         title = _og(page, "og:title")
         if title:
@@ -222,10 +229,10 @@ def _og(page: str, prop: str) -> str:
 def deezer_tracks(data: dict, kind: str) -> tuple[str, list[Track]]:
     if kind == "track":
         return data.get("title", ""), [_named(data.get("title", ""), (data.get("artist") or {}).get("name", ""),
-                                              data.get("duration"), "Deezer")]
+                                              data.get("duration"), "Deezer", data.get("link", ""))]
     items = (data.get("tracks") or {}).get("data") or []
     return data.get("title", ""), [_named(i.get("title", ""), (i.get("artist") or {}).get("name", ""),
-                                          i.get("duration"), "Deezer") for i in items][:PLAYLIST_MAX]
+                                          i.get("duration"), "Deezer", i.get("link", "")) for i in items][:PLAYLIST_MAX]
 
 
 # yt-dlp
@@ -248,7 +255,7 @@ def ydl_options(flat: bool = False) -> dict:
         "no_warnings": True,
         "noplaylist": not flat,
         "skip_download": True,
-        "cachedir": False,
+        "cachedir": os.path.join(tempfile.gettempdir(), "syke-ytdlp-cache"),  # YouTube's player code, solved once
         "socket_timeout": 15,
         "source_address": "0.0.0.0",
         "default_search": "ytsearch",
@@ -373,7 +380,21 @@ def _download(target: str) -> dict:
     return info
 
 
+_resolving: dict[int, asyncio.Lock] = {}
+
+
 async def resolve_stream(track: Track) -> Track:
+    """Make a track playable (one lookup at a time per track, so a prefetch and a play never download twice)."""
+    lock = _resolving.setdefault(id(track), asyncio.Lock())
+    try:
+        async with lock:
+            return await _resolve(track)
+    finally:
+        if not lock.locked():
+            _resolving.pop(id(track), None)
+
+
+async def _resolve(track: Track) -> Track:
     """Make a track playable right before it plays (searching for it if it's just a name).
 
     YouTube songs are downloaded to a temporary file (a few MB, a second or two); anything else, and
@@ -408,6 +429,11 @@ async def resolve_stream(track: Track) -> Track:
             info = await extract(target)
             if info:
                 track.local = False
+                if target.startswith(FALLBACK_PREFIX):  # it's SoundCloud's copy now: link and label that
+                    entry = next((e for e in info.get("entries") or [] if e), info)
+                    track.url = entry.get("webpage_url") or track.url
+                    track.source = "SoundCloud"
+                    track.resolved_at = 0
                 return fill_stream(track, info)
         except Exception as error:  # yt-dlp raises many kinds; try the next source
             last = error
