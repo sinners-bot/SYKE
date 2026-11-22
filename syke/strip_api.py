@@ -37,6 +37,7 @@ from .strip_homes import HomeError, HomeService
 from .strip_life import LifeError, LifeService
 from .strip_phone import PhoneError, PhoneService
 from .strip_kitchen import KitchenError, KitchenService
+from .strip_crime import CrimeError, CrimeService
 
 log = logging.getLogger("syke.strip_api")
 
@@ -294,6 +295,7 @@ class StripAPI:
         self.feed = feed            # () -> the StripFeed cog (highlights posted in servers, the live count)
         self.svc = StripService(storage)
         self.casino = CasinoService(storage, self.svc.guard)
+        self.crime = CrimeService(self.svc)
         self.homes = HomeService(storage, self.svc.guard)
         self.life = LifeService(storage, self.svc.guard)
         self.phone = PhoneService(storage, self.svc.guard)
@@ -341,6 +343,15 @@ class StripAPI:
             "grant": lambda g, u, b: s.grant(g, u, b.get("amount", 0), b.get("reason", "")),
             "goal_reward": lambda g, u, b: s.goal_reward(g, u),
             "bank": lambda g, u, b: s.bank(g, u, b.get("action"), b.get("amount", 0)),
+            # crime (the game decides what happened; these decide what it pays and costs)
+            "crime_job": lambda g, u, b: self.crime.job(g, u, b.get("kind"), b.get("skill", 0), b.get("share", 1), b.get("roll")),
+            "crime_bounty": lambda g, u, b: self.crime.bounty(g, u, b.get("amount", 0)),
+            "crime_rob": lambda g, u, b: self.crime.rob(g, u, _id(b.get("target")) or 0, b.get("skill", 0)),
+            "crime_arrest": lambda g, u, b: self.crime.arrest(g, u, b.get("minutes", 20)),
+            "crime_bail": lambda g, u, b: self.crime.bail(g, u, _id(b.get("target"))),
+            "crime_bail_quote": lambda g, u, b: self.crime.bail_quote(g, u, _id(b.get("target"))),
+            "crime_serve": lambda g, u, b: self.crime.serve(g, u, b.get("minutes", 2)),
+            "crime_illicit": lambda g, u, b: self.crime.illicit(g, u, b.get("amount", 0), b.get("reason", "")),
             # casino (every money move carries a request id `rid` and happens exactly once)
             "casino_exchange": lambda g, u, b: c.exchange(g, u, b.get("action"), b.get("amount"), b.get("rid")),
             "casino_slots": lambda g, u, b: c.slots(g, u, b.get("bet"), b.get("rid"), b.get("machine", ""), b.get("name", ""), b.get("theme", "")),
@@ -428,7 +439,7 @@ class StripAPI:
                 return web.json_response({"ok": False, "error": "bad_ids"}, status=400)
             try:
                 return web.json_response({"ok": True, **table_fn(gid, body)})
-            except (StripError, CasinoError, HomeError, LifeError, PhoneError, KitchenError) as e:
+            except (StripError, CasinoError, HomeError, LifeError, PhoneError, KitchenError, CrimeError) as e:
                 return web.json_response({"ok": False, "error": e.code, "message": e.message, **e.extra})
             except (TypeError, ValueError):
                 return web.json_response({"ok": False, "error": "bad_args"}, status=400)
@@ -441,7 +452,7 @@ class StripAPI:
         try:
             result = fn(gid, uid, body)
             return web.json_response({"ok": True, **result, "state": self.svc.state(gid, uid)})
-        except (StripError, CasinoError, HomeError, LifeError, PhoneError, KitchenError) as e:
+        except (StripError, CasinoError, HomeError, LifeError, PhoneError, KitchenError, CrimeError) as e:
             state = None
             try:
                 state = self.svc.state(gid, uid)
