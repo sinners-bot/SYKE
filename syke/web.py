@@ -807,6 +807,8 @@ class WebDashboard:
         a("/g/{gid}/alts", self.alt_scan)
         a("/g/{gid}/memory", self.memory_page)
         p("/g/{gid}/memory/remove", self.memory_remove)
+        p("/g/{gid}/memory/export", self.memory_export)
+        a("/g/{gid}/memory/export/{name}", self.memory_download)
         a("/g/{gid}/strip", self.strip_page)
         a("/g/{gid}/announce", self.announce_page)
         p("/g/{gid}/announce", self.announce_send)
@@ -1694,6 +1696,28 @@ class WebDashboard:
         return layout(f"SYKE's memory · {guild.name}",
                       self._memory_body(guild, voice, user[0], request), user=user)
 
+    def _archive_section(self, guild: discord.Guild, csrf: str) -> str:
+        from . import memory_archive as arc
+        info = arc.stats(self.bot.storage, guild.id)
+        span = ""
+        if info["first"]:
+            first = datetime.fromtimestamp(info["first"], timezone.utc).strftime("%d %b %Y")
+            last = datetime.fromtimestamp(info["last"], timezone.utc).strftime("%d %b %Y")
+            span = f" · {first} → {last}"
+        rows = "".join(
+            f"<li><a href='/g/{guild.id}/memory/export/{esc(name)}'>{esc(name)}</a> "
+            f"<span class='muted'>{arc.human_size(size)} · "
+            f"{datetime.fromtimestamp(modified, timezone.utc).strftime('%d %b %Y %H:%M')} UTC</span></li>"
+            for name, size, modified in arc.list_exports(self.settings.db_path, guild.id)[:20])
+        files = f"<ul>{rows}</ul>" if rows else "<div class='note'>No exports yet.</div>"
+        return ("<div class='prof-sec'><h3>📦 Archive</h3>"
+                f"<p class='muted'>{info['messages']:,} messages from {info['authors']:,} members in "
+                f"{info['channels']:,} channels{span}. Export them to a file you can download and keep "
+                "(gzip JSON lines). Import a file back with <code>memory import</code> in Discord.</p>"
+                f"<form method='post' action='/g/{guild.id}/memory/export'>{csrf}"
+                "<button>Export memory now</button></form>"
+                f"{files}</div>")
+
     def _memory_body(self, guild: discord.Guild, voice, user_id: int, request) -> str:
         csrf = self._hidden_csrf(user_id)
 
@@ -1710,6 +1734,7 @@ class WebDashboard:
                 "<p class='muted'>The GIFs and stickers SYKE has picked up from this server — what it can drop "
                 "into a yap. Hit ✕ on any tile to make SYKE forget it.</p>"
                 + flash(request)]
+        secs.append(self._archive_section(guild, csrf))
         # GIFs mined from chat — frozen posters, click to open.
         gifs = self.bot.remembered_gifs(guild.id, voice)[:60]
         if gifs:
@@ -1765,6 +1790,26 @@ class WebDashboard:
             self.bot.block_memory(guild.id, sticker=int(value))
             raise self._redirect(back, ok="Sticker removed from memory.")
         raise self._redirect(back, err="Nothing to remove.")
+
+    async def memory_export(self, request: web.Request) -> web.Response:
+        from . import memory_archive as arc
+        guild, _, _ = await self._post_guild(request)
+        path, count, size = await asyncio.to_thread(arc.export_guild, self.bot.storage, self.settings.db_path,
+                                                    guild.id, guild.name)
+        raise self._redirect(f"/g/{guild.id}/memory",
+                             ok=f"Exported {count:,} messages ({arc.human_size(size)}). Download it below.")
+
+    async def memory_download(self, request: web.Request) -> web.StreamResponse:
+        from . import memory_archive as arc
+        if self._user(request) is None:
+            raise web.HTTPFound("/login")
+        guild = self._guild_or_404(request)
+        name = request.match_info.get("name", "")
+        path = arc.safe_path(self.settings.db_path, name)
+        if path is None or not path.name.startswith(f"syke-memory-{guild.id}-"):
+            raise web.HTTPNotFound(text="no such export")
+        return web.FileResponse(path, headers={"Content-Disposition": f'attachment; filename="{path.name}"',
+                                               "Content-Type": "application/gzip"})
 
     async def strip_page(self, request: web.Request) -> web.Response:
         user = self._user(request)

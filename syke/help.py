@@ -391,7 +391,7 @@ CATALOG: list[Category] = [
     Category(
         "meta", "ℹ️", "About & Account", EVERYONE,
         "Info about SYKE, adding it elsewhere, and controlling your own data.",
-        ["help", "about", "invite", "inviter", "showcase", "diagnose", "scanme", "optout", "optin", "servers"],
+        ["help", "about", "invite", "inviter", "showcase", "diagnose", "scanme", "optout", "optin", "servers", "memory"],
         {
             "help": "This menu. `help <command>` explains any single command in detail.",
             "showcase": "A guided tour of every feature, with examples.",
@@ -399,6 +399,11 @@ CATALOG: list[Category] = [
             "optout": "Stops SYKE reading or judging your messages here and deletes what it has. `optin` re-enables it.",
             "diagnose": "Checks why SYKE's prefix commands might not be working in this channel.",
             "servers": "SYKE owners only — lists every server using SYKE.",
+            "memory": "SYKE owners only — archive what SYKE remembers here. `memory` shows the numbers; "
+                      "`memory export` saves every stored message to a compressed file (download it from the "
+                      "dashboard, or from your DMs when it's small); `memory exports` lists saved files; "
+                      "`memory import` (attach a file, or give a saved file's name) loads one back without "
+                      "duplicates, even into another server; `memory delete <file>` removes a saved file.",
         },
     ),
 ]
@@ -427,11 +432,11 @@ LAYOUT: dict[str, tuple[str, str, list[tuple[str, list[str]]]]] = {
     "meta": ("About", "SYKE itself, and your data.", [
         ("SYKE", ["help", "about", "invite", "showcase", "diagnose", "inviter"]),
         ("Your data", ["scanme", "optout", "optin"]),
-        ("Owners", ["servers"])]),
+        ("Owners", ["servers", "memory"])]),
 }
 # Sections rendered as a single line of command names (they all work the same way).
 INLINE_SECTIONS = {"Text effects"}
-ACCESS_OF = {"afflict": MODERATOR, "puppet": MODERATOR, "cure": MODERATOR, "afflicted": MODERATOR, "yap": ADMIN, "servers": OWNER,
+ACCESS_OF = {"afflict": MODERATOR, "puppet": MODERATOR, "cure": MODERATOR, "afflicted": MODERATOR, "yap": ADMIN, "servers": OWNER, "memory": OWNER,
              "verify": EVERYONE}
 
 BRIEF = {
@@ -489,7 +494,7 @@ BRIEF = {
     "search": "Search and pick", "music": "Slash controls and DJ role",
     "help": "This menu", "about": "Bot stats", "invite": "Add SYKE to a server", "showcase": "Feature tour",
     "diagnose": "Fix prefix problems", "inviter": "Who invited someone", "scanme": "Count your older messages",
-    "optout": "Stop SYKE reading you", "optin": "Opt back in", "servers": "Every server using SYKE",
+    "optout": "Stop SYKE reading you", "optin": "Opt back in", "servers": "Every server using SYKE", "memory": "Export SYKE's memory",
 }
 
 for _cat in CATALOG:
