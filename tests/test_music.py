@@ -419,3 +419,16 @@ async def test_soundcloud_previews_are_skipped(monkeypatch):
     monkeypatch.setattr(src, "_download", blocked)
     with pytest.raises(LookupError, match="30-second preview"):
         await src.resolve_stream(Track(title="Song — Artist", query="Artist - Song"))
+
+
+def test_radio_stations_fit_discord_and_all_resolve():
+    from syke import music_lists as lists
+    assert len(lists.GENRES) <= 25                       # slash /music quiz offers every song genre as a choice
+    assert not set(lists.GENRES) & set(lists.RADIO_SEARCHES)
+    grouped = [n for _, names in lists.STATION_GROUPS for n in names]
+    assert sorted(grouped) == sorted(lists.all_genres()) and len(grouped) == len(set(grouped))
+    for alias, key in lists.GENRE_ALIASES.items():
+        assert lists.resolve_genre(alias) == key
+    for genre, songs in lists.GENRES.items():
+        assert len(songs) >= 10 and len(set(songs)) == len(songs), genre
+    assert lists.resolve_genre("Reggaeton") == "latin" and lists.resolve_genre("XMAS") == "christmas"

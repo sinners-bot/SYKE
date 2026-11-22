@@ -327,8 +327,11 @@ CATALOG: list[Category] = [
             "music": "The music commands as slash commands (`/music pause`, `/music loop`…), plus "
                      "`music dj @role` to let only a DJ role control playback.",
             "autoplay": "When the queue runs out, keep playing songs like the last one.",
-            "radio": "Endless music by genre: `radio drill`, `radio deutschrap`, `radio rap`, `pop`, `rnb`, "
-                     "`throwback`, `rock`, `afro`, `edm`, `lofi`, `phonk`, `chill`. `radio off` stops it.",
+            "radio": "Endless music from 40 stations: rap (`drill`, `uk`, `deutschrap`, `phonk`), pop (`kpop`, "
+                     "`latin`, `afro`, `anime`), `rock`, `metal`, `indie`, `country`, `reggae`, dance (`house`, "
+                     "`techno`, `dnb`, `amapiano`, `jerseyclub`, `disco`), `balkan`, `turkish`, `arabic`, "
+                     "`bollywood`, `jazz`, `classical` and moods (`chill`, `lofi`, `sad`, `gym`, `party`, `gaming`, "
+                     "`sleep`, `christmas`). `radio` alone lists them all; `radio off` stops it.",
             "songquiz": "SYKE plays 15 seconds of a song in voice; first to type the title wins the round (and Strip "
                         "cash when the economy's open). `songquiz drill 10` for 10 drill songs.",
             "topsongs": "The server's most played songs and biggest DJs: `topsongs`, `topsongs djs month`. "

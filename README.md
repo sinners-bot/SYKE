@@ -112,7 +112,7 @@ land in the game. Needs `SYKE_STRIP_GAME_URL` (see **Configuration**). Also `/lo
 
 The Strip also has `!weekly` (a growing weekly payout), `!jobs` / `!job` (shifts are quick mini-games; better jobs
 unlock as you work) and `!stocks` (six tickers that move every 15 minutes with the server's chat, laughs, voice,
-casino action, late nights and deleted messages). Music has `!radio <genre>`, `!songquiz [genre] [rounds]` and
+casino action, late nights and deleted messages). Music has `!radio <station>` (40 stations: genres from drill to classical, plus moods like gym, sad, sleep and christmas), `!songquiz [genre] [rounds]` and
 `!topsongs` (also `!top songs`, `!top djs`).
 
 ### Music

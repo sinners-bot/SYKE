@@ -84,6 +84,79 @@ GENRES: dict[str, list[tuple[str, str]]] = {
         ("Fisher", "Losing It"), ("Calvin Harris", "Feel So Close"), ("Zedd", "Clarity"), ("Tiësto", "The Business"),
         ("Skrillex", "Bangarang"), ("Daft Punk", "Get Lucky"),
     ],
+    "latin": [
+        ("Bad Bunny", "Tití Me Preguntó"), ("Bad Bunny", "Me Porto Bonito"), ("Bad Bunny", "Monaco"),
+        ("Bad Bunny & Jhay Cortez", "Dákiti"), ("Daddy Yankee", "Gasolina"), ("Daddy Yankee", "Con Calma"),
+        ("Luis Fonsi", "Despacito"), ("J Balvin", "Mi Gente"), ("Karol G", "Provenza"), ("Karol G & Shakira", "TQG"),
+        ("Rauw Alejandro", "Todo de Ti"), ("Feid", "Normal"), ("Eslabon Armado & Peso Pluma", "Ella Baila Sola"),
+        ("Shakira", "Hips Don't Lie"), ("DJ Snake", "Taki Taki"),
+    ],
+    "kpop": [
+        ("BTS", "Dynamite"), ("BTS", "Butter"), ("BLACKPINK", "How You Like That"), ("BLACKPINK", "DDU-DU DDU-DU"),
+        ("NewJeans", "Super Shy"), ("NewJeans", "Ditto"), ("Stray Kids", "S-Class"), ("TWICE", "Fancy"),
+        ("aespa", "Supernova"), ("Jung Kook", "Seven"), ("PSY", "Gangnam Style"), ("IVE", "Love Dive"),
+        ("LE SSERAFIM", "Antifragile"), ("ROSÉ & Bruno Mars", "APT."), ("(G)I-DLE", "Queencard"),
+    ],
+    "uk": [
+        ("Stormzy", "Shut Up"), ("Stormzy", "Vossi Bop"), ("Skepta", "Shutdown"), ("Dave", "Location"),
+        ("Dave", "Funky Friday"), ("AJ Tracey", "Ladbroke Grove"), ("Aitch", "Taste (Make It Shake)"),
+        ("Wiley", "Wearing My Rolex"), ("Dizzee Rascal", "Bonkers"), ("Dizzee Rascal", "Fix Up, Look Sharp"),
+        ("J Hus", "Did You See"), ("Little Simz", "Venom"),
+    ],
+    "indie": [
+        ("Arctic Monkeys", "Do I Wanna Know?"), ("Arctic Monkeys", "505"), ("The Neighbourhood", "Sweater Weather"),
+        ("Tame Impala", "The Less I Know the Better"), ("Glass Animals", "Heat Waves"), ("The Strokes", "Reptilia"),
+        ("Cage the Elephant", "Ain't No Rest for the Wicked"), ("Foster the People", "Pumped Up Kicks"),
+        ("MGMT", "Electric Feel"), ("Hozier", "Take Me to Church"), ("Lana Del Rey", "Summertime Sadness"),
+        ("Mitski", "My Love Mine All Mine"), ("Phoebe Bridgers", "Motion Sickness"),
+        ("Cigarettes After Sex", "Apocalypse"), ("Mac DeMarco", "Chamber of Reflection"),
+    ],
+    "metal": [
+        ("Metallica", "Enter Sandman"), ("Metallica", "Master of Puppets"), ("Slipknot", "Duality"),
+        ("Slipknot", "Psychosocial"), ("System Of A Down", "Chop Suey!"), ("System Of A Down", "Toxicity"),
+        ("Iron Maiden", "The Trooper"), ("Black Sabbath", "Paranoid"), ("Rammstein", "Du Hast"),
+        ("Rammstein", "Sonne"), ("Pantera", "Walk"), ("Avenged Sevenfold", "Hail to the King"),
+        ("Bring Me the Horizon", "Throne"), ("Disturbed", "Down with the Sickness"),
+    ],
+    "country": [
+        ("Morgan Wallen", "Last Night"), ("Morgan Wallen", "Whiskey Glasses"), ("Luke Combs", "Fast Car"),
+        ("Zach Bryan", "Something in the Orange"), ("Zach Bryan", "I Remember Everything"),
+        ("Shaboozey", "A Bar Song (Tipsy)"), ("Lil Nas X", "Old Town Road"), ("Chris Stapleton", "Tennessee Whiskey"),
+        ("Dolly Parton", "Jolene"), ("Johnny Cash", "Ring of Fire"), ("Kenny Rogers", "The Gambler"),
+        ("Beyoncé", "Texas Hold 'Em"),
+    ],
+    "reggae": [
+        ("Bob Marley", "Three Little Birds"), ("Bob Marley", "Could You Be Loved"), ("Bob Marley", "Is This Love"),
+        ("Sean Paul", "Temperature"), ("Sean Paul", "Get Busy"), ("Sean Paul", "Gimme the Light"),
+        ("Shaggy", "It Wasn't Me"), ("Shaggy", "Boombastic"), ("Vybz Kartel", "Fever"),
+        ("Damian Marley", "Welcome to Jamrock"), ("Skillibeng", "Whap Whap"),
+    ],
+    "disco": [
+        ("Bee Gees", "Stayin' Alive"), ("Earth, Wind & Fire", "September"), ("Donna Summer", "I Feel Love"),
+        ("Gloria Gaynor", "I Will Survive"), ("Chic", "Le Freak"), ("ABBA", "Dancing Queen"),
+        ("Michael Jackson", "Don't Stop 'Til You Get Enough"), ("Kool & The Gang", "Celebration"),
+        ("Sister Sledge", "We Are Family"), ("Rick James", "Super Freak"), ("Daft Punk", "Get Lucky"),
+        ("Mark Ronson", "Uptown Funk"), ("Dua Lipa", "Levitating"),
+    ],
+    "jazz": [
+        ("Frank Sinatra", "Fly Me to the Moon"), ("Dave Brubeck", "Take Five"), ("Miles Davis", "So What"),
+        ("Louis Armstrong", "What a Wonderful World"), ("Nina Simone", "Feeling Good"),
+        ("John Coltrane", "My Favorite Things"), ("Chet Baker", "My Funny Valentine"),
+        ("Duke Ellington", "Take the A Train"), ("Etta James", "At Last"), ("Norah Jones", "Don't Know Why"),
+        ("Herbie Hancock", "Cantaloupe Island"),
+    ],
+    "anime": [
+        ("Linked Horizon", "Guren no Yumiya"), ("LiSA", "Gurenge"), ("YOASOBI", "Idol"), ("King Gnu", "SPECIALZ"),
+        ("Kenshi Yonezu", "KICK BACK"), ("TK from Ling tosite sigure", "Unravel"), ("Ikimonogakari", "Blue Bird"),
+        ("FLOW", "GO!!!"), ("FLOW", "Sign"), ("Eve", "Kaikai Kitan"), ("Porno Graffitti", "The Day"),
+    ],
+    "classical": [
+        ("Beethoven", "Für Elise"), ("Beethoven", "Symphony No. 5"), ("Mozart", "Eine kleine Nachtmusik"),
+        ("Vivaldi", "The Four Seasons: Spring"), ("Bach", "Toccata and Fugue in D minor"), ("Debussy", "Clair de Lune"),
+        ("Tchaikovsky", "Swan Lake"), ("Pachelbel", "Canon in D"), ("Grieg", "In the Hall of the Mountain King"),
+        ("Chopin", "Nocturne Op. 9 No. 2"), ("Satie", "Gymnopédie No. 1"), ("Carl Orff", "O Fortuna"),
+        ("Johann Strauss II", "The Blue Danube"), ("Rossini", "William Tell Overture"),
+    ],
 }
 
 # Radio-only moods: endless search seeds rather than a fixed list.
@@ -91,12 +164,39 @@ RADIO_SEARCHES: dict[str, list[str]] = {
     "lofi": ["lofi hip hop beat", "chill lofi study beat", "lofi jazz hop", "rainy lofi beat", "late night lofi"],
     "phonk": ["drift phonk", "brazilian phonk", "phonk house", "aggressive phonk"],
     "chill": ["chill acoustic song", "chill indie pop song", "chill rnb song"],
+    "gym": ["gym workout rap song", "hardstyle gym song", "workout motivation song", "gym phonk"],
+    "sad": ["sad rap song", "sad pop song", "heartbreak song", "sad acoustic song"],
+    "party": ["party anthem song", "club banger song", "party hit song", "dance party song"],
+    "techno": ["peak time techno track", "hard techno track", "melodic techno track", "berlin techno track"],
+    "house": ["deep house track", "tech house track", "afro house track", "classic house track"],
+    "dnb": ["drum and bass track", "liquid drum and bass", "jump up drum and bass", "neurofunk track"],
+    "amapiano": ["amapiano song", "amapiano hit", "private school amapiano", "amapiano dance"],
+    "jerseyclub": ["jersey club song", "jersey club remix", "jersey club hit"],
+    "balkan": ["balkan rap song", "balkan pop hit", "balkan trap song", "narodna muzika hit"],
+    "turkish": ["türkçe rap şarkı", "turkish pop song", "türkçe pop hit"],
+    "arabic": ["arabic pop song", "arabic rap song", "khaleeji song", "rai song"],
+    "bollywood": ["bollywood hit song", "punjabi song", "bollywood dance song", "hindi romantic song"],
+    "synthwave": ["synthwave track", "retrowave song", "outrun synthwave", "darksynth track"],
+    "nightcore": ["nightcore song", "sped up song", "nightcore remix"],
+    "gaming": ["video game soundtrack", "gaming music mix song", "boss battle music", "minecraft soundtrack"],
+    "sleep": ["sleep ambient music", "calm piano music", "ambient soundscape", "rain sleep music"],
+    "christmas": ["christmas song", "classic christmas song", "christmas pop song", "christmas jazz song"],
 }
 GENRE_ALIASES = {"uk drill": "drill", "ukdrill": "drill", "german": "deutschrap", "german rap": "deutschrap",
                  "deutsch": "deutschrap", "hiphop": "rap", "hip-hop": "rap", "hip hop": "rap", "r&b": "rnb",
                  "randb": "rnb", "old": "throwback", "oldies": "throwback", "classics": "throwback", "90s": "throwback",
                  "00s": "throwback", "afrobeats": "afro", "dance": "edm", "electronic": "edm", "lo-fi": "lofi",
-                 "study": "lofi"}
+                 "study": "lofi", "reggaeton": "latin", "spanish": "latin", "k-pop": "kpop", "korean": "kpop",
+                 "grime": "uk", "uk rap": "uk", "ukrap": "uk", "british": "uk", "alternative": "indie", "alt": "indie",
+                 "heavy metal": "metal", "rockmetal": "metal", "dancehall": "reggae", "funk": "disco", "70s": "disco",
+                 "80s": "disco", "blues": "jazz", "japanese": "anime", "jpop": "anime", "j-pop": "anime",
+                 "orchestra": "classical", "piano": "classical", "workout": "gym", "training": "gym",
+                 "sad songs": "sad", "heartbreak": "sad", "club": "party", "drum and bass": "dnb",
+                 "drum & bass": "dnb", "d&b": "dnb", "jersey": "jerseyclub", "jersey club": "jerseyclub",
+                 "ex-yu": "balkan", "yugo": "balkan", "turkce": "turkish", "türkçe": "turkish", "arab": "arabic",
+                 "hindi": "bollywood", "punjabi": "bollywood", "desi": "bollywood", "retrowave": "synthwave",
+                 "sped up": "nightcore", "spedup": "nightcore", "games": "gaming", "game": "gaming",
+                 "ost": "gaming", "ambient": "sleep", "xmas": "christmas", "weihnachten": "christmas"}
 
 
 def resolve_genre(text: str) -> str | None:
@@ -107,3 +207,15 @@ def resolve_genre(text: str) -> str | None:
 
 def all_genres() -> list[str]:
     return list(GENRES) + list(RADIO_SEARCHES)
+
+
+# How the station list is shown: (heading, stations).
+STATION_GROUPS: list[tuple[str, list[str]]] = [
+    ("🎤 Rap", ["rap", "drill", "uk", "deutschrap", "phonk"]),
+    ("🎧 Pop & R&B", ["pop", "rnb", "kpop", "latin", "afro", "anime"]),
+    ("🎸 Rock & more", ["rock", "metal", "indie", "country", "reggae"]),
+    ("🪩 Dance", ["edm", "house", "techno", "dnb", "amapiano", "jerseyclub", "disco", "synthwave", "nightcore"]),
+    ("🌍 Around the world", ["balkan", "turkish", "arabic", "bollywood"]),
+    ("🕰️ Classics", ["throwback", "jazz", "classical"]),
+    ("✨ Moods", ["chill", "lofi", "sad", "gym", "party", "gaming", "sleep", "christmas"]),
+]

@@ -1512,13 +1512,21 @@ class Music(commands.Cog):
                     return
                 break  # one per search, so the mix stays varied
 
+    def stations_card(self, ctx, lead: str = "") -> discord.Embed:
+        p = self.p(ctx)
+        card = note(f"{lead}Start one with `{p}radio <station>`, stop it with `{p}radio off`. "
+                    f"Songs keep coming until you stop it.")
+        card.title = f"📻 {len(lists.all_genres())} radio stations"
+        for heading, names in lists.STATION_GROUPS:
+            card.add_field(name=heading, value=" ".join(f"`{n}`" for n in names), inline=False)
+        return card
+
     async def do_radio(self, ctx, genre: str | None) -> None:
         p = self.p(ctx)
-        genres = ", ".join(f"`{g}`" for g in lists.all_genres())
         if not genre:
             player = self.players.get(ctx.guild.id)
-            on = f"📻 **{player.radio}** radio is on. " if player and player.radio else ""
-            await self.say(ctx, f"{on}Start one with `{p}radio <genre>`: {genres}. Stop with `{p}radio off`.")
+            on = f"**{player.radio.title()}** radio is on. " if player and player.radio else ""
+            await self.say(ctx, embed=self.stations_card(ctx, on))
             return
         if genre.lower() in ("off", "stop", "none"):
             player = self.players.get(ctx.guild.id)
@@ -1533,8 +1541,12 @@ class Music(commands.Cog):
             return
         key = lists.resolve_genre(genre)
         if key is None:
-            await self.say(ctx, f"No **{discord.utils.escape_markdown(genre[:40])}** station. Try: {genres}.",
-                           ephemeral=True)
+            close = difflib.get_close_matches(genre.strip().lower(), lists.all_genres(), n=1, cutoff=0.6)
+            lead = (f"No **{discord.utils.escape_markdown(genre[:40])}** station"
+                    + (f". Did you mean `{close[0]}`? " if close else ". "))
+            card = self.stations_card(ctx, lead)
+            card.colour = WARN
+            await self.say(ctx, embed=card, ephemeral=True)
             return
         if not await self.ready_or_explain(ctx):
             return
