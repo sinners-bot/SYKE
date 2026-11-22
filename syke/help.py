@@ -340,7 +340,7 @@ CATALOG: list[Category] = [
     Category(
         "social", "💬", "Social", EVERYONE,
         "AFK, birthdays, your year in review, memories, the channel's vibe and what you missed.",
-        ["afk", "birthday", "wrapped", "vibe", "catchup", "timemachine", "quotebook", "racist"],
+        ["afk", "birthday", "wrapped", "vibe", "catchup", "timemachine", "quotebook", "lore", "racist"],
         {
             "afk": "`afk [reason]`: anyone who pings you is told you're away (and your name gets [AFK] if SYKE can "
                    "change it). Send any message to come back and see who pinged you, with links.",
@@ -356,6 +356,9 @@ CATALOG: list[Category] = [
             "timemachine": "What the server was talking about a year ago today: a recap of that day, the loudest "
                            "people and the biggest moments, with links. `timemachine 6m`, `timemachine 2w` or "
                            "`timemachine 21.11.2025` for another day. Also `/recap timemachine`.",
+            "lore": "The server's inside jokes and catchphrases: phrases several people keep using, over weeks, that "
+                    "get more reactions than usual. SYKE explains each one, and says who started it and when. "
+                    "`lore <phrase>` tells one phrase's story: first use, biggest users, peak month.",
             "quotebook": "The server's best quotes, picked by reactions, as a book you page through (◀ ▶, 🎲 for a "
                          "random page, and a button to turn one into a quote card). `quotebook year`, "
                          "`quotebook @user`. Also `/recap quotebook`.",
@@ -366,7 +369,7 @@ CATALOG: list[Category] = [
                        "and in other watched channels) with links. Also `/recap catchup`.",
         },
         sections=[("Away", ["afk", "catchup"]), ("Celebrate", ["birthday", "wrapped"]),
-                  ("Memories", ["timemachine", "quotebook"]), ("Read the room", ["vibe", "racist"])],
+                  ("Memories", ["timemachine", "quotebook", "lore"]), ("Read the room", ["vibe", "racist"])],
     ),
     Category(
         "casino", "🎰", "Casino", EVERYONE,
@@ -469,7 +472,7 @@ BRIEF = {
     "job": "Work a mini-game shift", "stocks": "Server stock market", "radio": "Endless music by genre",
     "songquiz": "Name that song", "topsongs": "Most played and top DJs", "afk": "Go away politely",
     "birthday": "Birthdays", "wrapped": "Your year in review", "vibe": "Channel mood check",
-    "catchup": "What you missed", "timemachine": "A year ago today", "quotebook": "Best quotes book", "racist": "Slur counter", "work": "Clock a shift", "hustle": "Risky quick cash", "pay": "Send cash",
+    "catchup": "What you missed", "timemachine": "A year ago today", "quotebook": "Best quotes book", "lore": "Inside jokes", "racist": "Slur counter", "work": "Clock a shift", "hustle": "Risky quick cash", "pay": "Send cash",
     "balance": "Players Club card", "deposit": "Bank it (robber-proof)", "withdraw": "Take cash out",
     "rich": "Richest on the Strip",
     "shop": "Browse the storefronts", "buy": "Buy an item", "use": "Use an item", "inventory": "Items and buffs",

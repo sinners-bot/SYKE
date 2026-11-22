@@ -938,6 +938,16 @@ class Social(commands.Cog, name="Social"):
 
     # Quote book
 
+    @recap.command(name="lore", description="The server's inside jokes and catchphrases, and who started them")
+    @app_commands.describe(phrase="One phrase's full story (leave empty for the whole lore)")
+    async def lore_slash(self, interaction: discord.Interaction, phrase: str = "") -> None:
+        cog = self.bot.get_cog("Lore")
+        ctx = await commands.Context.from_interaction(interaction)
+        if cog is None:
+            await ctx.reply(embed=problem("Not loaded", "Lore isn't available right now."), ephemeral=True)
+            return
+        await cog.lore(ctx, phrase)
+
     async def quotebook(self, ctx: commands.Context, period: str, member: discord.Member | None) -> None:
         guild = ctx.guild
         days = {"week": 7, "month": 30, "year": 365, "all": 0, "ever": 0, "alltime": 0}.get((period or "all").lower())

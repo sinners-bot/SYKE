@@ -108,6 +108,7 @@ land in the game. Needs `SYKE_STRIP_GAME_URL` (see **Configuration**). Also `/lo
 | `!wrapped [@user]` | Your year on the server as a Wrapped card (messages, words, busiest hour, top words, favourite emoji, who you talk to most, rank). Also `/recap wrapped` |
 | `!vibe` | Scores the last 100 messages here: hype, chaos, wholesome, toxic, drama, brainrot. Also `/recap vibe` |
 | `!catchup` | What happened here since you last talked, plus who mentioned you. Also `/recap catchup` |
+| `!lore [phrase]` | The server's inside jokes and catchphrases: phrases several people keep using across weeks that get more reactions than usual, each explained (with AI on) and credited to whoever said it first, with a jump link. `!lore <phrase>` gives one phrase's story: first use, biggest users, peak month, best-received use. Also `/recap lore` |
 
 The Strip also has `!weekly` (a growing weekly payout), `!jobs` / `!job` (shifts are quick mini-games; better jobs
 unlock as you work) and `!stocks` (six tickers that move every 15 minutes with the server's chat, laughs, voice,
