@@ -708,6 +708,75 @@ mark{background:#f5b30155;color:#ffe08a;border-radius:2px;padding:0 1px;}
   .wrap{padding:14px;}
   header{padding:10px 14px;gap:10px;}
 }
+/* Live monitoring */
+.dot-live{display:inline-block;width:9px;height:9px;border-radius:50%;background:#6b6b7d;vertical-align:middle;}
+.dot-live.on{background:var(--ok);box-shadow:0 0 0 3px #22c55e33;animation:beat 2s infinite;}
+@keyframes beat{50%{box-shadow:0 0 0 6px #22c55e11;}}
+.ch-tools{display:flex;align-items:center;gap:8px;margin-left:auto;}
+.m.deleted{background:#ef44440f;border-left:2px solid var(--danger);}
+.m.deleted .text{color:#c99;text-decoration:line-through;text-decoration-color:#ef444488;}
+.delt{display:inline-block;font-size:11px;font-weight:600;color:var(--danger);text-transform:uppercase;letter-spacing:.3px;}
+body.hide-deleted .m.deleted{display:none;}
+.edited{font-size:11px;color:var(--muted);}
+.hist{margin-top:4px;font-size:13px;color:var(--muted);}
+.hist summary{cursor:pointer;font-size:12px;}
+.hist .hv{border-left:2px solid var(--line);padding:2px 8px;margin:3px 0;white-space:pre-wrap;word-break:break-word;}
+.rxs.empty{display:none;}
+.rxs.pulse .rx{animation:pop .5s ease;}
+@keyframes pop{40%{transform:scale(1.12);}}
+.rx.me{border-color:var(--brand);}
+.live{max-width:980px;margin:0 auto;}
+.live-top{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-top:6px;}
+.live-bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0 8px;}
+.live-bar select{width:auto;max-width:260px;}
+.live-bar input{flex:1 1 220px;width:auto;}
+.live-kinds{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}
+.live-kinds .chip{display:inline-flex;align-items:center;gap:5px;margin:0;cursor:pointer;user-select:none;font-size:13px;}
+.live-kinds .chip input{width:auto;margin:0;accent-color:var(--brand);}
+.feed{display:flex;flex-direction:column;gap:6px;}
+.fi{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--line);border-radius:10px;
+padding:8px 12px;min-width:0;}
+.fi.new{animation:slide .35s ease;}
+@keyframes slide{from{opacity:0;transform:translateY(-6px);}}
+.fi.k-msg{border-left-color:var(--brand);}.fi.k-edit{border-left-color:var(--warn);}
+.fi.k-del{border-left-color:var(--danger);}.fi.k-rx{border-left-color:#ec4899;}
+.fi.k-join{border-left-color:var(--ok);}.fi.k-leave{border-left-color:#64748b;}.fi.k-voice{border-left-color:#06b6d4;}
+.fh{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-bottom:4px;}
+.fh .fk{font-weight:600;color:var(--text);}
+.fh .fg{color:var(--muted);}.fh .fc{font-weight:600;}.live.scoped .fh .fg{display:none;}
+.fh .ts{margin-left:auto;font-size:11px;}
+.fq{display:flex;align-items:center;gap:6px;flex-wrap:wrap;word-break:break-word;font-size:14px;}
+.fq.old{color:var(--muted);}
+.fav{width:20px;height:20px;border-radius:50%;flex:none;}
+.frx .ie{width:1.3em;height:1.3em;}
+.fi .m{padding:2px 0;background:none;}
+.fi .m:hover{background:none;}
+.fi .rx{pointer-events:none;}
+/* Server overview */
+.ov{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:14px 0;}
+.ov .stat .v small{font-size:12px;color:var(--muted);font-weight:500;}
+.spark{display:flex;align-items:flex-end;gap:2px;height:46px;margin-top:6px;}
+.spark i{flex:1;background:var(--brand);opacity:.8;border-radius:2px 2px 0 0;min-height:2px;}
+.ov2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;}
+.busy{display:grid;grid-template-columns:minmax(0,1fr) 46px;gap:2px 10px;align-items:center;font-size:14px;}
+.busy .bar{margin:0 0 4px;grid-column:1/3;}
+.busy .n{text-align:right;color:var(--muted);font-size:12px;}
+.vc{margin-bottom:8px;}.vc b{font-size:13px;}
+.vcu{display:inline-flex;align-items:center;gap:5px;background:var(--panel2);border-radius:999px;
+padding:1px 9px 1px 2px;margin:3px 4px 0 0;font-size:13px;}
+.vcu img{width:20px;height:20px;border-radius:50%;}
+.chtable td{vertical-align:middle;}
+.chtable .act{color:var(--muted);font-size:12px;white-space:nowrap;}
+@media(max-width:820px){
+  header{flex-wrap:wrap;}
+  header .muted{display:none;}
+  .live-bar select{max-width:none;flex:1 1 100%;}
+  .fi{padding:7px 9px;}
+  .fh .ts{margin-left:0;}
+  .ch-tools{margin-left:0;}
+  table{font-size:14px;}
+  .chtable td:nth-child(2){display:none;}
+}
 /* Profile page */
 .prof{max-width:720px;margin:0 auto;padding:24px 20px;}
 .prof-top{display:flex;gap:18px;align-items:center;}
@@ -750,6 +819,7 @@ def layout(title: str, body: str, *, user: Optional[tuple[int, str]] = None, wid
         f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
         f"<title>{esc(title)} · SYKE</title><style>{STYLE}</style>{head_extra}</head><body>"
         f"<header><span class='brand'>SYKE</span> <a class='btn sm' href='/'>Servers</a>"
+        f" <a class='btn sm' href='/live'>Live</a>"
         f" <a class='btn sm' href='/dms'>DMs</a>"
         f"<span class='sp'></span>{nav}</header>{inner}</body></html>"
     )
@@ -766,18 +836,68 @@ def flash(request: web.Request) -> str:
     return ""
 
 
+LIVE_JS = (
+    "var feed=document.getElementById('feed'),empty=document.getElementById('feed-empty'),"
+    "sel=document.getElementById('fsel'),q=document.getElementById('fq'),pb=document.getElementById('pause'),"
+    "rate=document.getElementById('rate'),paused=false,held=[],times=[],MAX=400;"
+    "function fmt(s){var d=new Date(s*1000);return d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',"
+    "second:'2-digit'});}"
+    "function stamp(r){r.querySelectorAll('time[data-ts]').forEach(function(e){e.textContent=fmt(+e.dataset.ts);});}"
+    "function kinds(){var on={};document.querySelectorAll('.live-kinds input').forEach(function(i){"
+    "if(i.checked)on[i.value]=1;});return on;}"
+    "function show(n,on){var v=sel.value,t=q.value.trim().toLowerCase();"
+    "var ok=on[n.dataset.k]&&(!v||n.dataset[sel.dataset.attr]===v)&&(!t||n.textContent.toLowerCase().indexOf(t)>-1);"
+    "n.style.display=ok?'':'none';}"
+    "function refilter(){var on=kinds();feed.querySelectorAll('.fi').forEach(function(n){show(n,on);});"
+    "empty.style.display=feed.querySelector('.fi')?'none':'';"
+    "try{localStorage.setItem('syke.live.kinds',JSON.stringify(on));}catch(e){}}"
+    "try{var saved=JSON.parse(localStorage.getItem('syke.live.kinds')||'null');if(saved)"
+    "document.querySelectorAll('.live-kinds input').forEach(function(i){i.checked=!!saved[i.value];});}catch(e){}"
+    "document.querySelectorAll('.live-kinds input').forEach(function(i){i.onchange=refilter;});"
+    "sel.onchange=refilter;q.oninput=refilter;"
+    "function add(h){var t=document.createElement('div');t.innerHTML=h;var n=t.firstElementChild;if(!n)return;"
+    "stamp(n);show(n,kinds());n.classList.add('new');feed.insertBefore(n,feed.firstChild);"
+    "while(feed.children.length>MAX)feed.removeChild(feed.lastChild);empty.style.display='none';}"
+    "function flush(){held.reverse().forEach(add);held=[];pb.textContent='Pause';}"
+    "pb.onclick=function(){paused=!paused;if(paused){pb.textContent='Resume';}else flush();};"
+    "document.getElementById('clear').onclick=function(){feed.innerHTML='';refilter();};"
+    "function tick(){var now=Date.now();times=times.filter(function(t){return now-t<60000;});"
+    "rate.textContent=times.length+' events in the last minute';}setInterval(tick,5000);"
+    "var ws;function dot(on){var d=document.getElementById('live-dot');if(d){d.classList.toggle('on',on);"
+    "d.title=on?'Live':'Reconnecting…';}}"
+    "function connect(){ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host"
+    "+location.pathname.replace(/\\/$/,'')+'/ws');ws.onopen=function(){dot(true);};"
+    "ws.onmessage=function(ev){var d;try{d=JSON.parse(ev.data);}catch(e){return;}if(d.t!=='feed')return;"
+    "times.push(Date.now());if(paused){held.push(d.html);pb.textContent='Resume ('+held.length+' new)';}"
+    "else add(d.html);tick();};"
+    "ws.onclose=function(){dot(false);setTimeout(connect,3000);};ws.onerror=function(){try{ws.close();}catch(e){}};}"
+    "stamp(feed);refilter();tick();connect();"
+)
+
+
+@web.middleware
+async def compress_html(request: web.Request, handler):
+    """Gzip pages and HTML fragments: chat pages are big and mostly repeated markup."""
+    response = await handler(request)
+    if isinstance(response, web.Response) and not isinstance(response, web.FileResponse) \
+            and (response.content_type or "").startswith(("text/", "application/json")) \
+            and response.body is not None and len(response.body) > 1024:
+        response.enable_compression()
+    return response
+
+
 class WebDashboard:
     def __init__(self, bot) -> None:
         self.bot = bot
         self.settings = bot.settings
-        self.app = web.Application()
+        self.app = web.Application(middlewares=[compress_html])
+        self._count_cache: dict[int, tuple[float, tuple[int, int]]] = {}
         self.runner: web.AppRunner | None = None
         # channel_id -> set of live WebSocket connections watching that channel
         self._subs: dict[int, set] = defaultdict(set)
         self._add_routes()
-        bot.add_listener(self._on_new_message, "on_message")
-        bot.add_listener(self._on_edit_message, "on_message_edit")
-        bot.add_listener(self._on_delete_message, "on_message_delete")
+        from .web_live import LiveHub
+        self.live = LiveHub(self)   # gateway events -> chat view and Live page
 
     # Lifecycle
 
@@ -812,6 +932,10 @@ class WebDashboard:
         a("/g/{gid}/strip", self.strip_page)
         a("/g/{gid}/announce", self.announce_page)
         p("/g/{gid}/announce", self.announce_send)
+        a("/live", self.live_page)
+        a("/live/ws", self.live_ws)
+        a("/g/{gid}/live", self.live_page)
+        a("/g/{gid}/live/ws", self.live_ws)
         a("/g/{gid}/c/{cid}", self.channel)
         a("/g/{gid}/c/{cid}/messages", self.channel_messages)
         a("/g/{gid}/c/{cid}/m/{mid}/reactions", self.message_reactions)
@@ -941,22 +1065,96 @@ class WebDashboard:
         guilds = sorted(self.bot.guilds, key=lambda g: g.member_count or 0, reverse=True)
         servers, members = self.bot.reach()
         cards = []
+        total_hour = 0
         for g in guilds:
-            tracked = len(self.bot.storage.tracked(g.id))
-            stored, _ = self.bot.storage.corpus_size(g.id)
-            icon = f"<img src='{esc(g.icon.url)}' width='40' height='40' style='border-radius:8px'>" if g.icon else ""
+            tracked, stored = self._counts(g.id)
+            act = self.live.activity_summary(g.id)
+            total_hour += act["hour"]
+            voice = sum(len(getattr(v, "members", []) or []) for v in getattr(g, "voice_channels", []) or [])
+            icon = (f"<img src='{esc(g.icon.url)}' width='40' height='40' style='border-radius:8px' loading='lazy'>"
+                    if g.icon else "")
+            busy = f"<span class='chip perm'>{act['hour']} msgs/hr</span>" if act["hour"] else ""
+            vc = f"<span class='chip'>🔊 {voice} in voice</span>" if voice else ""
             cards.append(
-                f"<div class='card'><div class='row'>{icon}<div>"
+                f"<div class='card srv' data-name='{esc(g.name.lower())}'><div class='row'>{icon}<div>"
                 f"<h3><a href='/g/{g.id}'>{esc(g.name)}</a></h3>"
-                f"<div class='muted'>{g.member_count or 0} members</div></div></div>"
-                f"<div class='row' style='margin-top:10px'>"
+                f"<div class='muted'>{g.member_count or 0} members · <a href='/g/{g.id}/live'>live</a></div></div></div>"
+                f"<div class='row' style='margin-top:10px'>{busy}{vc}"
                 f"<span class='chip'>{tracked} watched</span>"
-                f"<span class='chip'>{stored} stored msgs</span>"
+                f"<span class='chip'>{stored:,} stored msgs</span>"
                 f"<span class='chip'>prefix {esc(self.bot.display_prefix(g.id))}</span></div></div>"
             )
-        body = (f"{flash(request)}<h1>{servers} servers · {members:,} members</h1>"
+        find = ("<input id='srvq' type='search' placeholder='Find a server…' autocomplete='off' "
+                "style='max-width:320px;margin-top:10px'>"
+                "<script>document.getElementById('srvq').oninput=function(){var t=this.value.toLowerCase();"
+                "document.querySelectorAll('.srv').forEach(function(c){c.style.display="
+                "c.dataset.name.indexOf(t)>-1?'':'none';});};</script>") if len(guilds) > 6 else ""
+        body = (f"{flash(request)}<h1>{servers} server{'' if servers == 1 else 's'} · {members:,} members</h1>"
+                f"<div class='muted'>{total_hour:,} messages in the last hour · "
+                f"<a href='/live'>watch everything live →</a></div>{find}"
                 f"<div class='grid' style='margin-top:14px'>{''.join(cards)}</div>")
         return layout("Servers", body, user=user)
+
+    def _counts(self, guild_id: int) -> tuple[int, int]:
+        """(watched channels, stored messages), cached for a minute: COUNT(*) on a big corpus isn't free."""
+        hit = self._count_cache.get(guild_id)
+        if hit and time.monotonic() - hit[0] < 60:
+            return hit[1]
+        value = (len(self.bot.storage.tracked(guild_id)), self.bot.storage.corpus_size(guild_id)[0])
+        self._count_cache[guild_id] = (time.monotonic(), value)
+        return value
+
+    def _overview(self, guild: discord.Guild) -> str:
+        act = self.live.activity_summary(guild.id)
+        peak = max(act["buckets"]) or 1
+        spark = "".join(f"<i style='height:{max(4, round(n / peak * 100))}%' title='{n} messages'></i>"
+                        for n in act["buckets"])
+        voice_channels = [v for v in getattr(guild, "voice_channels", []) or [] if getattr(v, "members", None)]
+        in_voice = sum(len(v.members) for v in voice_channels)
+        hours = max(1, round((time.time() - act["since"]) / 3600))
+        span = "24h" if hours >= 24 else f"{hours}h (since SYKE restarted)"
+        stats = (f"<div class='ov'>"
+                 f"<div class='stat'><div class='k'>Last hour</div><div class='v'>{act['hour']:,} "
+                 f"<small>msgs · {act['people_hour']} people</small></div></div>"
+                 f"<div class='stat'><div class='k'>Last {span}</div><div class='v'>{act['day']:,} "
+                 f"<small>msgs · {act['people_day']} people</small></div><div class='spark'>{spark}</div></div>"
+                 f"<div class='stat'><div class='k'>In voice now</div><div class='v'>{in_voice}</div></div>"
+                 f"<div class='stat'><div class='k'>Members</div><div class='v'>{guild.member_count or 0:,}</div></div>"
+                 f"</div>")
+        top = act["channels"][:8]
+        most = top[0][1] if top else 1
+        busy = "".join(
+            f"<a href='/g/{guild.id}/c/{cid}'>#{esc(getattr(guild.get_channel(cid), 'name', cid))}</a>"
+            f"<span class='n'>{n}</span><div class='bar'><i style='width:{round(n / most * 100)}%'></i></div>"
+            for cid, n in top)
+        busy_html = (f"<div class='busy'>{busy}</div>" if busy else
+                     "<div class='muted'>No messages since SYKE started watching.</div>")
+        vc_rows = []
+        for v in voice_channels[:12]:
+            people = "".join(
+                f"<span class='vcu'><img src='{esc(getattr(getattr(m, 'display_avatar', None), 'url', ''))}' "
+                f"alt='' loading='lazy'>{esc(m.display_name)}"
+                + (" 🔇" if getattr(getattr(m, "voice", None), "self_mute", False) else "")
+                + (" 📺" if getattr(getattr(m, "voice", None), "self_stream", False) else "") + "</span>"
+                for m in v.members[:25])
+            vc_rows.append(f"<div class='vc'><b>🔊 {esc(v.name)}</b><div>{people}</div></div>")
+        voice_html = "".join(vc_rows) or "<div class='muted'>Nobody is in voice.</div>"
+        raw = getattr(guild, "members", [])
+        members = [m for m in (raw.values() if isinstance(raw, dict) else raw)
+                   if getattr(m, "joined_at", None) and not getattr(m, "bot", False)]
+        recent = sorted(members, key=lambda m: m.joined_at, reverse=True)[:8]
+        joins = "".join(
+            f"<a class='vcu' href='/g/{guild.id}/u/{m.id}'><img src='{esc(getattr(getattr(m, 'display_avatar', None), 'url', ''))}' "
+            f"alt='' loading='lazy'>{esc(m.display_name)} <span class='muted'>"
+            f"<time data-ts='{int(m.joined_at.timestamp())}' class='rel'></time></span></a>" for m in recent)
+        joins_html = joins or "<div class='muted'>No member list (the Members intent is off).</div>"
+        return (stats + "<div class='ov2'>"
+                f"<div class='card'><h3>Busiest channels <span class='muted'>· last {span}</span></h3>{busy_html}</div>"
+                f"<div class='card'><h3>Voice right now</h3>{voice_html}</div>"
+                f"<div class='card'><h3>Newest members</h3><div>{joins_html}</div></div></div>"
+                "<script>document.querySelectorAll('time.rel').forEach(function(t){var s=Date.now()/1000-t.dataset.ts,"
+                "u=s<3600?Math.round(s/60)+'m':s<86400?Math.round(s/3600)+'h':Math.round(s/86400)+'d';"
+                "t.textContent=u+' ago';});</script>")
 
     async def server(self, request: web.Request) -> web.Response:
         user = self._user(request)
@@ -965,6 +1163,7 @@ class WebDashboard:
         guild = self._guild_or_404(request)
         csrf = self._hidden_csrf(user[0])
         tracked = set(self.bot.storage.tracked(guild.id))
+        per_channel = dict(self.live.activity_summary(guild.id)["channels"])
         rows = []
         for ch in guild.text_channels:
             can = ch.permissions_for(guild.me).read_message_history
@@ -974,8 +1173,9 @@ class WebDashboard:
                          f"<input type='hidden' name='field' value='{'untrack' if ch.id in tracked else 'track'}'>"
                          f"<input type='hidden' name='value' value='{ch.id}'>"
                          f"<button class='btn sm'>{'Untrack' if ch.id in tracked else 'Track'}</button></form>")
+            busy = per_channel.get(ch.id, 0)
             rows.append(f"<tr><td>{star}{link}</td><td class='muted'>{'' if can else 'no access'}</td>"
-                        f"<td>{track_btn}</td></tr>")
+                        f"<td class='act'>{f'{busy} today' if busy else ''}</td><td>{track_btn}</td></tr>")
         prefix = esc(self.bot.display_prefix(guild.id))
         tz = esc(self.bot.storage.timezone(guild.id) or self.settings.default_timezone)
         settings_form = (
@@ -1006,9 +1206,11 @@ class WebDashboard:
             f"<a href='/g/{guild.id}/alts'>🔎 Alt &amp; raid scan</a> · "
             f"<a href='/g/{guild.id}/memory'>🧠 Memory</a> · "
             f"<a href='/g/{guild.id}/strip'>💸 The Strip</a> · "
-            f"<a href='/g/{guild.id}/announce'>📣 Announce features</a></div>"
-            f"<div class='grid' style='margin-top:14px'>{settings_form}{mod}{danger}</div>"
-            f"<h2>Channels</h2><table>{''.join(rows) or '<tr><td>No text channels</td></tr>'}</table>"
+            f"<a href='/g/{guild.id}/announce'>📣 Announce features</a> · "
+            f"<a href='/g/{guild.id}/live'><b>● Live feed</b></a></div>"
+            f"{self._overview(guild)}"
+            f"<h2>Channels</h2><table class='chtable'>{''.join(rows) or '<tr><td>No text channels</td></tr>'}</table>"
+            f"<h2>Controls</h2><div class='grid'>{settings_form}{mod}{danger}</div>"
         )
         return layout(guild.name, body, user=user)
 
@@ -1142,11 +1344,15 @@ class WebDashboard:
                   f"has:image|video|audio|file|link|embed|sticker|gif · before:YYYY-MM-DD · after:YYYY-MM-DD'></form>")
         tabs = (f"<div class='ch-tabs'>"
                 f"<a class='{'on' if active == 'chat' else ''}' href='{base}'>Chat</a>"
-                f"<a class='{'on' if active == 'media' else ''}' href='{base}/media'>Media</a></div>")
+                f"<a class='{'on' if active == 'media' else ''}' href='{base}/media'>Media</a>"
+                f"<a href='/g/{guild.id}/live'>Live feed</a></div>")
+        tools = ("" if active != "chat" else
+                 "<span class='ch-tools'><span id='live-dot' class='dot-live' title='Connecting…'></span>"
+                 "<button id='hidedel' class='btn sm' type='button'>Hide deleted</button></span>")
         burger = ("<button class='dc-burger' type='button' aria-label='Channels' "
                   "onclick=\"this.closest('.dc').classList.toggle('show-side')\">☰</button>")
         return (f"<div class='dc-head'>{burger}<span class='hash'>#</span> "
-                f"{esc(channel.name)}{topic_html}{search}{tabs}</div>")
+                f"{esc(channel.name)}{topic_html}{search}{tabs}{tools}</div>")
 
     def _highlight(self, text: str, query: str) -> str:
         safe = esc(text)
@@ -1298,6 +1504,22 @@ class WebDashboard:
             blocks.append(f"<div class='fwd'><div class='fwd-tag'>↪ Forwarded</div>{body}</div>")
         return "".join(blocks)
 
+    @staticmethod
+    def _emoji_html(e) -> str:
+        if getattr(e, "id", None):
+            url = getattr(e, "url", "") or f"https://cdn.discordapp.com/emojis/{e.id}.webp?size=48"
+            return f"<img class='ie' src='{esc(url)}' alt='{esc(getattr(e, 'name', ''))}'>"
+        return esc(str(e))
+
+    def _reactions_bar(self, m) -> str:
+        """The reaction chips under a message (an empty bar when there are none, so live updates can fill it)."""
+        rx = []
+        for r in getattr(m, "reactions", []) or []:
+            mine = " me" if getattr(r, "me", False) else ""
+            rx.append(f"<button type='button' class='rx rxc{mine}' title='See who reacted'>"
+                      f"{self._emoji_html(r.emoji)} {r.count}</button>")
+        return f"<div class='rxs'>{''.join(rx)}</div>" if rx else "<div class='rxs empty'></div>"
+
     def _one_message(self, m: discord.Message, prev: discord.Message | None,
                      refs: dict | None = None, deleted: set | None = None) -> str:
         author = m.author
@@ -1351,7 +1573,8 @@ class WebDashboard:
         text_html = render_content(raw, guild, names)
         # Discord shows a message that's only custom emoji at jumbo size.
         only_emoji = bool(raw.strip()) and not _TOKEN.sub("", raw).strip() and bool(_EMOJI.search(raw))
-        text = f"<div class='text{' jumbo' if only_emoji else ''}'>{text_html}</div>" if text_html else ""
+        edited = " <span class='edited' title='Edited'>(edited)</span>" if getattr(m, "edited_at", None) else ""
+        text = f"<div class='text{' jumbo' if only_emoji else ''}'>{text_html}{edited}</div>" if text_html else ""
         stickers = []
         for s in getattr(m, "stickers", []) or []:
             url = getattr(s, "url", None)
@@ -1363,15 +1586,7 @@ class WebDashboard:
         embeds = [h for h in embeds if h]
         components_html = self._components_html(getattr(m, "components", []) or [], guild, names)
         forward_html = self._forward_html(m, guild)
-        rx = []
-        for r in getattr(m, "reactions", []):
-            e = r.emoji
-            if getattr(e, "id", None):
-                glyph = f"<img class='ie' src='{esc(getattr(e, 'url', ''))}' alt='{esc(getattr(e, 'name', ''))}'>"
-            else:
-                glyph = esc(str(e))
-            rx.append(f"<button type='button' class='rx rxc' title='See who reacted'>{glyph} {r.count}</button>")
-        reactions = f"<div class='rxs'>{''.join(rx)}</div>" if rx else ""
+        reactions = self._reactions_bar(m)
         body = text
         if (not text and not stickers and not m.attachments and not m.embeds
                 and not components_html and not forward_html):
@@ -1380,12 +1595,27 @@ class WebDashboard:
         head = ("" if same else
                 f"<div class='head'><a class='name' href='{profile}'{name_style}>{esc(author.display_name)}{app}</a>"
                 f"<time class='ts' data-ts='{ts}'></time></div>")
+
         av = f"<a class='av' href='{profile}'><img src='{esc(avatar)}' alt='' loading='lazy'></a>"
         return (f"<div class='m{' grouped' if same else ''}' data-mid='{m.id}'>{av}"
                 f"<div class='content'>{reply}{head}{body}{''.join(stickers)}"
                 f"{''.join(atts)}{''.join(embeds)}{components_html}{forward_html}{reactions}</div></div>")
 
-    async def _messages_html(self, channel, before: int | None = None, around: int | None = None) -> str:
+    def _from_cache(self, channel_id: int) -> list | None:
+        """The newest page from discord.py's message cache, if it holds a full page for this channel.
+
+        Everything the gateway delivered since SYKE started is cached in order, so the newest cached messages
+        of a channel are its newest messages, with no gaps."""
+        cached = getattr(self.bot, "cached_messages", None)
+        if not cached:
+            return None
+        mine = [m for m in cached if getattr(getattr(m, "channel", None), "id", None) == channel_id]
+        if len(mine) < MESSAGES_SHOWN:
+            return None
+        return sorted(mine, key=lambda m: m.id)[-MESSAGES_SHOWN:]
+
+    async def _messages_html(self, channel, before: int | None = None, around: int | None = None,
+                             after: int | None = None) -> str:
         if not channel.permissions_for(channel.guild.me).read_message_history:
             if before is not None:
                 return ""  # Can't page a channel we can't read.
@@ -1398,16 +1628,25 @@ class WebDashboard:
                             f"<div class='head'><span class='name'>user {author_id}</span></div>"
                             f"<div class='text'>{esc(content)}</div></div></div>")
             return "".join(rows)
-        kwargs = {"limit": MESSAGES_SHOWN}
-        if around is not None:
-            kwargs["around"] = discord.Object(id=around)   # Discord-style "jump to" window
-        elif before is not None:
-            kwargs["before"] = discord.Object(id=before)
-        try:
-            collected = [m async for m in channel.history(**kwargs)]
-        except discord.HTTPException:
-            return "" if before is not None else "<div class='note err'>Couldn't read live history just now.</div>"
-        collected.reverse()
+        collected = None
+        if before is None and around is None and after is None:
+            collected = self._from_cache(channel.id)        # no API call when SYKE already saw the latest page
+        if collected is None:
+            kwargs = {"limit": MESSAGES_SHOWN}
+            if around is not None:
+                kwargs["around"] = discord.Object(id=around)   # Discord-style "jump to" window
+            elif before is not None:
+                kwargs["before"] = discord.Object(id=before)
+            elif after is not None:
+                kwargs["after"] = discord.Object(id=after)
+            try:
+                collected = [m async for m in channel.history(**kwargs)]
+            except discord.HTTPException:
+                return "" if (before or after) is not None else \
+                    "<div class='note err'>Couldn't read live history just now.</div>"
+            collected.sort(key=lambda m: m.id)
+        if after is not None:
+            return "".join(self._one_message(m, None, {}, set()) for m in collected)
         if not collected:
             return "" if before is not None else "<div class='dc-empty'>No messages yet.</div>"
         refs, deleted = await self._resolve_refs(channel, collected)
@@ -1525,20 +1764,48 @@ class WebDashboard:
                "function append(h){var b=bot(),n=nodeOf(h);if(!n)return;"
                "if(pane.querySelector(\".m[data-mid='\"+n.dataset.mid+\"']\"))return;"
                "pane.appendChild(n);stamp(n);if(b)pane.scrollTop=pane.scrollHeight;}"
-               "function editM(id,h){var e=pane.querySelector(\".m[data-mid='\"+id+\"']\"),n=nodeOf(h);"
-               "if(e&&n){e.replaceWith(n);stamp(n);}}"
-               "function delM(id){var e=pane.querySelector(\".m[data-mid='\"+id+\"']\");if(e)e.remove();}"
+               "function mOf(id){return pane.querySelector(\".m[data-mid='\"+id+\"']\");}"
+               # Edits keep what it said before, one click away.
+               "function editM(id,h,was){var e=mOf(id),n=nodeOf(h);if(!e||!n)return;"
+               "var hist=e.querySelector('.hist'),t=e.querySelector('.text');"
+               "var old=(was!==undefined&&was!==null)?document.createTextNode(was).textContent:(t?t.innerText.replace(/ ?\\(edited\\)$/,''):'');"
+               "var box=hist||document.createElement('details');box.className='hist';"
+               "if(!hist)box.innerHTML='<summary>edit history</summary>';"
+               "var row=document.createElement('div');row.className='hv';row.textContent=old||'(no text)';box.appendChild(row);"
+               "var c=n.querySelector('.content');if(c&&old)c.appendChild(box);"
+               "if(e.classList.contains('grouped')){n.classList.add('grouped');var hd=n.querySelector('.head');if(hd)hd.remove();}"
+               "e.replaceWith(n);stamp(n);}"
+               # Deleted messages stay on screen, marked, unless 'Hide deleted' is on.
+               "function delM(id){var e=mOf(id);if(!e)return;e.classList.add('deleted');"
+               "if(!e.querySelector('.delt')){var b=document.createElement('span');b.className='delt';"
+               "b.textContent='deleted '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});"
+               "var c=e.querySelector('.content');if(c)c.insertBefore(b,c.firstChild);}}"
+               "function rxM(id,h){var e=mOf(id);if(!e)return;var c=e.querySelector('.content'),o=e.querySelector('.rxs'),"
+               "n=nodeOf(h);if(!c||!n)return;if(o){var p=o.querySelector('.rx-panel');o.replaceWith(n);"
+               "if(p)n.appendChild(p);}else c.appendChild(n);n.classList.add('pulse');}"
+               "var hideDel=false;try{hideDel=localStorage.getItem('syke.hideDeleted')==='1';}catch(e){}"
+               "function applyHide(){document.body.classList.toggle('hide-deleted',hideDel);"
+               "var b=document.getElementById('hidedel');if(b)b.textContent=hideDel?'Show deleted':'Hide deleted';}"
+               "applyHide();var hd=document.getElementById('hidedel');if(hd)hd.onclick=function(){hideDel=!hideDel;"
+               "try{localStorage.setItem('syke.hideDeleted',hideDel?'1':'0');}catch(e){}applyHide();};"
                "var ws,pt;"
-               "function poll(){if(pt)return;pt=setInterval(async function(){if(!bot())return;try{"
-               "var r=await fetch(location.pathname+'/messages');if(!r.ok)return;var h=await r.text();"
-               "pane.innerHTML=h;stamp(pane);pane.scrollTop=pane.scrollHeight;}catch(e){}},5000);}"
+               # Fallback while the socket is down: fetch only what's newer than the last message shown.
+               "function poll(){if(pt)return;pt=setInterval(async function(){if(document.hidden)return;"
+               "var all=pane.querySelectorAll('.m[data-mid]'),last=all.length?all[all.length-1].dataset.mid:null;"
+               "try{var r=await fetch(location.pathname+'/messages'+(last?'?after='+last:''));if(!r.ok)return;"
+               "var h=await r.text();var t=document.createElement('div');t.innerHTML=h;"
+               "Array.from(t.children).forEach(function(n){if(n.dataset&&n.dataset.mid)append(n.outerHTML);});}"
+               "catch(e){}},5000);}"
                "function nopoll(){if(pt){clearInterval(pt);pt=null;}}"
                "function connect(){try{ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')"
                "+location.host+location.pathname+'/ws');}catch(e){poll();return;}"
-               "ws.onopen=function(){nopoll();};"
+               "function dot(on){var d=document.getElementById('live-dot');if(d){d.classList.toggle('on',on);"
+               "d.title=on?'Live':'Reconnecting… (checking every 5s)';}}"
+               "ws.onopen=function(){nopoll();dot(true);};"
                "ws.onmessage=function(ev){var d;try{d=JSON.parse(ev.data);}catch(e){return;}"
-               "if(d.t==='new')append(d.html);else if(d.t==='edit')editM(d.mid,d.html);else if(d.t==='del')delM(d.mid);};"
-               "ws.onclose=function(){poll();setTimeout(connect,4000);};"
+               "if(d.t==='new')append(d.html);else if(d.t==='edit')editM(d.mid,d.html,d.before);"
+               "else if(d.t==='del')delM(d.mid);else if(d.t==='rx')rxM(d.mid,d.html);};"
+               "ws.onclose=function(){dot(false);poll();setTimeout(connect,4000);};"
                "ws.onerror=function(){try{ws.close();}catch(e){}};}"
                "connect();"
                # Scroll up to load older history, Discord-style, keeping your place.
@@ -2288,7 +2555,9 @@ class WebDashboard:
         channel = self._channel_or_404(request, guild)
         before_raw = request.query.get("before")
         before = int(before_raw) if before_raw and before_raw.isdigit() else None
-        return web.Response(text=await self._messages_html(channel, before), content_type="text/html")
+        after_raw = request.query.get("after")
+        after = int(after_raw) if after_raw and after_raw.isdigit() else None
+        return web.Response(text=await self._messages_html(channel, before, after=after), content_type="text/html")
 
     async def message_reactions(self, request: web.Request) -> web.Response:
         """Who reacted to one message, grouped by emoji."""
@@ -2484,28 +2753,77 @@ class WebDashboard:
         except discord.HTTPException:
             return {}, set()
 
-    async def _on_new_message(self, message: discord.Message) -> None:
-        if message.guild is None or message.channel.id not in self._subs:
-            return
-        with contextlib.suppress(Exception):
-            refs, deleted = await self._live_refs(message)
-            await self._broadcast(message.channel.id,
-                                  {"t": "new", "mid": str(message.id),
-                                   "html": self._one_message(message, None, refs, deleted)})
+    # Live monitor (every message, edit, delete, reaction, join and voice change)
 
-    async def _on_edit_message(self, before: discord.Message, after: discord.Message) -> None:
-        if after.guild is None or after.channel.id not in self._subs:
-            return
-        with contextlib.suppress(Exception):
-            refs, deleted = await self._live_refs(after)
-            await self._broadcast(after.channel.id,
-                                  {"t": "edit", "mid": str(after.id),
-                                   "html": self._one_message(after, None, refs, deleted)})
+    async def live_ws(self, request: web.Request) -> web.WebSocketResponse:
+        if self._user(request) is None:
+            raise web.HTTPUnauthorized(text="login required")
+        scope = self._guild_or_404(request).id if "gid" in request.match_info else 0
+        ws = web.WebSocketResponse(heartbeat=30, compress=True)
+        await ws.prepare(request)
+        self.live.feeds[scope].add(ws)
+        try:
+            async for _ in ws:
+                pass
+        finally:
+            self.live.feeds[scope].discard(ws)
+        return ws
 
-    async def _on_delete_message(self, message: discord.Message) -> None:
-        if message.guild is None or message.channel.id not in self._subs:
-            return
-        await self._broadcast(message.channel.id, {"t": "del", "mid": str(message.id)})
+    def _backfill(self, guild_id: int | None, limit: int = 60) -> str:
+        """The latest messages SYKE has seen in this scope, so the feed isn't empty on open."""
+        items = []
+        for mid in reversed(self.live.recent):
+            seen = self.live.recent[mid]
+            if guild_id and seen.guild_id != guild_id:
+                continue
+            guild = self.bot.get_guild(seen.guild_id)
+            if guild is None:
+                continue
+            message = self.live.cached(mid)
+            body = self._one_message(message, None, {}, set()) if message is not None else self.live._quote(seen)
+            item = self.live.item("msg", guild, seen.channel_id, body, icon="💬", label="Message",
+                                  message_id=mid, user_id=seen.author_id)["html"]
+            items.append(item.replace(f"data-ts='{int(time.time())}'", f"data-ts='{int(seen.created)}'"))
+            if len(items) >= limit:
+                break
+        return "".join(items)
+
+    async def live_page(self, request: web.Request) -> web.Response:
+        user = self._user(request)
+        if user is None:
+            raise web.HTTPFound("/login")
+        guild = self._guild_or_404(request) if "gid" in request.match_info else None
+        if guild is not None:
+            title = f"Live · {guild.name}"
+            options = "".join(f"<option value='{c.id}'>#{esc(c.name)}</option>"
+                              for c in guild.text_channels)
+            picker = f"<select id='fsel' data-attr='c'><option value=''>All channels</option>{options}</select>"
+            back = f"<a href='/g/{guild.id}'>← {esc(guild.name)}</a> · <a href='/live'>All servers</a>"
+        else:
+            title = "Live · all servers"
+            options = "".join(f"<option value='{g.id}'>{esc(g.name)}</option>"
+                              for g in sorted(self.bot.guilds, key=lambda g: g.name.lower()))
+            picker = f"<select id='fsel' data-attr='g'><option value=''>All servers</option>{options}</select>"
+            back = "<a href='/'>← Servers</a>"
+        kinds = [("msg", "💬 Messages"), ("edit", "✏️ Edits"), ("del", "🗑️ Deletes"), ("rx", "✨ Reactions"),
+                 ("join", "📥 Joins"), ("leave", "📤 Leaves"), ("voice", "🎙️ Voice")]
+        chips = "".join(f"<label class='chip'><input type='checkbox' value='{k}' checked> {esc(t)}</label>"
+                        for k, t in kinds)
+        body = (
+            f"<div class='live{' scoped' if guild is not None else ''}'><div class='muted'>{back}</div>"
+            f"<div class='live-top'><h1><span id='live-dot' class='dot-live'></span> {esc(title)}</h1>"
+            "<span class='live-rate muted' id='rate'></span></div>"
+            f"<div class='live-bar'>{picker}"
+            "<input id='fq' type='search' placeholder='Filter by text or name…' autocomplete='off'>"
+            "<button id='pause' class='btn sm' type='button'>Pause</button>"
+            "<button id='clear' class='btn sm' type='button'>Clear</button></div>"
+            f"<div class='live-kinds'>{chips}</div>"
+            f"<div id='feed' class='feed'>{self._backfill(guild.id if guild else None)}</div>"
+            "<div id='feed-empty' class='note'>Waiting for activity… new messages, edits, deletes, reactions, "
+            "joins and voice changes appear here the moment they happen.</div></div>"
+            "<script>" + LIVE_JS + "</script>"
+        )
+        return layout(title, body, user=user)
 
     # Actions
 

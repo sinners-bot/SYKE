@@ -181,7 +181,7 @@ async def test_owner_sees_server_list(dash):
         cl.session.cookie_jar.update_cookies(_session_cookie())
         resp = await cl.get("/")
         body = await resp.text()
-        assert "Test Server" in body and "1 servers" in body
+        assert "Test Server" in body and "1 server ·" in body
 
 
 async def test_server_page_and_channel_links(dash):
@@ -1047,10 +1047,10 @@ async def test_live_websocket_pushes_messages(dash):
         msg = types.SimpleNamespace(id=777, guild=guild, channel=ch, author=author, content="live now",
             clean_content="live now", created_at=datetime(2026, 11, 13, tzinfo=timezone.utc),
             reference=None, attachments=[], embeds=[], stickers=[], reactions=[])
-        await web._on_new_message(msg)
+        await web.live.on_message(msg)
         data = await asyncio.wait_for(ws.receive_json(), timeout=2)
         assert data["t"] == "new" and data["mid"] == "777" and "live now" in data["html"]
-        await web._on_delete_message(msg)
+        await web.live.on_raw_message_delete(types.SimpleNamespace(guild_id=guild.id, channel_id=10, message_id=777))
         gone = await asyncio.wait_for(ws.receive_json(), timeout=2)
         assert gone["t"] == "del" and gone["mid"] == "777"
         await ws.close()

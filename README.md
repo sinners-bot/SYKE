@@ -302,6 +302,16 @@ and is **off** unless you set the four variables below. Login is Discord OAuth, 
 in `SYKE_OWNER_IDS` can get in; everyone else is turned away after signing in.
 
 What you can do from it:
+- **Watch everything live** (`/live` for every server, or a server's **Live feed**): one stream of
+  every message, edit (before and after), delete (with what it said), reaction, member join and leave,
+  and voice join, leave, move and stream. Filter by kind, channel or server and text; pause it to read
+  (new events are held, not lost). Opens with the latest messages SYKE has seen.
+- **Read chats live**, Discord-style: new messages, edits and reactions appear instantly. Deleted
+  messages stay on screen marked **Deleted** (or hide them), and edited ones keep their edit history.
+  Click a reaction to see who reacted. A green dot shows the live connection; if it drops, the page
+  fetches only new messages until it's back.
+- **See a server at a glance**: messages and active people in the last hour and 24 hours, an hourly
+  chart, the busiest channels, who's in voice right now (muted, streaming), and the newest members.
 - **Browse** every server, its channels, and recent messages in each channel.
 - **Send messages as SYKE** in any channel it can talk in.
 - **Moderate**: timeout, restrict, kick, ban (and the reverses) by member ID. Each action is logged
@@ -322,6 +332,10 @@ What you can do from it:
    - `SYKE_WEB_BASE_URL` = the public URL of the service
 3. On Railway, give the service a public domain: **Settings → Networking → Generate Domain**. Use that
    URL (with `https://`) for `SYKE_WEB_BASE_URL` and the OAuth redirect. Railway sets `PORT` itself.
+
+Pages and fragments are gzip-compressed, the newest page of a chat comes straight from SYKE's own
+message cache when it holds it (no Discord API call), and nothing live is rendered unless someone is
+watching. Activity numbers count from when SYKE last started.
 
 Then open the URL and log in with Discord. Security: sessions are signed cookies (HMAC), every action
 needs a CSRF token tied to your account, and anything shown from Discord is HTML-escaped.
