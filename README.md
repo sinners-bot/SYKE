@@ -170,7 +170,7 @@ See the whole setup at a glance with `!automod`.
 
 | Command | Who | What it does |
 | --- | --- | --- |
-| `!filter on\|off` · `!filter add <word>` · `!filter remove <word>` | Manage Server | **Word/slur blacklist** that auto-deletes matches. Catches whole words, leetspeak (`sh1t`), and spaced-out or embedded long words. `!filter action delete\|warn\|timeout [10m]` sets what happens, `!filter clear` empties it |
+| `!filter on\|off` · `!filter add <word>` · `!filter remove <word>` | Manage Server | **Word/slur blacklist** that auto-deletes matches. Catches whole words and the usual dodges instantly: stretched letters (`LUCCIAAA`), leetspeak (`sh1t`, `1ucia`), accented, fullwidth or Cyrillic look-alike letters, invisible characters, and spaced-out or dotted words (`l.u.c.i.a`); blocked words of 5+ letters are caught inside longer words too. Close misspellings (`lucai`, `luciya`) go to the AI, which tells deliberate dodges from real words like `lucid` (cached, at most 20 checks a minute per server; `!filter smart on\|off`). `!filter test <text>` shows what would happen. `!filter action delete\|warn\|timeout [10m]` sets what happens, `!filter clear` empties it |
 | `!automod toxic <#channel> [threshold]` | Manage Server | **Flag** borderline-toxic messages (using SYKE's toxicity scoring) to a review channel **instead of deleting**, so mods decide. Threshold 1.0 (strict) – 3.0 (loose) |
 | `!links invites on\|off` | Manage Server | Auto-remove Discord server invites from non-mods |
 | `!links urls on\|off` · `!links allow <domain>` | Manage Server | Auto-remove links not on the allowlist. `!links allow youtube.com` whitelists a domain |

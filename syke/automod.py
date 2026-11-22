@@ -8,9 +8,12 @@ the server marks as exempt — are never caught. Every action is a numbered case
 from __future__ import annotations
 
 import contextlib
+import functools
 import logging
 import re
+import unicodedata
 import time
+import types
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -19,6 +22,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from . import ai
 from .models import Msg
 from .moderation import (
     BRAND,
@@ -46,15 +50,26 @@ MAX_WORDS = 300
 MAX_DOMAINS = 100
 WORD_LIMIT = 60
 DOMAIN_LIMIT = 80
+AI_PER_MINUTE = 20          # bypass checks sent to the AI per server per minute
+AI_CACHE = 2000
+
+BYPASS_PROMPT = """You moderate a Discord server's word filter. The server blocks these words:
+{words}
+
+Decide whether the message below is an attempt to write one of the blocked words while dodging the filter:
+misspelling it on purpose, swapping or adding letters, using numbers or symbols for letters, splitting it up,
+or spelling it phonetically. Ordinary different words that only look similar (for example 'lucid' or 'lucky'
+when 'lucia' is blocked) are NOT attempts. When unsure, say no.
+
+Reply with JSON only: {{"bypass": true or false, "word": "<the blocked word it is trying to write, or empty>"}}"""
 
 INVITE_RE = re.compile(r"\b(?:discord\.gg|discord(?:app)?\.com/invite|discord\.me|dsc\.gg|disboard\.org/server/join)/\S+",
                        re.IGNORECASE)
 URL_RE = re.compile(r"\b(?:https?://|www\.)[^\s<>]+", re.IGNORECASE)
 DOMAIN_RE = re.compile(r"https?://([^/\s:]+)", re.IGNORECASE)
-LEET = str.maketrans({"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s", "!": "i"})
 
 DEFAULTS = {
-    "filter_on": False, "words": [], "filter_action": "delete", "filter_timeout": 600,
+    "filter_on": False, "words": [], "filter_action": "delete", "filter_timeout": 600, "filter_ai": True,
     "tox_flag": False, "tox_threshold": 1.6, "review_channel": None,
     "antiinvite": False, "antilink": False, "allow_domains": [], "link_action": "delete",
     "antispam": False, "flood_count": 6, "flood_seconds": 5, "dup_count": 4,
@@ -76,34 +91,135 @@ def cfg(config: dict, key: str):
     return config.get(key, DEFAULTS[key])
 
 
+# Bypass-proof matching. Everything is folded to a "skeleton" before comparing: accents and fullwidth
+# letters are flattened, look-alike Cyrillic/Greek letters become Latin, leetspeak becomes letters, and
+# letters that people swap for each other (l/1/i, u/v) share one symbol. Then a blocked word becomes a
+# pattern where every letter may repeat, so 'lucia' also catches 'LUCCIAAA', 'luuucia' and '1ucia'.
+CONFUSABLES = str.maketrans({
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x", "і": "i", "ј": "j", "ѕ": "s",
+    "ԁ": "d", "һ": "h", "к": "k", "м": "m", "н": "h", "т": "t", "в": "b", "г": "r", "п": "n", "ɡ": "g",
+    "α": "a", "β": "b", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "ο": "o", "ρ": "p", "τ": "t", "υ": "u",
+    "χ": "x", "ɑ": "a", "ı": "i", "ł": "l", "ø": "o", "đ": "d", "ß": "ss", "æ": "ae", "œ": "oe",
+})
+SKELETON = str.maketrans({
+    "0": "o", "1": "i", "!": "i", "|": "i", "l": "i", "3": "e", "4": "a", "@": "a", "5": "s", "$": "s",
+    "7": "t", "+": "t", "8": "b", "9": "g", "6": "g", "2": "z", "(": "c", "v": "u", "€": "e", "£": "e",
+})
+INVISIBLE = re.compile(r"[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e\u200b-\u200f\u202a-\u202e"
+                       r"\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff]")
+# Characters that may sit inside a word only as a disguise (so 'l.u.c.i.a' is one word).
+JOINERS = re.compile(r"(?<=[^\W_])[\s.\-_*~'\",:;/\\^`]+(?=[^\W_])")
+
+
+def fold(text: str) -> str:
+    """Lowercase, drop invisible characters and accents, map look-alikes to plain letters."""
+    text = INVISIBLE.sub("", text)
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return text.lower().translate(CONFUSABLES)
+
+
+def skeleton(text: str) -> str:
+    return re.sub(r"[^a-z]", "", fold(text).translate(SKELETON))
+
+
+def squeeze(text: str) -> str:
+    """Collapse repeated letters: 'luccciaaa' -> 'lucia'."""
+    return re.sub(r"(.)\1+", r"\1", text)
+
+
 def normalize(text: str) -> str:
-    """Lowercase, de-leet and strip non-letters, so 'f.u_c k' and 'fu0ck' still match 'fuck'."""
-    return re.sub(r"[^a-z0-9]", "", text.lower().translate(LEET))
+    """Folded, de-leeted, letters only (so 'f.u_c k' and 'fu0ck' still match 'fuck')."""
+    return skeleton(text)
+
+
+@functools.lru_cache(maxsize=2048)
+def word_pattern(word: str) -> re.Pattern | None:
+    """'lucia' -> i{1,}u{1,}c{1,}i{1,}a{1,} : every letter may be stretched, none dropped ('ass' keeps s{2,})."""
+    sk = skeleton(word)
+    if not sk:
+        return None
+    return re.compile("".join(f"{re.escape(run[0])}{{{len(run)},}}" for run, _ in re.findall(r"((.)\2*)", sk)))
+
+
+def _tokens(content: str) -> list[str]:
+    """Words as written, with disguise characters inside a word removed, plus spaced-out letters joined."""
+    folded = fold(content)
+    joined = JOINERS.sub("", folded)
+    words = re.findall(r"[^\s]+", folded) + re.findall(r"[^\s]+", joined)
+    # 'a s s' / 'a.s.s': runs of single characters become one word.
+    singles = re.findall(r"(?:(?<!\S)\S(?:[\s.\-_*]+|$)){2,}", folded)
+    words += [re.sub(r"[\s.\-_*]", "", run) for run in singles]
+    return [w for w in (skeleton(t) for t in words) if w]
 
 
 def filter_hit(content: str, words: list[str]) -> str | None:
     """Return the blacklisted word that `content` triggers, or None.
 
-    Matches whole words (so 'ass' never fires inside 'class'), de-leetspeak ('fu0ck' → 'fuck'),
-    and long blacklisted words embedded or spaced out ('b i t c h'). Embedded matching is limited to
-    5+ character words to avoid false positives on short ones.
+    Matches whole words (so 'ass' never fires inside 'class'), after undoing the usual disguises:
+    stretched letters ('LUCCIAAA'), leetspeak ('1ucia', 'sh1t'), look-alike or accented letters,
+    invisible characters, and letters split up by spaces or dots ('l.u.c.i.a', 'b i t c h').
+    Blocked words of 5+ letters are also caught inside longer words ('lucias', 'xxluciaxx').
     """
     if not words:
         return None
-    lowered = content.lower()
-    collapsed = normalize(content)                                   # de-leeted, letters only
-    tokens = {normalize(t) for t in re.findall(r"[a-z0-9']+", lowered)}
-    tokens.discard("")
+    tokens = set(_tokens(content))
+    stream = skeleton(content)
+    lowered = fold(content)
     for word in words:
         w = word.lower().strip()
         if not w:
             continue
-        nw = normalize(w)
         if " " in w:
-            if w in lowered or (nw and nw in collapsed):
+            nw = skeleton(w)
+            if w in lowered or (nw and (nw in stream or (word_pattern(w) and word_pattern(w).search(stream)))):
                 return word
-        elif nw in tokens or (len(nw) >= 5 and nw in collapsed):
+            continue
+        pattern = word_pattern(w)
+        if pattern is None:
+            continue
+        if any(pattern.fullmatch(t) for t in tokens):
             return word
+        if len(skeleton(w)) >= 5 and pattern.search(stream):
+            return word
+    return None
+
+
+def _distance(a: str, b: str, limit: int) -> int:
+    """Edit distance (with swaps), stopping early once it passes `limit`."""
+    if abs(len(a) - len(b)) > limit:
+        return limit + 1
+    prev2, prev = None, list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb))
+            if prev2 is not None and i > 1 and j > 1 and ca == b[j - 2] and a[i - 2] == cb:
+                cur[j] = min(cur[j], prev2[j - 2] + 1)
+        if min(cur) > limit:
+            return limit + 1
+        prev2, prev = prev, cur
+    return prev[-1]
+
+
+def near_miss(content: str, words: list[str]) -> str | None:
+    """A blocked word that `content` comes suspiciously close to without matching (for the AI to judge).
+
+    'lucai', 'luciya', 'lusia' for 'lucia'. Short words (under 4 letters) are skipped: too many real words
+    sit one letter away from them.
+    """
+    tokens = {squeeze(t) for t in _tokens(content)}
+    for word in words:
+        w = squeeze(skeleton(word))
+        if len(w) < 4 or " " in word.strip():
+            continue
+        limit = 1 if len(w) < 6 else 2
+        for t in tokens:
+            if t == w or len(t) < 3:
+                continue
+            gap = _distance(t, w, limit)
+            if gap <= limit and (gap == 1 or t[0] == w[0]):
+                return word
     return None
 
 
@@ -129,6 +245,8 @@ class AutoMod(commands.Cog, name="Automod"):
         self.bot = bot
         self._recent: dict[tuple[int, int], deque] = defaultdict(lambda: deque(maxlen=25))
         self._noticed: dict[tuple[int, int], float] = {}
+        self._ai_seen: dict[tuple[int, str], str] = {}
+        self._ai_calls: dict[int, deque] = defaultdict(deque)
 
     def p(self, ctx: commands.Context) -> str:
         return self.bot.display_prefix(ctx.guild.id)
@@ -191,6 +309,44 @@ class AutoMod(commands.Cog, name="Automod"):
         if len(text) >= cfg(config, "caps_len") and caps_ratio(text) >= 0.8:
             return Hit("spam", "all-caps spam", "timeout", timeout)
         return None
+
+    async def ai_bypass(self, message: discord.Message, config: dict) -> Hit | None:
+        """Close misspellings of a blocked word ('lucai', 'luc1ya') go to the AI to judge."""
+        words = cfg(config, "words")
+        if not (cfg(config, "filter_on") and cfg(config, "filter_ai") and words) or \
+                self.bot.settings.ai_provider == "none":
+            return None
+        content = message.content or ""
+        word = near_miss(content, words)
+        if word is None:
+            return None
+        key = (message.guild.id, skeleton(content)[:300])
+        verdict = self._ai_seen.get(key)
+        if verdict is None:
+            now = time.monotonic()
+            calls = self._ai_calls[message.guild.id]
+            while calls and now - calls[0] > 60:
+                calls.popleft()
+            if len(calls) >= AI_PER_MINUTE:
+                return None
+            calls.append(now)
+            verdict = ""
+            try:
+                listed = "\n".join(f"- {w}" for w in words[:150])
+                data = await ai._complete(self.bot.settings, BYPASS_PROMPT.format(words=listed),
+                                          f"Message: {content[:500]}", 0.0, 10)
+                if data.get("bypass") is True:
+                    named = str(data.get("word") or "").lower().strip()
+                    verdict = named if named in {w.lower() for w in words} else word
+            except Exception as error:  # an AI outage must never block chat
+                log.info("automod AI check failed: %s", error)
+                return None
+            if len(self._ai_seen) >= AI_CACHE:
+                self._ai_seen.pop(next(iter(self._ai_seen)))
+            self._ai_seen[key] = verdict
+        if not verdict:
+            return None
+        return Hit("filter", "blocked word (filter bypass)", cfg(config, "filter_action"), cfg(config, "filter_timeout"))
 
     async def act(self, message: discord.Message, config: dict, hit: Hit) -> None:
         guild, member = message.guild, message.author
@@ -269,6 +425,8 @@ class AutoMod(commands.Cog, name="Automod"):
         if self.exempt(message.author, config):
             return
         hit = self.check(message, config)
+        if hit is None:
+            hit = await self.ai_bypass(message, config)
         if hit is not None:
             await self.act(message, config, hit)
         elif cfg(config, "tox_flag"):
@@ -361,9 +519,14 @@ class AutoMod(commands.Cog, name="Automod"):
         body = (f"**Status:** {'🟢 on' if cfg(c, 'filter_on') else '⚪ off'} · "
                 f"**Action:** {cfg(c, 'filter_action')}"
                 + (f" ({human_duration(cfg(c, 'filter_timeout'))})" if cfg(c, 'filter_action') == 'timeout' else "")
+                + f"\n**Bypass detection:** stretched letters, leetspeak, look-alike letters and split-up words "
+                f"are always caught; AI check for close misspellings: "
+                + ("🟢 on" if cfg(c, "filter_ai") and self.bot.settings.ai_provider != "none" else
+                   "⚪ off" if self.bot.settings.ai_provider != "none" else "⚪ off (no AI key set)")
                 + f"\n**Words ({len(words)}):** {shown}{more}\n\n"
                 f"`{self.p(ctx)}filter on|off` · `{self.p(ctx)}filter add <word>` · `{self.p(ctx)}filter remove <word>` · "
-                f"`{self.p(ctx)}filter action delete|warn|timeout [10m]` · `{self.p(ctx)}filter clear`")
+                f"`{self.p(ctx)}filter action delete|warn|timeout [10m]` · `{self.p(ctx)}filter smart on|off` · "
+                f"`{self.p(ctx)}filter test <text>` · `{self.p(ctx)}filter clear`")
         await ctx.reply(embed=embed("🚫 Word filter", body), ephemeral=True)
 
     @filter.command(name="on", description="Turn the word filter on")
@@ -415,6 +578,39 @@ class AutoMod(commands.Cog, name="Automod"):
         words.remove(word)
         self.save(ctx.guild.id, words=words)
         await ctx.reply(embed=embed("Removed ✅", f"`{word}` is allowed again. {len(words)} left."), ephemeral=True)
+
+    @filter.command(name="smart", aliases=["ai"], description="Turn the AI check for misspelled filter dodges on or off")
+    @app_commands.describe(setting="on or off")
+    @moderator("manage_guild")
+    async def filter_smart(self, ctx: commands.Context, setting: str) -> None:
+        on = setting.strip().lower() not in OFF_WORDS
+        self.save(ctx.guild.id, filter_ai=on)
+        note = "" if self.bot.settings.ai_provider != "none" else " ⚠️ No AI key is set, so it can't run yet."
+        await ctx.reply(embed=embed("Saved ✅", f"AI bypass check is **{'on' if on else 'off'}**. Stretched letters, "
+                                               f"leetspeak and look-alike letters are caught either way.{note}"),
+                        ephemeral=True)
+
+    @filter.command(name="test", description="Check whether a message would be caught by the filter")
+    @app_commands.describe(text="The message to test")
+    @moderator("manage_guild")
+    async def filter_test(self, ctx: commands.Context, *, text: str) -> None:
+        c = self.config(ctx.guild.id)
+        words = cfg(c, "words")
+        word = filter_hit(text, words)
+        if word:
+            body = f"🚫 Caught instantly: matches `{word}`."
+        else:
+            close = near_miss(text, words)
+            if close is None:
+                body = "✅ Allowed: nothing close to a blocked word."
+            elif not cfg(c, "filter_ai") or self.bot.settings.ai_provider == "none":
+                body = f"✅ Allowed. It's close to `{close}`; turn on `filter smart` to let the AI judge those."
+            else:
+                fake = types.SimpleNamespace(content=text, guild=ctx.guild)
+                hit = await self.ai_bypass(fake, {**c, "filter_on": True})
+                body = (f"🚫 Caught by the AI check: a dodge of `{close}`." if hit else
+                        f"✅ Allowed: close to `{close}`, but the AI says it's a different word.")
+        await ctx.reply(embed=embed("🧪 Filter test", body), ephemeral=True)
 
     @filter.command(name="clear", description="Empty the whole blacklist")
     @moderator("manage_guild")

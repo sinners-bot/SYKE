@@ -4,7 +4,7 @@ import types
 import discord
 import pytest
 
-from syke.automod import AutoMod, caps_ratio, domains_in, filter_hit, normalize
+from syke.automod import AutoMod, caps_ratio, domains_in, filter_hit, near_miss, normalize
 from test_commands import run
 from test_moderation import Ctx, Guild, Member, Role
 
@@ -136,3 +136,70 @@ def test_toxic_flagging_posts_to_review(am):
     run(am.scan(_message(guild, offender, "you absolute worthless idiot, kill yourself")))
     assert guild.deleted == 0          # flagging never deletes
     assert guild.notices                # posted to review channel
+
+
+# Filter bypasses
+
+@pytest.mark.parametrize("text", [
+    "LUCCIAAA", "luuucia", "1ucia", "l.u.c.i.a", "l u c i a", "L-U-C-I-A", "LUCÍA", "ｌｕｃｉａ",
+    "luсia",            # Cyrillic с
+    "lu​cia",      # zero-width space
+    "hey lucia!", "lucias", "omgluciaaa",
+])
+def test_bypasses_are_caught_instantly(text):
+    assert filter_hit(text, ["lucia"]) == "lucia"
+
+
+@pytest.mark.parametrize("text", ["lucid dream", "lucky", "lucas", "music", "luca"])
+def test_lookalike_real_words_pass(text):
+    assert filter_hit(text, ["lucia"]) is None
+
+
+def test_short_words_keep_their_letters():
+    assert filter_hit("as you like", ["ass"]) is None and filter_hit("class", ["ass"]) is None
+    assert filter_hit("aaasss", ["ass"]) == "ass" and filter_hit("a s s", ["ass"]) == "ass"
+    assert filter_hit("fvck", ["fuck"]) == "fuck" and filter_hit("phuck", ["fuck"]) is None
+
+
+def test_near_misses_go_to_the_ai():
+    for text in ("lucai", "luciya", "lusia", "luc1ya"):
+        assert filter_hit(text, ["lucia"]) is None and near_miss(text, ["lucia"]) == "lucia"
+    assert near_miss("hello there", ["lucia"]) is None
+    assert near_miss("as is", ["ass"]) is None          # too short to guess at
+
+
+def test_ai_bypass_check_deletes_and_caches(am, monkeypatch):
+    from dataclasses import replace
+    from syke import automod
+    guild, offender = _setup(am)
+    am.bot.settings = replace(am.bot.settings, ai_provider="openai")
+    am.bot.storage.update_config(guild.id, "automod", filter_on=True, words=["lucia"])
+    calls = []
+
+    async def fake(settings, system, user, temperature, timeout):
+        calls.append(user)
+        return {"bypass": "lucai" in user, "word": "lucia"}
+    monkeypatch.setattr(automod.ai, "_complete", fake)
+    run(am.scan(_message(guild, offender, "lucai lol")))
+    assert guild.deleted == 1
+    run(am.scan(_message(guild, offender, "lucai lol", mid=2)))     # same text: cached, no second AI call
+    assert guild.deleted == 2 and len(calls) == 1
+    run(am.scan(_message(guild, offender, "lucid dream", mid=3)))  # AI says it's a real word
+    assert guild.deleted == 2
+    am.bot.storage.update_config(guild.id, "automod", filter_ai=False)
+    run(am.scan(_message(guild, offender, "lusia", mid=4)))
+    assert guild.deleted == 2 and len(calls) == 2
+
+
+def test_ai_outage_never_blocks_chat(am, monkeypatch):
+    from dataclasses import replace
+    from syke import automod
+    guild, offender = _setup(am)
+    am.bot.settings = replace(am.bot.settings, ai_provider="openai")
+    am.bot.storage.update_config(guild.id, "automod", filter_on=True, words=["lucia"])
+
+    async def broken(*a):
+        raise RuntimeError("down")
+    monkeypatch.setattr(automod.ai, "_complete", broken)
+    run(am.scan(_message(guild, offender, "lucai")))
+    assert guild.deleted == 0

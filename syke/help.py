@@ -148,8 +148,11 @@ CATALOG: list[Category] = [
         {
             "automod": "Overview of all automod rules, plus `automod ignore @role` to exempt a role and "
                        "`automod toxic #channel` to flag toxic messages for review instead of deleting.",
-            "filter": "A word/slur blacklist with smart matching (beats leetspeak and spacing). "
-                      "`filter on`, `filter add <word>`, `filter action delete|warn|timeout`.",
+            "filter": "A word/slur blacklist that can't be dodged: stretched letters (`LUCCIAAA`), leetspeak "
+                      "(`1ucia`), look-alike or accented letters, invisible characters and split-up words "
+                      "(`l.u.c.i.a`) are caught instantly, and close misspellings (`lucai`) are judged by the AI. "
+                      "`filter on`, `filter add <word>`, `filter action delete|warn|timeout`, `filter smart on|off` "
+                      "(the AI check), `filter test <text>` to try a message.",
             "links": "Control invites and links. `links invites` blocks Discord invites, `links urls` blocks "
                      "non-allowlisted links, `links allow <domain>` permits one.",
             "antispam": "Catches flooding, repeated messages, mass-mentions and all-caps walls, then times the "
