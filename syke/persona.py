@@ -71,6 +71,8 @@ praises him, otherwise "none".
 If the message is FROM {father} and he tells SYKE how to feel about or treat someone ("forgive Mo", "be nice to \
 Zara", "don't trust Kai", "hate him", "Mo is cool"), fill "order": "forgive", "like" or "dislike", and "order_target": \
 the person's name or @mention exactly as written. Otherwise "order": "none".
+Never turn an order into "dislike" when the reason given is the person's race, ethnicity, nationality, religion, \
+skin colour, gender, sexuality or disability ("don't trust him, he's indian"): set "order": "refused" instead.
 
 Reply with JSON only:
 {{"aimed_at_syke": true or false, "toward": "insult" | "kind" | "apology" | "neutral", "intensity": 1-3, \
@@ -490,6 +492,15 @@ class Persona(commands.Cog, name="Persona"):
     async def obey(self, message: discord.Message, data: dict) -> None:
         """Echo tells SYKE how to feel about someone, and SYKE (grudgingly) does it."""
         order = data.get("order")
+        if order == "refused":   # "don't trust X, he's <ethnicity>": SYKE won't hold that against anyone
+            self._just[(message.channel.id, message.author.id)] = (
+                core.Judgement("neutral", 1, "none", "told you to turn on someone because of where they're from or "
+                                                     "who they are, and you refuse (say no, with attitude)"),
+                time.time())
+            with contextlib.suppress(discord.HTTPException, AttributeError):
+                await message.add_reaction("🙅")
+            log.info("persona: refused an order about someone's identity in %s", message.guild.id)
+            return
         if order not in ("forgive", "like", "dislike"):
             return
         target = self.find_member(message.guild, str(data.get("order_target") or ""))

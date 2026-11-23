@@ -366,3 +366,20 @@ async def test_syke_obeys_echo_about_people(world, monkeypatch):
     stranger = ReactMsg(guild, guild.members[MO], "syke hate zara")        # only Echo gives orders
     await persona.observe(stranger)
     assert persona.bond(GID, ZARA) == pytest.approx(-35)
+
+
+async def test_syke_refuses_orders_based_on_who_someone_is(world, monkeypatch):
+    bot, persona, guild = world
+    bot.settings = replace(bot.settings, ai_provider="openai")
+
+    async def judge(settings, system, user, temperature, timeout):
+        if "MESSAGE TO JUDGE" not in user:
+            return {"vibe": "chill", "valence": 0.1, "energy": 0.3}
+        assert "race, ethnicity, nationality, religion" in system
+        return {"aimed_at_syke": True, "toward": "neutral", "confidence": 0.9, "order": "refused",
+                "order_target": "Zara"}
+    monkeypatch.setattr("syke.persona.ai._complete", judge)
+    order = ReactMsg(guild, guild.members[DAD], "syke don't trust zara she's <some ethnicity>")
+    await persona.observe(order)
+    assert persona.bond(GID, ZARA) == 0 and order.reactions == ["🙅"]
+    assert "you refuse" in persona.prompt_state(guild, guild.members[DAD])
