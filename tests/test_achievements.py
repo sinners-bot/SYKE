@@ -54,20 +54,19 @@ def test_messages_unlock_chatterbox_and_night_owl(world):
     assert ach.evaluate(GID, 7) == []                                      # only once
 
 
-async def test_events_unlock_and_are_announced_once(world):
+async def test_events_unlock_badges_quietly(world):
     bot, ach, _, guild = world
     channel = Channel()
     for _ in range(9):
         await ach.award_event(guild, member(7), channel, "radio_starts")
-    assert channel.sent == []
+    assert "radio_dj" not in ach.unlocked(GID, 7)
     await ach.award_event(guild, member(7), channel, "radio_starts")
-    assert "Radio DJ" in channel.sent[0].description
     await ach.award_event(guild, member(7), channel, "best_blend", 91, maximum=True)
     await ach.award_event(guild, member(7), channel, "best_blend", 40, maximum=True)
-    assert ach.counter(GID, 7, "best_blend") == 91 and "Musical Soulmate" in channel.sent[1].description
-    bot.storage.update_config(GID, "achievements", announce=False)
-    await ach.award_event(guild, member(7), channel, "parties")
-    assert len(channel.sent) == 2 and "party_host" in ach.unlocked(GID, 7)
+    assert ach.counter(GID, 7, "best_blend") == 91
+    assert {"radio_dj", "soulmate"} <= set(ach.unlocked(GID, 7))
+    assert channel.sent == []                                              # never announced in chat
+    assert "📻 Radio DJ" in ach.badge_line(GID, 7)                          # shown in Wrapped
 
 
 def test_feelings_promises_money_and_the_father(world):

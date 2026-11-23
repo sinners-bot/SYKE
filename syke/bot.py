@@ -1274,11 +1274,6 @@ class Syke(commands.Bot):
             refine_scores(profile, server, self.tz_for(ctx.guild.id), labels)
         profile.name += name_suffix
         pages = build_pages(profile, avatar_url, demo=self.storage.demo_mode(ctx.guild.id))
-        badges = self.get_cog("Achievements")
-        if badges is not None and "overview" in pages:
-            line = badges.badge_line(ctx.guild.id, profile.user_id)
-            if line:
-                pages["overview"].add_field(name="🏅 Badges", value=line[:1024], inline=False)
         view = ProfileView(self.load_card, timeout=MESSAGE_VIEW_TIMEOUT)
         message = await ctx.reply(embed=pages["overview"], view=view)
         if message is not None:

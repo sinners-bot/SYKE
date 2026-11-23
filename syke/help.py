@@ -425,9 +425,8 @@ CATALOG: list[Category] = [
             "achievements": "Badges that unlock on their own: Chatterbox, Night Owl, Early Bird, Lore Starter, Radio "
                             "DJ, Tastemaker, Party Starter, Musical Soulmate, Name That Tune, Kept 10 Promises, "
                             "Survived SYKE's Grudge, SYKE's Favourite, Beef Champion, High Roller and more. "
-                            "`achievements [@user]` shows what's unlocked and progress bars for the rest. New "
-                            "badges are announced in chat (`badgeannounce off` to stop) and show on profiles "
-                            "and in `wrapped`.",
+                            "They unlock quietly and show up in your `wrapped`; `achievements [@user]` shows "
+                            "what's unlocked and progress bars for the rest.",
             "kept": "Tell SYKE you kept your latest promise (`kept 2` for another one).",
             "forgive": "`forgive @user`: SYKE drops his grudge. Only his father or a server manager can ask.",
             "persona": "Managers: `persona callouts on|off` (broken-promise callouts) and `persona reactions on|off` "

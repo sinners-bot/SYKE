@@ -3,7 +3,7 @@
 Most badges are worked out from data SYKE already keeps (stored messages, Liked songs, promises, how SYKE
 feels about you, rivalries, Strip cash). A few come from counters other features bump (radio starts, parties,
 song quiz wins, a blend score, starting lore). `check` runs when someone chats (at most every few minutes per
-person) or right after a counted event, and new badges are announced once, in that channel.
+person) or right after a counted event. Badges unlock quietly and are shown in Wrapped (never announced in chat).
 """
 
 from __future__ import annotations
@@ -143,24 +143,15 @@ class Achievements(commands.Cog, name="Achievements"):
                 new.append(badge)
         return new
 
-    async def check(self, guild, member, channel=None, announce: bool = True) -> list[Badge]:
+    async def check(self, guild, member, channel=None) -> list[Badge]:
+        """Unlock what's been earned, quietly: badges are shown in Wrapped, never announced in chat."""
         if guild is None or member is None or getattr(member, "bot", False):
             return []
         try:
-            new = self.evaluate(guild.id, member.id)
+            return self.evaluate(guild.id, member.id)
         except Exception:
             log.exception("achievement check failed")
             return []
-        if new and announce and channel is not None and self.announcing(guild.id):
-            names = ", ".join(f"{b.emoji} **{b.name}**" for b in new)
-            card = discord.Embed(description=f"🏅 {member.mention} unlocked {names}\n-# "
-                                             + " · ".join(b.how for b in new), colour=GOLD)
-            with contextlib.suppress(discord.HTTPException, AttributeError):
-                await channel.send(embed=card, allowed_mentions=discord.AllowedMentions.none())
-        return new
-
-    def announcing(self, guild_id: int) -> bool:
-        return self.storage.get_config(guild_id, "achievements").get("announce", True)
 
     def badge_line(self, guild_id: int, user_id: int, since: float = 0.0) -> str:
         have = self.unlocked(guild_id, user_id)
@@ -203,7 +194,7 @@ class Achievements(commands.Cog, name="Achievements"):
     @commands.guild_only()
     async def achievements_cmd(self, ctx: commands.Context, member: discord.Member | None = None) -> None:
         member = member or ctx.author
-        await self.check(ctx.guild, member, None, announce=False)
+        await self.check(ctx.guild, member)
         have = self.unlocked(ctx.guild.id, member.id)
         done = self.progress(ctx.guild.id, member.id)
         got, todo = [], []
@@ -225,13 +216,5 @@ class Achievements(commands.Cog, name="Achievements"):
             card.add_field(name="Unlocked", value="\n".join(got)[:1024], inline=False)
         if todo:
             card.add_field(name="Still to unlock", value="\n".join(todo)[:1024], inline=False)
-        card.set_footer(text="Badges unlock on their own, just keep doing your thing")
+        card.set_footer(text="Badges unlock on their own and show up in your Wrapped")
         await ctx.reply(embed=card, mention_author=False, allowed_mentions=discord.AllowedMentions.none())
-
-    @commands.command(name="badgeannounce", hidden=True, help="Managers: badgeannounce on|off")
-    @commands.guild_only()
-    @commands.has_guild_permissions(manage_guild=True)
-    async def badge_announce(self, ctx: commands.Context, setting: str) -> None:
-        on = setting.lower() in ("on", "yes", "true", "1")
-        self.storage.update_config(ctx.guild.id, "achievements", announce=on)
-        await ctx.reply(f"Badge announcements are **{'on' if on else 'off'}**.", mention_author=False)
