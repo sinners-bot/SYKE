@@ -321,7 +321,7 @@ CATALOG: list[Category] = [
         "Play songs in voice from YouTube, Spotify, SoundCloud, Apple Music, Deezer and more.",
         ["play", "playnext", "skip", "queue", "nowplaying", "pause", "resume", "stop", "leave", "join", "volume",
          "loop", "shuffle", "remove", "move", "seek", "clearqueue", "autoplay", "247", "fx", "search", "music",
-         "radio", "songquiz", "topsongs", "like", "liked"],
+         "radio", "songquiz", "topsongs", "like", "liked", "blend", "party"],
         {
             "play": "`play <song name or link>`: YouTube, YouTube Music, Spotify (songs, albums, playlists), "
                     "SoundCloud, Apple Music, Deezer, Bandcamp, Twitch, Vimeo, TikTok, Mixcloud, radio streams and "
@@ -348,13 +348,19 @@ CATALOG: list[Category] = [
                      "play, shuffle, add songs, edit (remove or move to the top) and clear. Also `liked play`, "
                      "`liked shuffle`, `liked add <song or link>`, `liked remove 3`, `liked move 5 1`, `liked clear`. "
                      "Up to 500 songs. Slash: `/music like`, `/music liked`.",
+            "blend": "`blend @friend`: a shared playlist from both of your Liked songs (songs you share first, then "
+                     "turns between your picks and theirs) and your taste match score, with buttons to play or "
+                     "shuffle it.",
+            "party": "`party` starts a listening party in your voice channel: SYKE takes turns playing a song from "
+                     "each member's Liked songs. Tap ❤️ Like on songs you love; skips are counted. `party join`, "
+                     "`party leave`, and `party end` for the recap (most-liked song, best picks, who skipped most).",
             "songquiz": "SYKE plays 15 seconds of a song in voice; first to type the title wins the round (and Strip "
                         "cash when the economy's open). `songquiz drill 10` for 10 drill songs.",
             "topsongs": "The server's most played songs and biggest DJs: `topsongs`, `topsongs djs month`. "
                         "Also `top songs` and `top djs`.",
         },
         sections=[("Play", ["play", "playnext", "search", "queue", "nowplaying", "radio"]),
-                  ("Your library", ["like", "liked"]),
+                  ("Your library", ["like", "liked", "blend", "party"]),
                   ("Fun", ["songquiz", "topsongs"]),
                   ("Control", ["skip", "pause", "resume", "stop", "seek", "volume", "loop", "shuffle", "fx"]),
                   ("Queue", ["remove", "move", "clearqueue", "autoplay"]),
@@ -363,7 +369,7 @@ CATALOG: list[Category] = [
     Category(
         "social", "💬", "Social", EVERYONE,
         "AFK, birthdays, your year in review, memories, the channel's vibe and what you missed.",
-        ["afk", "birthday", "wrapped", "vibe", "catchup", "timemachine", "quotebook", "lore", "racist"],
+        ["afk", "birthday", "wrapped", "vibe", "catchup", "timemachine", "quotebook", "lore", "beef", "racist"],
         {
             "afk": "`afk [reason]`: anyone who pings you is told you're away (and your name gets [AFK] if SYKE can "
                    "change it). Send any message to come back and see who pinged you, with links.",
@@ -379,6 +385,9 @@ CATALOG: list[Category] = [
             "timemachine": "What the server was talking about a year ago today: a recap of that day, the loudest "
                            "people and the biggest moments, with links. `timemachine 6m`, `timemachine 2w` or "
                            "`timemachine 21.11.2025` for another day. Also `/recap timemachine`.",
+            "beef": "Rivalries SYKE has noticed: two people who keep going at each other. `beef` is the scoreboard "
+                    "(rounds, who's winning, how heated), `beef @user` their rivalries, `beef @a @b` the history. "
+                    "From round 2 SYKE comments on it in yap channels (`beefcomments off` to stop that).",
             "lore": "The server's inside jokes and catchphrases: phrases several people keep using, over weeks, that "
                     "get more reactions than usual. SYKE explains each one, and says who started it and when. "
                     "`lore <phrase>` tells one phrase's story: first use, biggest users, peak month.",
@@ -392,7 +401,8 @@ CATALOG: list[Category] = [
                        "and in other watched channels) with links. Also `/recap catchup`.",
         },
         sections=[("Away", ["afk", "catchup"]), ("Celebrate", ["birthday", "wrapped"]),
-                  ("Memories", ["timemachine", "quotebook", "lore"]), ("Read the room", ["vibe", "racist"])],
+                  ("Memories", ["timemachine", "quotebook", "lore"]),
+                  ("Read the room", ["vibe", "beef", "racist"])],
     ),
     Category(
         "syke", "🫀", "SYKE himself", EVERYONE,
@@ -519,7 +529,7 @@ BRIEF = {
     "dashboard": "Every setting, with buttons", "demo": "Add fake test members", "sample": "A demo member's report",
     "daily": "Daily cash and streak", "weekly": "Weekly cash and streak", "jobs": "Pick a job",
     "job": "Work a mini-game shift", "stocks": "Server stock market", "radio": "Endless music by genre",
-    "songquiz": "Name that song", "topsongs": "Most played and top DJs", "like": "Like the current song", "liked": "Your Liked songs", "afk": "Go away politely",
+    "songquiz": "Name that song", "topsongs": "Most played and top DJs", "like": "Like the current song", "liked": "Your Liked songs", "blend": "Blend with a friend", "party": "Listening party", "beef": "Rivalry scoreboard", "afk": "Go away politely",
     "birthday": "Birthdays", "wrapped": "Your year in review", "vibe": "Channel mood check",
     "catchup": "What you missed", "timemachine": "A year ago today", "quotebook": "Best quotes book", "lore": "Inside jokes", "mood": "How SYKE feels", "bond": "How SYKE feels about you", "favourites": "SYKE's favourites and grudges", "diary": "SYKE's nightly diary", "promises": "Promises SYKE remembers", "kept": "Keep a promise", "forgive": "Make SYKE drop a grudge", "persona": "Persona settings", "racist": "Slur counter", "work": "Clock a shift", "hustle": "Risky quick cash", "pay": "Send cash",
     "balance": "Players Club card", "deposit": "Bank it (robber-proof)", "withdraw": "Take cash out",

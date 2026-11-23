@@ -310,6 +310,31 @@ CREATE TABLE IF NOT EXISTS liked_songs (
     UNIQUE (user_id, song_key)
 );
 CREATE INDEX IF NOT EXISTS liked_songs_user ON liked_songs (user_id, position);
+CREATE TABLE IF NOT EXISTS rivalries (
+    guild_id   INTEGER NOT NULL,
+    a_id       INTEGER NOT NULL,
+    b_id       INTEGER NOT NULL,
+    rounds     INTEGER NOT NULL DEFAULT 0,
+    a_wins     INTEGER NOT NULL DEFAULT 0,
+    b_wins     INTEGER NOT NULL DEFAULT 0,
+    heat       REAL NOT NULL DEFAULT 0,
+    topic      TEXT NOT NULL DEFAULT '',
+    channel_id INTEGER NOT NULL DEFAULT 0,
+    started    REAL NOT NULL,
+    last_at    REAL NOT NULL,
+    round_winner INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, a_id, b_id)
+);
+CREATE TABLE IF NOT EXISTS rivalry_rounds (
+    guild_id   INTEGER NOT NULL,
+    a_id       INTEGER NOT NULL,
+    b_id       INTEGER NOT NULL,
+    at         REAL NOT NULL,
+    winner     INTEGER NOT NULL DEFAULT 0,
+    topic      TEXT NOT NULL DEFAULT '',
+    heat       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS rivalry_rounds_pair ON rivalry_rounds (guild_id, a_id, b_id, at);
 CREATE TABLE IF NOT EXISTS persona_diary (
     guild_id   INTEGER NOT NULL,
     day        TEXT NOT NULL,

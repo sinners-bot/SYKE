@@ -372,7 +372,13 @@ class LikedSongs(commands.Cog, name="LikedSongs"):
         if track is None:
             await interaction.response.send_message("Nothing's playing right now.", ephemeral=True)
             return
+        self._note_party_like(player, interaction.user.id)
         await interaction.response.send_message(**self._like(interaction.user.id, track), ephemeral=True)
+
+    def _note_party_like(self, player, user_id: int) -> None:
+        social = self.bot.get_cog("MusicSocial")
+        if social is not None and getattr(player, "party", None) is not None:
+            social.note_like(player, user_id)
 
     def _like(self, user_id: int, track: Track) -> dict:
         result = self.library.add(user_id, track)
@@ -435,6 +441,7 @@ class LikedSongs(commands.Cog, name="LikedSongs"):
         if player is None or player.current is None:
             await ctx.reply("Nothing's playing right now.", mention_author=False)
             return
+        self._note_party_like(player, ctx.author.id)
         await ctx.reply(**self._like(ctx.author.id, player.current), mention_author=False)
 
     @commands.group(name="liked", aliases=["likes", "library", "lib", "likedsongs"], invoke_without_command=True,

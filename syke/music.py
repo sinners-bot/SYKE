@@ -208,6 +208,7 @@ class Player:
         self._loop: asyncio.AbstractEventLoop | None = None
         self.radio: str | None = None          # genre radio: keeps the queue topped up
         self.quiz = False                      # a song quiz owns the voice connection
+        self.party = None                      # a listening party: everyone's Liked songs take turns
 
     @property
     def vc(self) -> discord.VoiceClient | None:
@@ -250,6 +251,10 @@ class Player:
         while True:
             if len(self.queue) < 2 and self.radio:
                 await self.cog.radio_fill(self)
+            if len(self.queue) < 2 and self.party is not None:
+                social = self.cog.bot.get_cog("MusicSocial")
+                if social is not None:
+                    await social.party_fill(self)
             if not self.queue and self.autoplay and previous is not None:
                 await self.cog.add_related(self, previous)
                 previous = None  # one try at related songs per run-out
@@ -671,6 +676,7 @@ class Controls(discord.ui.View):
             await interaction.response.send_message("Nothing's playing.", ephemeral=True)
             return
         title = link(player.current)
+        self.cog.note_party_skip(player, interaction.user.id)
         player.skip()
         await interaction.response.send_message(embed=note(f"⏭️ {interaction.user.mention} skipped {title}"),
                                                 allowed_mentions=discord.AllowedMentions.none())
@@ -681,6 +687,7 @@ class Controls(discord.ui.View):
         if player is None:
             await interaction.response.send_message("Nothing's playing.", ephemeral=True)
             return
+        await self.cog.end_party(player)
         player.stop()
         await interaction.response.edit_message(embed=note(f"⏹️ {interaction.user.mention} stopped the music "
                                                                 f"and cleared the queue.", WARN), view=None)
@@ -1168,7 +1175,21 @@ class Music(commands.Cog):
         player.channel_id = ctx.channel.id
         return player
 
+    def note_party_skip(self, player: Player, user_id: int) -> None:
+        social = self.bot.get_cog("MusicSocial")
+        if social is not None and player.party is not None:
+            social.note_skip(player, user_id)
+
+    async def end_party(self, player: Player) -> None:
+        social = self.bot.get_cog("MusicSocial")
+        if social is not None and player.party is not None:
+            with contextlib.suppress(Exception):
+                await social.end_party(player, keep_playing=False)
+
     async def leave(self, guild: discord.Guild, reason: str = "") -> None:
+        player = self.players.get(guild.id)
+        if player is not None:
+            await self.end_party(player)
         player = self.players.pop(guild.id, None)
         if player is not None:
             player.stop()
@@ -1323,6 +1344,7 @@ class Music(commands.Cog):
             await self.say(ctx, "Nothing's playing.", ephemeral=True)
             return
         title = link(player.current)
+        self.note_party_skip(player, ctx.author.id)
         if count > 1:
             del player.queue[:count - 1]
         player.skip()
@@ -1345,6 +1367,7 @@ class Music(commands.Cog):
         player = await self.check_control(ctx)
         if player is None:
             return
+        await self.end_party(player)
         player.stop()
         if player.np is not None:
             with contextlib.suppress(discord.HTTPException):
@@ -2034,6 +2057,7 @@ class Music(commands.Cog):
         if liked is None or player is None or player.current is None:
             await interaction.response.send_message("Nothing's playing right now.", ephemeral=True)
             return
+        liked._note_party_like(player, interaction.user.id)
         await interaction.response.send_message(**liked._like(interaction.user.id, player.current), ephemeral=True)
 
     @music.command(name="liked", description="Your Liked songs (or someone's): play, shuffle, add, edit")

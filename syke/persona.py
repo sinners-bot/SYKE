@@ -85,8 +85,14 @@ VIBE_PROMPT = """You read the last messages of a Discord server's chat and say w
 Pick one label: hype, funny, wholesome, flirty, chill, dead, sad, tense (people arguing), toxic (people being \
 genuinely nasty). Casual swearing and roasting each other for fun is "funny", not toxic.
 
+Also list real ARGUMENTS going on: two people clearly going back and forth against each other (disagreeing, \
+roasting each other, beefing), at least 3 messages between them. Not one-off jokes. For each, who's winning \
+(more convincing, better comebacks, or got the last word that landed), or "none" if it's even.
+
 Reply with JSON only: {{"vibe": "<label>", "valence": -1.0 to 1.0, "energy": 0.0 to 1.0, \
-"summary": "<what's going on, max 10 words, e.g. 'everyone roasting Kai's haircut'>"}}"""
+"summary": "<what's going on, max 10 words, e.g. 'everyone roasting Kai's haircut'>", \
+"arguments": [{{"a": "<name exactly as written>", "b": "<name>", "winner": "<a's or b's name, or none>", \
+"topic": "<what it's about, max 8 words>", "heat": 1-3}}]}}"""
 
 DIARY_PROMPT = """You are SYKE, a Discord bot with a real personality, writing tonight's entry in your private \
 diary about your day in the server "{server}". Your father and creator is {father}.
@@ -161,7 +167,7 @@ class Persona(commands.Cog, name="Persona"):
         self._ai_calls: dict[int, deque] = defaultdict(deque)
         self._callout_at: dict[int, float] = {}
         self._father_seen: dict[int, float] = {}
-        self.chat: dict[int, deque] = defaultdict(lambda: deque(maxlen=CHAT_KEEP))   # (at, channel, name, text)
+        self.chat: dict[int, deque] = defaultdict(lambda: deque(maxlen=CHAT_KEEP))   # (at, channel, name, text, uid)
         self.vibes: dict[int, core.Vibe] = {}
         self._vibe_new: dict[int, int] = defaultdict(int)
         self._vibe_busy: set[int] = set()
@@ -246,7 +252,7 @@ class Persona(commands.Cog, name="Persona"):
         read = self.vibes.get(guild_id)
         if read is not None and now - read.at < 20 * 60:
             return read
-        recent = [(at, text) for at, _, _, text in self.chat.get(guild_id, ()) if now - at < 30 * 60]
+        recent = [(at, text) for at, _, _, text, _ in self.chat.get(guild_id, ()) if now - at < 30 * 60]
         minutes = (now - recent[0][0]) / 60 if recent else 30
         return core.word_vibe([t for _, t in recent], minutes, now)
 
@@ -355,7 +361,8 @@ class Persona(commands.Cog, name="Persona"):
         if message.author.id in self.storage.optouts(guild.id):
             return
         context = self.context_for(message)
-        self.note_chat(guild.id, message.channel.id, self.bot.speaker_name(message.author), message.content)
+        self.note_chat(guild.id, message.channel.id, self.bot.speaker_name(message.author), message.content,
+                       message.author.id)
         talking_to_me = await self.addressed(message)
         about_father = not self.is_father(message.author.id) and self.mentions_father(message)
         if talking_to_me or about_father:
@@ -371,9 +378,9 @@ class Persona(commands.Cog, name="Persona"):
                 await self.react(message, judgement)
         await self._promise_check(message, talking_to_me)
 
-    def note_chat(self, guild_id: int, channel_id: int, name: str, text: str) -> None:
+    def note_chat(self, guild_id: int, channel_id: int, name: str, text: str, user_id: int = 0) -> None:
         """Remember the latest chat lines (for judging in context and reading the vibe)."""
-        self.chat[guild_id].append((time.time(), channel_id, name, " ".join((text or "").split())[:300]))
+        self.chat[guild_id].append((time.time(), channel_id, name, " ".join((text or "").split())[:300], user_id))
         self._vibe_new[guild_id] += 1
         if self.bot.settings.ai_provider == "none" or guild_id in self._vibe_busy:
             return
@@ -384,7 +391,7 @@ class Persona(commands.Cog, name="Persona"):
             asyncio.ensure_future(self._read_vibe(guild_id))
 
     def context_for(self, message: discord.Message) -> list[str]:
-        lines = [f"{name}: {text}" for _, cid, name, text in self.chat.get(message.guild.id, ())
+        lines = [f"{name}: {text}" for _, cid, name, text, _ in self.chat.get(message.guild.id, ())
                  if cid == message.channel.id][-CONTEXT_LINES:]
         ref = getattr(message, "reference", None)
         resolved = getattr(ref, "resolved", None) if ref else None
@@ -397,7 +404,8 @@ class Persona(commands.Cog, name="Persona"):
     async def _read_vibe(self, guild_id: int) -> None:
         try:
             now = time.time()
-            lines = [f"{name}: {text}" for at, _, name, text in self.chat.get(guild_id, ()) if now - at < 30 * 60][-30:]
+            window = [row for row in self.chat.get(guild_id, ()) if now - row[0] < 30 * 60][-30:]
+            lines = [f"{name}: {text}" for _, _, name, text, _ in window]
             if not lines:
                 return
             data = await ai._complete(self.bot.settings, VIBE_PROMPT, "\n".join(lines), 0.2, 15)
@@ -410,6 +418,9 @@ class Persona(commands.Cog, name="Persona"):
             self.vibes[guild_id] = core.Vibe(label, valence, energy, ai.public_text(data.get("summary"), 80) or words,
                                              time.time())
             self._vibe_new[guild_id] = 0
+            rivalry = self.bot.get_cog("Rivalry")
+            if rivalry is not None and data.get("arguments"):
+                await rivalry.record(guild_id, data.get("arguments") or [], window)
         except Exception as error:
             log.info("vibe read failed: %s", error)
         finally:
@@ -421,7 +432,7 @@ class Persona(commands.Cog, name="Persona"):
         me = getattr(self.bot.user, "id", None)
         if message.guild is not None and getattr(message.author, "id", None) == me and message.content:
             self.chat[message.guild.id].append((time.time(), message.channel.id, "SYKE",
-                                                " ".join(message.content.split())[:300]))
+                                                " ".join(message.content.split())[:300], me))
 
     def _ai_budget(self, guild_id: int) -> bool:
         calls, now = self._ai_calls[guild_id], time.monotonic()
