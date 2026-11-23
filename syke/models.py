@@ -16,3 +16,4 @@ class Msg:
     laugh_reactions: int = 0
     total_reactions: int = 0
     message_id: int = 0
+    reply_to: int = 0          # author of the message this one replies to

@@ -235,14 +235,12 @@ def notice(title: str, body: str, colour: discord.Colour = WARN) -> discord.Embe
 
 
 def corpus_row(message: discord.Message) -> tuple:
-    m = to_msg(message)
-    return (m.message_id, m.channel_id, m.author_id, m.content, m.created_at.timestamp(),
-            m.author_name, m.laugh_reactions, m.total_reactions)
+    return msg_row(to_msg(message))
 
 
 def msg_row(m: Msg) -> tuple:
     return (m.message_id, m.channel_id, m.author_id, m.content, m.created_at.timestamp(),
-            m.author_name, m.laugh_reactions, m.total_reactions)
+            m.author_name, m.laugh_reactions, m.total_reactions, m.reply_to)
 
 
 def server_emojis(guild: discord.Guild) -> dict[str, str]:

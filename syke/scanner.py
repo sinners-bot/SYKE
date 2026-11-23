@@ -53,7 +53,16 @@ def to_msg(message: discord.Message) -> Msg:
         laugh_reactions=laugh,
         total_reactions=total,
         message_id=message.id,
+        reply_to=_reply_author(message),
     )
+
+
+def _reply_author(message: discord.Message) -> int:
+    """Who a message replies to, when Discord sent the replied-to message along (it does in history)."""
+    ref = getattr(message, "reference", None)
+    resolved = getattr(ref, "resolved", None) if ref else None
+    author = getattr(resolved, "author", None)
+    return int(getattr(author, "id", 0) or 0)
 
 
 class Scanner:

@@ -19,6 +19,7 @@ CORPUS_EXTRA_COLUMNS = (
     ("author_name", "TEXT NOT NULL DEFAULT ''"),
     ("laugh_reactions", "INTEGER NOT NULL DEFAULT 0"),
     ("total_reactions", "INTEGER NOT NULL DEFAULT 0"),
+    ("reply_to", "INTEGER NOT NULL DEFAULT 0"),     # author the message replied to (0 = not a reply / unknown)
 )
 # Timers added to econ_wallets after it first shipped (migrated in on startup).
 WALLET_EXTRA_COLUMNS = (
@@ -508,7 +509,8 @@ class Storage:
         """
         if not rows:
             return 0
-        full = [(guild_id, *row, *(None, "", 0, 0)[len(row) - 4:]) for row in rows]
+        defaults = (None, "", 0, 0, 0)   # created_at, author_name, laughs, reactions, reply_to
+        full = [(guild_id, *row[:4], *row[4:9], *defaults[max(0, len(row) - 4):]) for row in rows]
         added = 0
         for start in range(0, len(full), CORPUS_CHUNK):
             chunk = full[start:start + CORPUS_CHUNK]
@@ -516,7 +518,7 @@ class Storage:
                 before = self._conn.total_changes
                 self._conn.executemany(
                     "INSERT INTO corpus (guild_id, message_id, channel_id, author_id, content, created_at, "
-                    "author_name, laugh_reactions, total_reactions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "author_name, laugh_reactions, total_reactions, reply_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(guild_id, message_id) DO NOTHING",
                     chunk,
                 )
@@ -526,9 +528,10 @@ class Storage:
                     "created_at = COALESCE(created_at, ?), "
                     "author_name = CASE WHEN ? != '' THEN ? ELSE author_name END, "
                     "laugh_reactions = MAX(laugh_reactions, ?), "
-                    "total_reactions = MAX(total_reactions, ?) "
+                    "total_reactions = MAX(total_reactions, ?), "
+                    "reply_to = CASE WHEN reply_to = 0 THEN ? ELSE reply_to END "
                     "WHERE guild_id = ? AND message_id = ?",
-                    [(r[5], r[6], r[6], r[7], r[8], r[0], r[1]) for r in chunk],
+                    [(r[5], r[6], r[6], r[7], r[8], r[9] or 0, r[0], r[1]) for r in chunk],
                 )
                 self._conn.commit()
         return added
@@ -586,6 +589,17 @@ class Storage:
             "ORDER BY created_at LIMIT ?",
             (guild_id, since, *channel_ids, limit),
         )
+
+    def reply_counts(self, guild_id: int, author_id: int, since: float) -> list[tuple[int, int]]:
+        """(user replied to, how often) for someone's messages since a time."""
+        return self._read("SELECT reply_to, COUNT(*) AS n FROM corpus WHERE guild_id = ? AND author_id = ? "
+                          "AND created_at >= ? AND reply_to != 0 AND reply_to != author_id GROUP BY reply_to "
+                          "ORDER BY n DESC", (guild_id, author_id, since))
+
+    def word_sample(self, guild_id: int, since: float, limit: int = 30000) -> list[str]:
+        """The newest stored messages' text (for a server-wide word baseline)."""
+        return [r[0] for r in self._read("SELECT content FROM corpus WHERE guild_id = ? AND created_at >= ? "
+                                         "ORDER BY created_at DESC LIMIT ?", (guild_id, since, limit))]
 
     def author_counts(self, guild_id: int, since: float) -> list[tuple[int, int]]:
         """(author_id, messages) since a time, busiest first."""

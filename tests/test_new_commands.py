@@ -232,15 +232,56 @@ async def test_afk_tells_pingers_and_welcomes_back(bot):
 def test_wrapped_stats_and_partners():
     tz = ZoneInfo("Europe/Vienna")
     base = datetime(2026, 3, 2, 22, 0, tzinfo=tz).timestamp()
-    rows = [(i, 10, "blackjack again 😂 blackjack", base + i * 86400, 2 if i == 3 else 0, 0) for i in range(5)]
+    rows = [(i, 10, "blackjack again 😂 🔥 💀 blackjack", base + i * 86400, 2 if i == 3 else 0, 0) for i in range(5)]
     stats = social.wrapped_stats(rows, tz, (2, 10), [("Bo", 4)], {10: "casino"})
-    assert stats["messages"] == 5 and stats["top_words"][0] == "blackjack" and stats["emoji"] == "😂"
+    assert stats["messages"] == 5 and stats["top_words"][0] == "blackjack" and stats["emoji"] == "🔥"
     assert stats["hour"] == 22 and stats["streak"] == 5 and stats["channel"] == "casino"
     assert stats["best_laughs"] == 2
     activity = [(10, 1, "Me", 0), (10, 2, "Bo", 30), (10, 1, "Me", 60), (10, 3, "Cy", 1000)]
     assert social.talk_partners(activity, 1) == [("Bo", 2)]
     png = social.render_wrapped("Ada", 2026, stats)
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_wrapped_skips_crying_and_skull_emoji():
+    rows = [(i, 1, "😭😭💀 <:skull_cry:55> <a:kekw:56> ok 🍕", 1.7e9, 0, 0) for i in range(6)]
+    stats = social.wrapped_stats(rows, ZoneInfo("UTC"))
+    assert stats["emoji"] == "🍕"
+
+
+def test_top_words_drop_slang_and_favour_your_own_words():
+    assert social.word_tokens("hahahaha lmaooo bro that pizza was sooooo good xddd 2024 tbh ngl") == ["pizza", "good"]
+    server = [f"good game {i}" for i in range(400)] + ["pizza once"] * 10
+    baseline = social.word_baseline(server)
+    mine = [(i, 1, "good pizza with friends, good pizza", 1.7e9, 0, 0) for i in range(5)] + \
+           [(9, 1, "good good good", 1.7e9, 0, 0)] * 5
+    stats = social.wrapped_stats(mine, ZoneInfo("UTC"), baseline=baseline)
+    assert stats["top_words"][0] == "pizza"          # "good" is said by everyone, "pizza" is theirs
+    assert "good" in stats["top_words"]              # still listed, just lower
+
+
+def test_talks_to_most_counts_mentions_and_replies(tmp_path):
+    from syke.storage import Storage
+    store = Storage(str(tmp_path / "w.db"))
+    store.add_corpus(GID, [(1, 10, 7, "yo", 1.7e9, "Me", 0, 0, 8), (2, 10, 7, "ok", 1.7e9, "Me", 0, 0, 8),
+                           (3, 10, 7, "fine", 1.7e9, "Me", 0, 0, 9), (4, 10, 8, "hi", 1.7e9, "Bo", 0, 0, 7)])
+    replies = store.reply_counts(GID, 7, 0)
+    assert [tuple(r) for r in replies] == [(8, 2), (9, 1)]
+    rows = [(5, 10, "<@9> <@!9> come here <@9>", 1.7e9, 0, 0), (6, 10, "<@9> again", 1.7e9, 0, 0),
+            (7, 10, "<@666> <@7>", 1.7e9, 0, 0)]
+    names = {8: "Bo", 9: "Cy", 666: "SomeBot"}
+    assert social.mention_partners(rows, replies, 7, names, {666}) == [("Cy", 3), ("Bo", 2)]
+
+
+def test_wrapped_card_draws_badges():
+    from PIL import Image
+    import io
+    stats = social.wrapped_stats([(1, 1, "pizza", 1.7e9, 0, 0)], ZoneInfo("UTC"))
+    plain = Image.open(io.BytesIO(social.render_wrapped("Ada", 2026, stats)))
+    icon = Image.new("RGBA", (72, 72), (255, 0, 0, 255))
+    with_badges = Image.open(io.BytesIO(social.render_wrapped(
+        "Ada", 2026, stats, badges=[("Night Owl", icon)] + [(f"Badge {i}", None) for i in range(7)])))
+    assert with_badges.height > plain.height     # two rows of medals fit below the stats
 
 
 def test_offline_vibe_reads_the_room():

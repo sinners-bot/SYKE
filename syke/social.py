@@ -32,7 +32,8 @@ from discord.ext import commands, tasks
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from . import ai
-from .lexicon import LAUGH_EMOJIS, STOPWORDS
+from .lexicon import CHAT_SLANG, LAUGH_EMOJIS, STOPWORDS
+from .lexicon import LAUGH_WORDS as LAUGH_WORD_SET
 from .moderation import BRAND, OK, WARN, embed, moderator, problem
 from .tldr import (Line, digest, from_discord_message, offline_summary, prompt_facts, prompt_sample, span_label,
                    vibe_line)
@@ -51,7 +52,10 @@ VIBE_MESSAGES = 100
 CATCHUP_FETCH = 900
 CATCHUP_MIN = 5
 FONTS = Path(__file__).parent / "assets" / "fonts"
-WORD = re.compile(r"[a-zA-ZäöüÄÖÜß']{3,}")
+WORD = re.compile(r"[^\W\d_](?:[^\W\d_]|')+[^\W\d_]", re.UNICODE)   # letters in any language, 3+
+LAUGHY = re.compile(r"^(?:(?:h+[aeiou]+)+h*|(?:[aeiou]?h+)+|l+[oe]+l+[lo]*|l+m+f*a+o+|x+d+|k{3,}|j+[aeiou]+j+[aeiou]*|"
+                    r"a+h+a+|w+[aeiou]+|r+o+f+l+|s+k+u+l+|h+e+h+e+|i+m+a+o+)$", re.I)
+SKIP_EMOJI = LAUGH_EMOJIS | {"😢", "🥲", "😩", "😫", "☠", "🤣", "😂", "😭", "💀", "😹", "🙏"}   # everyone's go-to
 LINKS = re.compile(r"https?://\S+|www\.\S+|<a?:\w+:\d+>|<[@#&!]+\d+>|<t:\d+(?::\w)?>")
 EXTRA_SKIP = {"gif", "gifs", "klipy", "tenor", "giphy", "imgur", "png", "jpg", "jpeg", "mp4", "webp", "mov",
               "sticker", "stickers", "attachment", "attachments", "cdn", "discordapp", "media", "view", "watch",
@@ -115,8 +119,58 @@ def days_until(month: int, day: int, today) -> int:
 
 # Wrapped
 
+def word_tokens(content: str) -> list[str]:
+    """The real words in a message: no links, mentions, emoji codes, numbers, laughs or filler."""
+    out = []
+    for w in WORD.findall(LINKS.sub(" ", content or "")):
+        lw = w.lower().strip("'")
+        if len(lw) < 3 or lw in STOPWORDS or lw in EXTRA_SKIP or lw in CHAT_SLANG or lw in LAUGH_WORD_SET:
+            continue
+        if LAUGHY.match(lw) or re.search(r"(.)\1\1", lw) and len(set(lw)) <= 3:
+            continue   # hahaha, lmaooo, xddd, aaaaa
+        out.append(re.sub(r"(.)\1{2,}", r"\1\1", lw))   # "sooooo" counts as "soo"
+    return out
+
+
+def word_baseline(texts: list[str]) -> Counter:
+    """How often each word appears across the server (one count per message)."""
+    counts: Counter = Counter()
+    for text in texts:
+        counts.update(set(word_tokens(text)))
+    counts[""] = max(1, len(texts))   # total messages, for rates
+    return counts
+
+
+def signature_words(mine: Counter, my_messages: int, server: Counter | None, top: int = 5,
+                    minimum: int = 3) -> list[str]:
+    """Words that are *yours*: used a lot, and much more than the rest of the server uses them."""
+    if not mine:
+        return []
+    if not server or server.get("", 0) < 200:
+        return [w for w, n in mine.most_common(top)]
+    total = server[""]
+    scored = []
+    for word, n in mine.items():
+        if n < minimum:
+            continue
+        mine_rate = n / max(1, my_messages)
+        server_rate = (server.get(word, 0) + 1) / total
+        lift = mine_rate / server_rate
+        if lift < 1.2:
+            continue   # everyone says it
+        scored.append((n * math.log(lift), word))
+    picked = [w for _, w in sorted(scored, reverse=True)[:top]]
+    for word, _ in mine.most_common():
+        if len(picked) >= top:
+            break
+        if word not in picked and mine[word] >= minimum:
+            picked.append(word)
+    return picked
+
+
 def wrapped_stats(rows: list[tuple], tz, server_rank: tuple[int, int] | None = None,
-                  partners: list[tuple[str, int]] | None = None, channel_names: dict[int, str] | None = None) -> dict:
+                  partners: list[tuple[str, int]] | None = None, channel_names: dict[int, str] | None = None,
+                  baseline: Counter | None = None) -> dict:
     """Everything on the Wrapped card, from (message_id, channel_id, content, created_at, laughs, reactions)."""
     words, emojis, hours, weekdays, channels, days = Counter(), Counter(), Counter(), Counter(), Counter(), set()
     best = None
@@ -127,14 +181,14 @@ def wrapped_stats(rows: list[tuple], tz, server_rank: tuple[int, int] | None = N
         days.add(moment.date())
         channels[channel_id] += 1
         text = LINKS.sub(" ", content or "")   # links and Discord markup aren't words ("klipy", "gif", "com"…)
-        for w in WORD.findall(text):
-            lw = w.lower().strip("'")
-            if lw not in STOPWORDS and lw not in EXTRA_SKIP and not lw.startswith("http"):
-                words[lw] += 1
-        for found in re.findall(r"<a?:\w+:\d+>", content or ""):
-            emojis[found] += 1
+        words.update(word_tokens(content or ""))
+        for found in re.findall(r"<a?:(\w+):\d+>", content or ""):
+            if not re.search(r"skull|sob|cry|laugh|lmao|lol|kek|dead|joy", found, re.I):
+                emojis[re.search(rf"<a?:{re.escape(found)}:\d+>", content).group(0)] += 1
         for found in emoji_lib.emoji_list(content or ""):
-            emojis[found["emoji"]] += 1
+            glyph = found["emoji"]
+            if glyph.replace("\ufe0f", "") not in {e.replace("\ufe0f", "") for e in SKIP_EMOJI}:
+                emojis[glyph] += 1
         if laughs and (best is None or laughs > best[0]) and len(text.split()) >= 2:
             best = (laughs, content)
     streak = longest = 0
@@ -148,7 +202,7 @@ def wrapped_stats(rows: list[tuple], tz, server_rank: tuple[int, int] | None = N
     return {
         "messages": len(rows),
         "words": sum(len(LINKS.sub(" ", r[2] or "").split()) for r in rows),
-        "top_words": [w for w, _ in words.most_common(5)],
+        "top_words": signature_words(words, len(rows), baseline),
         "emoji": emojis.most_common(1)[0][0] if emojis else None,
         "emoji_count": emojis.most_common(1)[0][1] if emojis else 0,
         "hour": hour,
@@ -161,6 +215,20 @@ def wrapped_stats(rows: list[tuple], tz, server_rank: tuple[int, int] | None = N
         "rank": server_rank,
         "partners": partners or [],
     }
+
+
+def mention_partners(rows: list[tuple], replies: list[tuple[int, int]], user_id: int, names: dict[int, str],
+                     skip: set[int] = frozenset()) -> list[tuple[str, int]]:
+    """Who someone talks to most: the people they @mention and reply to."""
+    scores: Counter = Counter()
+    for row in rows:
+        for uid in {int(x) for x in re.findall(r"<@!?(\d+)>", row[2] or "")}:
+            if uid != user_id and uid not in skip:
+                scores[uid] += 1
+    for uid, n in replies:
+        if uid != user_id and uid not in skip:
+            scores[uid] += n
+    return [(names[uid], n) for uid, n in scores.most_common(10) if names.get(uid)][:3]
 
 
 def talk_partners(activity: list[tuple], user_id: int, window: float = 120.0) -> list[tuple[str, int]]:
@@ -204,9 +272,41 @@ def _fit(draw, text: str, font_name: str, size: int, width: int, minimum: int = 
     return _font(font_name, size)
 
 
+BADGES_PER_ROW = 6
+BADGE_ROW = 205
+
+
+def _medal(icon: Image.Image | None, label: str, size: int = 118) -> Image.Image:
+    """A badge as a medal: gold ring, dark disc, the badge's icon in the middle."""
+    scale = 4   # draw big, shrink down: smooth edges
+    big = size * scale
+    medal = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    d = ImageDraw.Draw(medal)
+    d.ellipse((0, 0, big - 1, big - 1), fill=(255, 196, 61, 255))                        # gold rim
+    d.ellipse((6 * scale, 6 * scale, big - 6 * scale, big - 6 * scale), fill=(255, 226, 140, 255))
+    d.ellipse((12 * scale, 12 * scale, big - 12 * scale, big - 12 * scale), fill=(40, 18, 64, 255))  # disc
+    d.arc((14 * scale, 14 * scale, big - 14 * scale, big - 14 * scale), 200, 340, fill=(255, 255, 255, 70),
+          width=3 * scale)                                                              # shine
+    medal = medal.resize((size, size), Image.LANCZOS)
+    if icon is not None:
+        glyph = icon.convert("RGBA").resize((size * 56 // 100, size * 56 // 100), Image.LANCZOS)
+        medal.paste(glyph, ((size - glyph.width) // 2, (size - glyph.height) // 2), glyph)
+    else:
+        letter = (label[:1] or "?").upper()
+        d = ImageDraw.Draw(medal)
+        font = _font("Poppins-Bold.ttf", size // 2)
+        box = d.textbbox((0, 0), letter, font=font)
+        d.text(((size - box[2]) // 2, (size - box[3]) // 2 - 4), letter, font=font, fill=(255, 226, 140))
+    return medal
+
+
 def render_wrapped(name: str, year: int, stats: dict, avatar: bytes | None = None,
-                   emoji_image: Image.Image | None = None, server: str = "") -> bytes:
-    W, H = 1080, 1350
+                   emoji_image: Image.Image | None = None, server: str = "",
+                   badges: list[tuple[str, Image.Image | None]] | None = None) -> bytes:
+    badges = badges or []
+    rows_of_badges = math.ceil(len(badges) / BADGES_PER_ROW)
+    extra = (70 + rows_of_badges * BADGE_ROW) if badges else 0
+    W, H = 1080, 1350 + extra
     card = Image.new("RGB", (W, H), (20, 12, 36))
     top, bottom = (124, 58, 237), (236, 72, 153)
     grad = Image.new("RGB", (1, H))
@@ -268,9 +368,35 @@ def render_wrapped(name: str, year: int, stats: dict, avatar: bytes | None = Non
     if stats.get("channel"):
         foot.append(f"lives in #{stats['channel']}")
     footer = "  ·  ".join(foot)
+    if badges:
+        top_y = 1250
+        draw.text((70, top_y), f"BADGES UNLOCKED IN {year}  ·  {len(badges)}", font=_font("Poppins-Medium.ttf", 26),
+                  fill=(255, 225, 245))
+        cell = (W - 140) // BADGES_PER_ROW
+        for i, (label, icon) in enumerate(badges):
+            row, col = divmod(i, BADGES_PER_ROW)
+            in_row = min(BADGES_PER_ROW, len(badges) - row * BADGES_PER_ROW)
+            x0 = 70 + (W - 140 - in_row * cell) // 2 + col * cell     # centre each row
+            y0 = top_y + 50 + row * BADGE_ROW
+            medal = _medal(icon, label)
+            card.paste(medal, (x0 + (cell - medal.width) // 2, y0), medal)
+            text_font = _font("Poppins-Bold.ttf", 21)   # one size for every badge; long names wrap
+            words, lines, line = label.split(), [], ""
+            for word in words:   # wrap long names onto two lines
+                trial = f"{line} {word}".strip()
+                if draw.textlength(trial, font=text_font) <= cell - 8:
+                    line = trial
+                else:
+                    lines.append(line)
+                    line = word
+            lines.append(line)
+            for j, text in enumerate([t for t in lines if t][:3]):
+                width = draw.textlength(text, font=text_font)
+                draw.text((x0 + (cell - width) / 2, y0 + 124 + j * 25), text, font=text_font, fill=white)
+    footer_y = H - 100
     if footer:
-        draw.text((70, 1250), footer, font=_fit(draw, footer, "Poppins-Medium.ttf", 30, 940, 18), fill=white)
-    draw.text((W - 150, 1290), "SYKE", font=_font("Poppins-Bold.ttf", 28), fill=(255, 220, 245))
+        draw.text((70, footer_y), footer, font=_fit(draw, footer, "Poppins-Medium.ttf", 30, 940, 18), fill=white)
+    draw.text((W - 150, H - 60), "SYKE", font=_font("Poppins-Bold.ttf", 28), fill=(255, 220, 245))
     out = io.BytesIO()
     card.save(out, "PNG", optimize=True)
     return out.getvalue()
@@ -444,6 +570,7 @@ class Social(commands.Cog, name="Social"):
         self.bot = bot
         self._afk_noticed: dict[tuple[int, int], float] = {}
         self._emoji_cache: dict[str, Image.Image | None] = {}
+        self._baselines: dict[int, tuple[float, Counter]] = {}
         self._http = None
 
     async def cog_load(self) -> None:
@@ -728,6 +855,16 @@ class Social(commands.Cog, name="Social"):
 
     # Wrapped
 
+    async def server_words(self, guild_id: int, since: float) -> Counter:
+        """How the whole server talks this year (cached for an hour), so top words can be *yours*."""
+        hit = self._baselines.get(guild_id)
+        if hit and time.time() - hit[0] < 3600:
+            return hit[1]
+        texts = await asyncio.to_thread(self.bot.storage.word_sample, guild_id, since)
+        baseline = await asyncio.to_thread(word_baseline, texts)
+        self._baselines[guild_id] = (time.time(), baseline)
+        return baseline
+
     async def emoji_image(self, value: str | None) -> Image.Image | None:
         if not value:
             return None
@@ -765,32 +902,38 @@ class Social(commands.Cog, name="Social"):
                 await ctx.reply(embed=problem("Not enough yet", f"SYKE has only {len(rows)} of {who.display_name}'s "
                                                                 f"messages from {year}. It needs 20."), ephemeral=True)
                 return
-            channels = sorted({r[1] for r in rows})
-            activity, counts = await asyncio.gather(
-                asyncio.to_thread(self.bot.storage.channel_activity, guild.id, channels, since),
-                asyncio.to_thread(self.bot.storage.author_counts, guild.id, since))
+            replies, counts, baseline = await asyncio.gather(
+                asyncio.to_thread(self.bot.storage.reply_counts, guild.id, who.id, since),
+                asyncio.to_thread(self.bot.storage.author_counts, guild.id, since),
+                self.server_words(guild.id, since))
             optouts = self.bot.storage.optouts(guild.id)
-            activity = [a for a in activity if a[1] not in optouts]
-            partners = talk_partners(activity, who.id)
+            raw = getattr(guild, "members", [])
+            people = raw.values() if isinstance(raw, dict) else raw
+            member_names = {m.id: m.display_name for m in people}
+            bots = {m.id for m in people if getattr(m, "bot", False)}
+            partners = mention_partners(rows, replies, who.id, member_names, set(optouts) | bots)
             ranked = [uid for uid, _ in counts if uid not in optouts]
             rank = (ranked.index(who.id) + 1, len(ranked)) if who.id in ranked else None
             names = {c.id: c.name for c in guild.channels}
-            stats = wrapped_stats(rows, tz, rank, partners, names)
+            stats = wrapped_stats(rows, tz, rank, partners, names, baseline)
             avatar = await self.fetch(who.display_avatar.replace(size=256, static_format="png").url)
             icon = await self.emoji_image(stats.get("emoji"))
-            png = await asyncio.to_thread(render_wrapped, who.display_name, year, stats, avatar, icon, guild.name)
+            badge_list = []
+            badges = self.bot.get_cog("Achievements")
+            if badges is not None:
+                from .achievements import BADGES
+                have = badges.unlocked(guild.id, who.id)
+                for badge in BADGES:
+                    if have.get(badge.key, -1) >= since:
+                        badge_list.append((badge.name, await self.emoji_image(badge.emoji)))
+            png = await asyncio.to_thread(render_wrapped, who.display_name, year, stats, avatar, icon, guild.name,
+                                          badge_list)
         file = discord.File(io.BytesIO(png), filename=f"wrapped-{year}.png")
         card = discord.Embed(colour=discord.Colour.from_str("#EC4899"))
         card.set_image(url=f"attachment://wrapped-{year}.png")
         if stats.get("best"):
             best = discord.utils.escape_mentions(" ".join(stats["best"].split()))[:200]
             card.description = f"😂 Funniest message ({stats['best_laughs']} laughs):\n> {best}"
-        badges = self.bot.get_cog("Achievements")
-        if badges is not None:
-            line = badges.badge_line(guild.id, who.id, since)
-            if line:
-                card.description = (card.description + "\n\n" if card.description else "") + \
-                    f"🏅 Badges unlocked in {year}: {line}"
         card.set_footer(text=f"From {len(rows):,} stored messages this year")
         await ctx.reply(embed=card, file=file, allowed_mentions=discord.AllowedMentions.none())
 
