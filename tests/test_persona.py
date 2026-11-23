@@ -124,14 +124,14 @@ def test_ignores_things_that_arent_promises(text):
 
 
 def test_state_block_knows_the_father():
-    dad = core.state_block(mood="happy", mood_reasons=[], target_name="Ivan", target_is_father=True, bond=None,
-                           events=[], father_names=["Ivan"], father_in_chat=True, promises=[], now=0)
-    assert "FATHER and CREATOR" in dad and "never roast him" in dad
+    dad = core.state_block(mood="happy", mood_reasons=[], target_name="Echo", target_is_father=True, bond=None,
+                           events=[], father_names=["Echo"], father_in_chat=True, promises=[], now=0)
+    assert "FATHER and CREATOR" in dad and "roast him, insult him" in dad and "call him Echo" in dad
     other = core.state_block(mood="grumpy", mood_reasons=["Mo called you trash"], target_name="Mo",
                              target_is_father=False, bond=-30, events=[("insult", "called you trash", 0)],
-                             father_names=["Ivan"], father_in_chat=False,
+                             father_names=["Echo"], father_in_chat=False,
                              promises=[("broken", "i'll play tonight", 0)], now=3600)
-    assert "Ivan is your father and creator" in other and "grudge" in other
+    assert "Echo is your father and creator" in other and "Only you get to roast" in other and "grudge" in other
     assert "called you trash (1h ago)" in other and "they didn't do it" in other
 
 
@@ -158,8 +158,11 @@ async def test_the_father_is_loved_and_defended(world):
     await persona.observe(Msg(guild, zara, "ivan is a clown"))
     assert persona.bond(GID, ZARA) < 0 and "father" in persona.events(GID, ZARA)[0][1]
     state = persona.prompt_state(guild, dad)
-    assert "FATHER and CREATOR" in state
-    assert "Ivan is your father" in persona.prompt_state(guild, zara)
+    assert "FATHER and CREATOR" in state and "talking to Echo" in state and "Ivan" not in state
+    assert "Echo is your father" in persona.prompt_state(guild, zara)
+    await persona.observe(Msg(guild, zara, "echo is trash at this game"))   # his new name counts too
+    assert len([e for e in persona.events(GID, ZARA, 10) if "father" in e[1]]) == 2
+    assert bot.speaker_name(dad) == "Echo" and bot.speaker_name(zara) == "Zara"
 
 
 async def test_broken_promise_gets_called_out_in_yap_channels(world, monkeypatch):
@@ -197,12 +200,12 @@ async def test_commands_show_feelings_and_diary(world):
     assert "Neutral" in ctx.replies[-1].description or "Grudge" in ctx.replies[-1].description
     assert "called you" in ctx.replies[-1].description
     await persona.bond_cmd.callback(persona, ctx, guild.members[DAD])
-    assert "father and creator" in ctx.replies[-1].description.lower()
+    assert "Echo, my father and creator" in ctx.replies[-1].description and "roast him" in ctx.replies[-1].description
     await persona.mood_cmd.callback(persona, ctx)
-    assert "Made by my dad, Ivan" in ctx.replies[-1].description
+    assert "Made by my dad, Echo" in ctx.replies[-1].description
     await persona.favourites_cmd.callback(persona, ctx)
     fields = {f.name: f.value for f in ctx.replies[-1].fields}
-    assert "Ivan" in fields["👨‍👧 Father & creator"] and "Zara" in fields["💖 Favourites"]
+    assert "Echo" in fields["👨‍👧 Father & creator"] and "Zara" in fields["💖 Favourites"]
     today = persona.local_now(GID).date()
     text = await persona.write_diary(guild, today, force=True)
     assert text.startswith("Dear diary") and "Zara" in text and "Mo" in text

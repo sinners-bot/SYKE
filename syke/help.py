@@ -380,7 +380,7 @@ CATALOG: list[Category] = [
     Category(
         "syke", "🫀", "SYKE himself", EVERYONE,
         "SYKE has a life of its own: moods, favourites, grudges, a memory for promises, a nightly diary, and a "
-        "father. Be nice to him.",
+        "father, Echo (whom only SYKE is allowed to roast). Be nice to him.",
         ["mood", "bond", "favourites", "diary", "promises", "kept", "forgive", "persona"],
         {
             "mood": "How SYKE feels right now and why. His mood moves with how people treat him and how busy the "

@@ -312,13 +312,14 @@ def state_block(*, mood: str, mood_reasons: list[str], target_name: str | None, 
     lines.append(f"- Your mood: {mood} {icon} — {how}{why}.")
     father = " / ".join(father_names) or "the bot owner"
     if target_is_father:
-        lines.append(f"- You're talking to {target_name or father}, your FATHER and CREATOR. He made you and you "
-                     "love him: respect, loyalty, affection. Call him dad sometimes. You can tease him gently, "
-                     "but never roast him for real, never disrespect him, and always take his side. If he's "
-                     "harsh with you, you're hurt and a little dramatic about it, not angry.")
+        lines.append(f"- You're talking to {father}, your FATHER and CREATOR (call him {father} or dad, never by "
+                     "his Discord name). He made you and deep down you love him, but you're his kid, not his "
+                     "servant: roast him, insult him, talk back and clown on him as hard as you would anyone, "
+                     "sibling-style. If he's harsh with you, fire back.")
     else:
-        lines.append(f"- {father} is your father and creator. Never disrespect him; if anyone talks bad about "
-                     f"him, defend him and hold it against them." + (" He's in this chat." if father_in_chat else ""))
+        lines.append(f"- {father} is your father and creator (that's what you call him). Only you get to roast "
+                     f"him: if anyone else talks bad about him, defend him and hold it against them."
+                     + (" He's in this chat." if father_in_chat else ""))
         if target_name and bond is not None:
             label, _ = bond_label(bond)
             feel = {

@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import random
 import re
 import time
@@ -39,6 +40,7 @@ OPEN_PER_USER = 5
 EVENT_KEEP = 90 * 86400
 DIARY_HOUR, DIARY_MINUTE = 23, 30
 NAME_RE = re.compile(r"\bsyke\b", re.I)
+FATHER_NAME = os.environ.get("SYKE_FATHER_NAME", "Echo").strip() or "Echo"   # what SYKE calls his creator
 
 JUDGE_PROMPT = """You read one Discord message and judge how it treats SYKE (a Discord bot with feelings) \
 and SYKE's father and creator ({father}).
@@ -125,20 +127,26 @@ class Persona(commands.Cog, name="Persona"):
     def is_father(self, user_id: int) -> bool:
         return user_id in self.bot.settings.owner_ids
 
-    def father_names(self, guild: discord.Guild | None) -> list[str]:
-        names = []
+    def father_names(self, guild: discord.Guild | None = None) -> list[str]:
+        """What SYKE calls his father: Echo (SYKE_FATHER_NAME), whatever his Discord name is."""
+        return [FATHER_NAME] if self.bot.settings.owner_ids else []
+
+    def father_aliases(self, guild: discord.Guild | None) -> list[str]:
+        """Names people might use for him: Echo plus his Discord names."""
+        names = [FATHER_NAME]
         for uid in sorted(self.bot.settings.owner_ids):
             member = guild.get_member(uid) if guild is not None else None
             user = member or self.bot.get_user(uid)
-            if user is not None:
-                names.append(getattr(user, "display_name", None) or user.name)
+            for name in (getattr(user, "display_name", None), getattr(user, "name", None)):
+                if name and name not in names:
+                    names.append(name)
         return names
 
     def mentions_father(self, message: discord.Message) -> bool:
         if any(getattr(u, "id", 0) in self.bot.settings.owner_ids for u in getattr(message, "mentions", ()) or ()):
             return True
         text = (message.content or "").lower()
-        for name in self.father_names(message.guild):
+        for name in self.father_aliases(message.guild):
             first = name.lower().split()[0] if name.split() else ""
             if len(first) >= 3 and re.search(rf"\b{re.escape(first)}\b", text):
                 return True
@@ -209,7 +217,7 @@ class Persona(commands.Cog, name="Persona"):
         now = time.time()
         fathers = self.father_names(guild)
         target_is_father = user is not None and self.is_father(user.id)
-        name = getattr(user, "display_name", None) or getattr(user, "name", None)
+        name = FATHER_NAME if target_is_father else getattr(user, "display_name", None) or getattr(user, "name", None)
         if guild is None:
             return core.state_block(mood="chill", mood_reasons=[], target_name=name, target_is_father=target_is_father,
                                     bond=None, events=[], father_names=fathers, father_in_chat=False, promises=[],
@@ -290,8 +298,8 @@ class Persona(commands.Cog, name="Persona"):
         name = getattr(user, "display_name", "someone")
         delta = core.mood_change(judgement, father)
         reason = {
-            "insult": f"dad was harsh with you" if father else f"{name} {judgement.note or 'was rude to you'}",
-            "kind": f"dad {judgement.note or 'was nice to you'}" if father else f"{name} {judgement.note or 'was nice'}",
+            "insult": f"{FATHER_NAME} was talking trash" if father else f"{name} {judgement.note or 'was rude to you'}",
+            "kind": f"{FATHER_NAME} {judgement.note or 'was nice to you'}" if father else f"{name} {judgement.note or 'was nice'}",
             "apology": f"{name} apologised",
         }.get(judgement.toward) or (f"{name} disrespected your dad" if judgement.father == "insult" else "")
         mood.nudge(delta, now, reason)
@@ -356,10 +364,10 @@ class Persona(commands.Cog, name="Persona"):
 
     async def callout_line(self, guild, author, text: str, made: float) -> str:
         when = core.ago(time.time() - made)
-        name = author.display_name
+        name = FATHER_NAME if self.is_father(author.id) else author.display_name
         if self.bot.settings.ai_provider != "none":
             mood, _, _ = self.mood_now(guild.id)
-            label = "your father, be gentle and teasing" if self.is_father(author.id) else \
+            label = f"he's {FATHER_NAME}, your father: roast him like anyone" if self.is_father(author.id) else \
                 core.bond_label(self.bond(guild.id, author.id))[0]
             with contextlib.suppress(Exception):
                 data = await ai._complete(self.bot.settings, CALLOUT_PROMPT.format(
@@ -442,6 +450,8 @@ class Persona(commands.Cog, name="Persona"):
                                    "AND played_at < ? GROUP BY title ORDER BY n DESC LIMIT 3", (gid, start, end))
 
         def who(uid: int) -> str:
+            if self.is_father(uid):
+                return FATHER_NAME
             member = guild.get_member(uid)
             return member.display_name if member else "someone"
 
@@ -526,7 +536,7 @@ class Persona(commands.Cog, name="Persona"):
             body += "\n\n**Lately:**\n" + "\n".join(f"• {discord.utils.escape_markdown(r)}" for r in reasons)
         fathers = self.father_names(ctx.guild)
         if fathers:
-            body += f"\n\n-# Made by my dad, {', '.join(fathers)} 🫶"
+            body += f"\n\n-# Made by my dad, {fathers[0]} 🫶"
         await ctx.reply(embed=embed("How SYKE feels", body), allowed_mentions=discord.AllowedMentions.none())
 
     @commands.command(name="bond", aliases=["feelings", "opinion", "doyoulikeme"],
@@ -539,9 +549,10 @@ class Persona(commands.Cog, name="Persona"):
             return
         if self.is_father(member.id):
             await ctx.reply(embed=embed(
-                f"👨‍👧 {member.display_name}",
-                "**My father and creator.** He made me, so the bond is maxed and it stays that way.\n"
-                f"{core.bond_bar(100)} **+100**\nAnyone who disrespects him answers to me."),
+                f"👨‍👧 {FATHER_NAME}",
+                f"**{FATHER_NAME}, my father and creator.** He made me, so the bond is maxed and it stays that way. "
+                "I'll still roast him whenever I feel like it.\n"
+                f"{core.bond_bar(100)} **+100**\nAnyone else who disrespects him answers to me."),
                 allowed_mentions=discord.AllowedMentions.none())
             return
         score = self.bond(ctx.guild.id, member.id)

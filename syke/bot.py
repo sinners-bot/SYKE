@@ -828,6 +828,13 @@ class Syke(commands.Bot):
             await self.answer_question(send, message.author, readable(message, question), history, where(message.channel))
         return True
 
+    def speaker_name(self, user) -> str:
+        """How SYKE names someone to the AI: his creator is always Echo (SYKE_FATHER_NAME)."""
+        if getattr(user, "id", None) in self.settings.owner_ids:
+            from .persona import FATHER_NAME
+            return FATHER_NAME
+        return author_name(user)
+
     def persona_state(self, guild, user, chat=()) -> str:
         """SYKE's mood and feelings about `user`, for the AI. Empty if the persona isn't loaded."""
         persona = self.get_cog("Persona")
@@ -842,7 +849,7 @@ class Syke(commands.Bot):
     async def answer_question(self, send, author, question: str, history: list[dict], place: str) -> None:
         question = question.strip()
         try:
-            answer = await ask(self.settings, question, history, author_name(author), place,
+            answer = await ask(self.settings, question, history, self.speaker_name(author), place,
                                state=self.persona_state(getattr(author, "guild", None), author))
         except AskUnavailable:
             await send(notice("No brain installed 🧠", "SYKE's AI isn't set up: the bot owner needs to add "
@@ -919,7 +926,7 @@ class Syke(commands.Bot):
         if not ranked:
             return None
         log.info("Yap in %s: tone %s, %d candidates (%d remixes)", guild_id, tone, len(ranked), len(remixed))
-        return await compose_reply(self.settings, ranked, Turn(author_name(message.author), text),
+        return await compose_reply(self.settings, ranked, Turn(self.speaker_name(message.author), text),
                                    chat, said, tone, remixed, avoid=list(used),
                                    voice=await self.server_voice(guild_id), weights=weights,
                                    state=self.persona_state(message.guild, message.author, chat))
@@ -944,7 +951,7 @@ class Syke(commands.Bot):
             async for m in history(limit=limit, before=message):
                 if not m.content or self.is_command_text(message.guild.id, m.content):
                     continue
-                name = "SYKE" if self.user and m.author.id == self.user.id else m.author.display_name
+                name = "SYKE" if self.user and m.author.id == self.user.id else self.speaker_name(m.author)
                 turns.append(Turn(name, m.content))
         except discord.HTTPException:
             return []
