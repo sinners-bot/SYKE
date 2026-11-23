@@ -262,6 +262,10 @@ class MusicSocial(commands.Cog, name="MusicSocial"):
             ai_score, line = await self.ai_taste(mine, theirs)
         if ai_score is not None:
             score = round(0.5 * score + 0.5 * ai_score)
+        badges = self.bot.get_cog("Achievements")
+        if badges is not None:
+            for who in (ctx.author, friend):
+                await badges.award_event(ctx.guild, who, ctx.channel, "best_blend", score, maximum=True)
         order = blend_order(mine, theirs)
         tracks = [row_to_track(row) for row, _ in order]
         for (row, who), track in zip(order, tracks):
@@ -386,6 +390,9 @@ class MusicSocial(commands.Cog, name="MusicSocial"):
             return
         player.radio = None
         player.party = Party(ctx.author.id, voice.id, ctx.channel.id, time.time(), members)
+        badges = self.bot.get_cog("Achievements")
+        if badges is not None:
+            await badges.award_event(ctx.guild, ctx.author, ctx.channel, "parties")
         await self.party_fill(player, 2)
         await ctx.reply(embed=self.party_card(ctx.guild, player.party), view=PartyCard(self, ctx.guild.id),
                         mention_author=False, allowed_mentions=discord.AllowedMentions.none())

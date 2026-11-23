@@ -117,6 +117,7 @@ land in the game. Needs `SYKE_STRIP_GAME_URL` (see **Configuration**). Also `/lo
 | `!diary [yesterday \| list \| <date>]` | SYKE's diary: around 23:30 server time he writes about the day (who was nice, who was rude, broken promises, music, his mood). `!diary channel #ch` (Manage Server) posts it every night |
 | `!promises [@user]` / `!kept [n]` | Promises SYKE heard with a deadline ("i'll play tonight", "hopping on in 10"). Miss it and keep chatting in a yap channel and he calls you out; joining voice keeps a play/hop-on promise; `!kept` says you did it. `!persona callouts on\|off` (Manage Server) |
 | `!forgive @user` | SYKE drops a grudge. Only his father or a server manager can ask |
+| `!achievements [@user]` | Badges that unlock on their own: Chatterbox, Night Owl, Early Bird, Lore Starter, Radio DJ, Tastemaker, Party Starter, Musical Soulmate, Name That Tune, Kept 10 Promises, Serial Promise Breaker, Survived SYKE's Grudge, SYKE's Favourite, Beef Champion, High Roller (and a secret one for SYKE's dad). Shows unlocked badges and progress bars; new badges are announced in chat once (`!badgeannounce off`); badges show on `!profile` and in `!wrapped` |
 
 The Strip also has `!weekly` (a growing weekly payout), `!jobs` / `!job` (shifts are quick mini-games; better jobs
 unlock as you work) and `!stocks` (six tickers that move every 15 minutes with the server's chat, laughs, voice,

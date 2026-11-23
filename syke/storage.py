@@ -335,6 +335,20 @@ CREATE TABLE IF NOT EXISTS rivalry_rounds (
     heat       INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS rivalry_rounds_pair ON rivalry_rounds (guild_id, a_id, b_id, at);
+CREATE TABLE IF NOT EXISTS achievements (
+    guild_id    INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    badge       TEXT NOT NULL,
+    unlocked_at REAL NOT NULL,
+    PRIMARY KEY (guild_id, user_id, badge)
+);
+CREATE TABLE IF NOT EXISTS achievement_counts (
+    guild_id INTEGER NOT NULL,
+    user_id  INTEGER NOT NULL,
+    counter  TEXT NOT NULL,
+    value    REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id, counter)
+);
 CREATE TABLE IF NOT EXISTS persona_diary (
     guild_id   INTEGER NOT NULL,
     day        TEXT NOT NULL,

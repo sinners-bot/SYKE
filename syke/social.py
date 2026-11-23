@@ -52,7 +52,11 @@ CATCHUP_FETCH = 900
 CATCHUP_MIN = 5
 FONTS = Path(__file__).parent / "assets" / "fonts"
 WORD = re.compile(r"[a-zA-ZäöüÄÖÜß']{3,}")
-EXTRA_SKIP = {"https", "http", "www", "com", "the", "and", "you", "that", "this", "but", "for", "with", "just",
+LINKS = re.compile(r"https?://\S+|www\.\S+|<a?:\w+:\d+>|<[@#&!]+\d+>|<t:\d+(?::\w)?>")
+EXTRA_SKIP = {"gif", "gifs", "klipy", "tenor", "giphy", "imgur", "png", "jpg", "jpeg", "mp4", "webp", "mov",
+              "sticker", "stickers", "attachment", "attachments", "cdn", "discordapp", "media", "view", "watch",
+              "youtube", "youtu", "spotify", "twitter", "tiktok", "instagram", "reddit", "status",
+              "https", "http", "www", "com", "the", "and", "you", "that", "this", "but", "for", "with", "just",
               "not", "are", "was", "have", "its", "it's", "i'm", "dont", "don't", "like", "what", "yeah", "can",
               "get", "got", "all", "they", "she", "his", "her", "him", "about", "your", "one", "out", "how",
               "der", "die", "das", "und", "ist", "ich", "nicht", "mit", "was", "auf", "ein", "eine", "aber", "auch"}
@@ -122,7 +126,8 @@ def wrapped_stats(rows: list[tuple], tz, server_rank: tuple[int, int] | None = N
         weekdays[moment.weekday()] += 1
         days.add(moment.date())
         channels[channel_id] += 1
-        for w in WORD.findall(content or ""):
+        text = LINKS.sub(" ", content or "")   # links and Discord markup aren't words ("klipy", "gif", "com"…)
+        for w in WORD.findall(text):
             lw = w.lower().strip("'")
             if lw not in STOPWORDS and lw not in EXTRA_SKIP and not lw.startswith("http"):
                 words[lw] += 1
@@ -130,7 +135,7 @@ def wrapped_stats(rows: list[tuple], tz, server_rank: tuple[int, int] | None = N
             emojis[found] += 1
         for found in emoji_lib.emoji_list(content or ""):
             emojis[found["emoji"]] += 1
-        if laughs and (best is None or laughs > best[0]) and len((content or "").split()) >= 2:
+        if laughs and (best is None or laughs > best[0]) and len(text.split()) >= 2:
             best = (laughs, content)
     streak = longest = 0
     previous = None
@@ -142,7 +147,7 @@ def wrapped_stats(rows: list[tuple], tz, server_rank: tuple[int, int] | None = N
     names = channel_names or {}
     return {
         "messages": len(rows),
-        "words": sum(len((r[2] or "").split()) for r in rows),
+        "words": sum(len(LINKS.sub(" ", r[2] or "").split()) for r in rows),
         "top_words": [w for w, _ in words.most_common(5)],
         "emoji": emojis.most_common(1)[0][0] if emojis else None,
         "emoji_count": emojis.most_common(1)[0][1] if emojis else 0,
@@ -755,6 +760,7 @@ class Social(commands.Cog, name="Social"):
         since = datetime(year, 1, 1, tzinfo=tz).timestamp()
         async with ctx.typing():
             rows = await asyncio.to_thread(self.bot.storage.author_rows, guild.id, who.id, since)
+            rows = [r for r in rows if not self.bot.is_command_text(guild.id, r[2] or "")]   # bot commands don't count
             if len(rows) < 20:
                 await ctx.reply(embed=problem("Not enough yet", f"SYKE has only {len(rows)} of {who.display_name}'s "
                                                                 f"messages from {year}. It needs 20."), ephemeral=True)
@@ -779,6 +785,12 @@ class Social(commands.Cog, name="Social"):
         if stats.get("best"):
             best = discord.utils.escape_mentions(" ".join(stats["best"].split()))[:200]
             card.description = f"😂 Funniest message ({stats['best_laughs']} laughs):\n> {best}"
+        badges = self.bot.get_cog("Achievements")
+        if badges is not None:
+            line = badges.badge_line(guild.id, who.id, since)
+            if line:
+                card.description = (card.description + "\n\n" if card.description else "") + \
+                    f"🏅 Badges unlocked in {year}: {line}"
         card.set_footer(text=f"From {len(rows):,} stored messages this year")
         await ctx.reply(embed=card, file=file, allowed_mentions=discord.AllowedMentions.none())
 

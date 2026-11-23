@@ -408,7 +408,7 @@ CATALOG: list[Category] = [
         "syke", "🫀", "SYKE himself", EVERYONE,
         "SYKE has a life of its own: moods, favourites, grudges, a memory for promises, a nightly diary, and a "
         "father, Echo (whom only SYKE is allowed to roast). Be nice to him.",
-        ["mood", "bond", "favourites", "diary", "promises", "kept", "forgive", "persona"],
+        ["mood", "bond", "favourites", "diary", "promises", "kept", "forgive", "persona", "achievements"],
         {
             "mood": "How SYKE feels right now and why. His mood moves with how people treat him and how busy the "
                     "chat is, fades back to calm over a few hours, and colours every reply he writes.",
@@ -422,12 +422,19 @@ CATALOG: list[Category] = [
             "promises": "Promises SYKE heard you make with a deadline (\"i'll play tonight\", \"hopping on in 10\"). "
                         "Miss the deadline and keep chatting, and he calls you out. Joining voice keeps a "
                         "play/hop-on promise. `promises @user` for someone else.",
+            "achievements": "Badges that unlock on their own: Chatterbox, Night Owl, Early Bird, Lore Starter, Radio "
+                            "DJ, Tastemaker, Party Starter, Musical Soulmate, Name That Tune, Kept 10 Promises, "
+                            "Survived SYKE's Grudge, SYKE's Favourite, Beef Champion, High Roller and more. "
+                            "`achievements [@user]` shows what's unlocked and progress bars for the rest. New "
+                            "badges are announced in chat (`badgeannounce off` to stop) and show on profiles "
+                            "and in `wrapped`.",
             "kept": "Tell SYKE you kept your latest promise (`kept 2` for another one).",
             "forgive": "`forgive @user`: SYKE drops his grudge. Only his father or a server manager can ask.",
             "persona": "Managers: `persona callouts on|off` (broken-promise callouts) and `persona reactions on|off` "
                        "(the emoji SYKE adds when someone's rude 😒 or nice 🥹 to him).",
         },
         sections=[("How he feels", ["mood", "bond", "favourites"]), ("His life", ["diary"]),
+                  ("Badges", ["achievements"]),
                   ("Promises", ["promises", "kept"]), ("Managers", ["forgive", "persona"])],
     ),
     Category(
@@ -531,7 +538,7 @@ BRIEF = {
     "job": "Work a mini-game shift", "stocks": "Server stock market", "radio": "Endless music by genre",
     "songquiz": "Name that song", "topsongs": "Most played and top DJs", "like": "Like the current song", "liked": "Your Liked songs", "blend": "Blend with a friend", "party": "Listening party", "beef": "Rivalry scoreboard", "afk": "Go away politely",
     "birthday": "Birthdays", "wrapped": "Your year in review", "vibe": "Channel mood check",
-    "catchup": "What you missed", "timemachine": "A year ago today", "quotebook": "Best quotes book", "lore": "Inside jokes", "mood": "How SYKE feels", "bond": "How SYKE feels about you", "favourites": "SYKE's favourites and grudges", "diary": "SYKE's nightly diary", "promises": "Promises SYKE remembers", "kept": "Keep a promise", "forgive": "Make SYKE drop a grudge", "persona": "Persona settings", "racist": "Slur counter", "work": "Clock a shift", "hustle": "Risky quick cash", "pay": "Send cash",
+    "catchup": "What you missed", "timemachine": "A year ago today", "quotebook": "Best quotes book", "lore": "Inside jokes", "mood": "How SYKE feels", "bond": "How SYKE feels about you", "favourites": "SYKE's favourites and grudges", "diary": "SYKE's nightly diary", "promises": "Promises SYKE remembers", "kept": "Keep a promise", "forgive": "Make SYKE drop a grudge", "achievements": "Your badges", "persona": "Persona settings", "racist": "Slur counter", "work": "Clock a shift", "hustle": "Risky quick cash", "pay": "Send cash",
     "balance": "Players Club card", "deposit": "Bank it (robber-proof)", "withdraw": "Take cash out",
     "rich": "Richest on the Strip",
     "shop": "Browse the storefronts", "buy": "Buy an item", "use": "Use an item", "inventory": "Items and buffs",

@@ -60,6 +60,7 @@ from .polls import Polls
 from .music_liked import LikedSongs
 from .music_social import MusicSocial
 from .rivalry import Rivalry
+from .achievements import Achievements
 from .lore import Lore
 from .moderation import Moderation, help_lines as moderation_help, pretty as pretty_permission
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
@@ -405,6 +406,7 @@ class Syke(commands.Bot):
         await self.add_cog(LikedSongs(self))
         await self.add_cog(MusicSocial(self))
         await self.add_cog(Rivalry(self))
+        await self.add_cog(Achievements(self))
         await self.add_cog(Lore(self))
         if self.settings.web_enabled:
             try:
@@ -1272,6 +1274,11 @@ class Syke(commands.Bot):
             refine_scores(profile, server, self.tz_for(ctx.guild.id), labels)
         profile.name += name_suffix
         pages = build_pages(profile, avatar_url, demo=self.storage.demo_mode(ctx.guild.id))
+        badges = self.get_cog("Achievements")
+        if badges is not None and "overview" in pages:
+            line = badges.badge_line(ctx.guild.id, profile.user_id)
+            if line:
+                pages["overview"].add_field(name="🏅 Badges", value=line[:1024], inline=False)
         view = ProfileView(self.load_card, timeout=MESSAGE_VIEW_TIMEOUT)
         message = await ctx.reply(embed=pages["overview"], view=view)
         if message is not None:

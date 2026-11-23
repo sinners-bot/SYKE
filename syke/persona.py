@@ -292,6 +292,10 @@ class Persona(commands.Cog, name="Persona"):
             "insults = insults + excluded.insults, kindness = kindness + excluded.kindness",
             (guild_id, user_id, score, now, int(kind == "insult"), int(kind == "kind")))
         self.add_event(guild_id, user_id, kind, note, weight)
+        if score <= -40:   # remembered for the "Survived SYKE's Grudge" badge
+            badges = self.bot.get_cog("Achievements")
+            if badges is not None:
+                badges.set_max(guild_id, user_id, "grudge_low", 1)
         return score
 
     def add_event(self, guild_id: int, user_id: int, kind: str, note: str, weight: float = 1.0) -> None:

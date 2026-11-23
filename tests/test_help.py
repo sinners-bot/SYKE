@@ -42,6 +42,7 @@ from syke.polls import Polls
 from syke.music_liked import LikedSongs
 from syke.music_social import MusicSocial
 from syke.rivalry import Rivalry
+from syke.achievements import Achievements
 from test_commands import run
 
 
@@ -54,7 +55,7 @@ def bot(tmp_path):
     for cog in (SykeCommands(b), Moderation(b), AutoMod(b), Security(b), TextFun(b), Community(b),
                 Economy(b), StripWorld(b), StripSlash(b), StripFeed(b), Love(b), DashboardCog(b),
                 Tickets(b), Quotes(b), Starboard(b), Notices(b), RoleMenus(b), Music(b),
-                Social(b), StripExtras(b), SlurCount(b), MemoryArchive(b), Lore(b), Persona(b), Polls(b), LikedSongs(b), MusicSocial(b), Rivalry(b)):
+                Social(b), StripExtras(b), SlurCount(b), MemoryArchive(b), Lore(b), Persona(b), Polls(b), LikedSongs(b), MusicSocial(b), Rivalry(b), Achievements(b)):
         run(b.add_cog(cog))
         names.append(cog.qualified_name)
     yield b

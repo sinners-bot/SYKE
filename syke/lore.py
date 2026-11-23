@@ -248,6 +248,12 @@ class Lore(commands.Cog, name="Lore"):
         else:
             picks = found
         picks = picks[:SHOW]
+        badges = self.bot.get_cog("Achievements")
+        if badges is not None:
+            for s in picks:   # whoever started a phrase that made the lore gets Lore Starter
+                member = guild.get_member(s["first"][2])
+                if member is not None:
+                    await badges.award_event(guild, member, ctx.channel, "lore_started", 1, maximum=True)
         card = embed(f"📜 The lore of {guild.name}",
                      "The running jokes and catchphrases that keep coming back here.")
         for s in picks:

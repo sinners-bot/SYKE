@@ -1740,6 +1740,9 @@ class Music(commands.Cog):
         if player is None:
             return
         player.radio, player.autoplay = key, False
+        badges = self.bot.get_cog("Achievements")
+        if badges is not None:
+            await badges.award_event(ctx.guild, ctx.author, ctx.channel, "radio_starts")
         if len(player.queue) < 2:
             await self.radio_fill(player)
         await self.say(ctx, f"📻 **{key.title()} radio** is on: songs keep coming until you `{p}radio off`.")
@@ -1841,6 +1844,9 @@ class Music(commands.Cog):
                         self.bot.storage.econ_touch(ctx.guild.id, winner.id, 0)
                         self.bot.storage.econ_adjust(ctx.guild.id, winner.id, cash=QUIZ_PRIZE)
                         prize = f" +{eco.money(QUIZ_PRIZE)}"
+                    badges = self.bot.get_cog("Achievements")
+                    if badges is not None:
+                        await badges.award_event(ctx.guild, winner, ctx.channel, "quiz_wins")
                     text = f"✅ {winner.mention} got it in {took:.1f}s!{prize}\nIt was {answer}."
                     colour = OK
                 else:
