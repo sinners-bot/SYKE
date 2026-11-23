@@ -279,8 +279,9 @@ CATALOG: list[Category] = [
     ),
     Category(
         "community", "🏘️", "Community", EVERYONE,
-        "Tickets, quote cards, a starboard, sticky messages, scheduled announcements and self-roles.",
-        ["ticket", "quote", "starboard", "sticky", "announce", "rolemenu"],
+        "Tickets, quote cards, polls, question boxes, a starboard, sticky messages, scheduled announcements and "
+        "self-roles.",
+        ["ticket", "quote", "poll", "starboard", "sticky", "announce", "rolemenu"],
         {
             "ticket": "Private support tickets. Admins: `ticket setup #channel @staff #logs` posts a panel with an "
                       "**Open a ticket** button. Members get a private thread with staff; **Claim** and **Close** "
@@ -289,6 +290,13 @@ CATALOG: list[Category] = [
             "quote": "Reply to any message with `quote` (or right-click it → **Apps** → **Make a quote**) and SYKE turns "
                      "it into a black-and-white quote card with the member's avatar. Buttons switch colour on, flip "
                      "it, or delete it. Admins: `quote channel #quotes` also posts every card there.",
+            "poll": "Mods: `poll` (or `/poll create`) opens a form. **Polls**: the question, options one per line, "
+                    "how long, anonymous or showing who voted, and extras (pick more than one, hide results until "
+                    "the end, vote from a list instead of buttons). Votes update live and SYKE predicts the winner, "
+                    "then comments on the result when it closes. **Questions** (`/poll question`): people press "
+                    "**Answer** and type privately (\"Who would most likely adopt a dog?\"); only admins and mods "
+                    "can read the answers, and for name questions SYKE counts who was named most. `poll list`, "
+                    "`poll end 12` (or `Q4` for a question).",
             "starboard": "`starboard channel #hall-of-fame` turns it on. Messages with enough ⭐ get reposted there, "
                          "and the count updates live. `starboard threshold 5`, `starboard emoji 🔥`, "
                          "`starboard selfstar on`, `starboard ignore #channel`, `starboard off`.",
@@ -304,8 +312,9 @@ CATALOG: list[Category] = [
                         "Also `rolemenu remove`, `edit`, `delete`.",
         },
         sections=[("Everyone", ["ticket", "quote"]),
-                  ("Admins", ["starboard", "sticky", "announce", "rolemenu"])],
-        access_of={"starboard": ADMIN, "sticky": MODERATOR, "announce": ADMIN, "rolemenu": MODERATOR},
+                  ("Admins", ["poll", "starboard", "sticky", "announce", "rolemenu"])],
+        access_of={"poll": MODERATOR, "starboard": ADMIN, "sticky": MODERATOR, "announce": ADMIN,
+                   "rolemenu": MODERATOR},
     ),
     Category(
         "music", "🎵", "Music", EVERYONE,
@@ -518,7 +527,7 @@ BRIEF = {
     "hilo": "Higher or lower", "flip": "Coinflip, pays 1.95×", "chips": "Cash → chips, free",
     "cashout": "Chips → cash, free",
     "ticket": "Private support tickets", "quote": "Turn a message into a card", "starboard": "Hall of fame by stars",
-    "sticky": "Keep a message at the bottom", "announce": "Schedule announcements", "rolemenu": "Self-roles and colours",
+    "sticky": "Keep a message at the bottom", "announce": "Schedule announcements", "poll": "Polls and question boxes", "rolemenu": "Self-roles and colours",
     "play": "Play a song or playlist", "playnext": "Play right after this one", "skip": "Skip the song",
     "queue": "What's next", "nowplaying": "The song playing now", "pause": "Pause", "resume": "Resume",
     "stop": "Stop and clear", "leave": "Leave voice", "join": "Join your voice channel", "volume": "Volume 0-200",

@@ -247,6 +247,52 @@ CREATE TABLE IF NOT EXISTS persona_promises (
     status     TEXT NOT NULL DEFAULT 'open'
 );
 CREATE INDEX IF NOT EXISTS persona_promises_user ON persona_promises (guild_id, user_id, status);
+CREATE TABLE IF NOT EXISTS polls (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id   INTEGER NOT NULL,
+    channel_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL DEFAULT 0,
+    author_id  INTEGER NOT NULL,
+    question   TEXT NOT NULL,
+    options    TEXT NOT NULL,
+    anonymous  INTEGER NOT NULL DEFAULT 0,
+    multi      INTEGER NOT NULL DEFAULT 0,
+    blind      INTEGER NOT NULL DEFAULT 0,
+    style      TEXT NOT NULL DEFAULT 'buttons',
+    created    REAL NOT NULL,
+    ends_at    REAL,
+    closed     INTEGER NOT NULL DEFAULT 0,
+    prediction TEXT NOT NULL DEFAULT '',
+    predicted  INTEGER NOT NULL DEFAULT -1
+);
+CREATE INDEX IF NOT EXISTS polls_open ON polls (closed, ends_at);
+CREATE TABLE IF NOT EXISTS poll_votes (
+    poll_id    INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL,
+    option     INTEGER NOT NULL,
+    at         REAL NOT NULL,
+    PRIMARY KEY (poll_id, user_id, option)
+);
+CREATE TABLE IF NOT EXISTS questions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id   INTEGER NOT NULL,
+    channel_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL DEFAULT 0,
+    author_id  INTEGER NOT NULL,
+    question   TEXT NOT NULL,
+    kind       TEXT NOT NULL DEFAULT 'names',
+    created    REAL NOT NULL,
+    ends_at    REAL,
+    closed     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS questions_open ON questions (closed, ends_at);
+CREATE TABLE IF NOT EXISTS question_answers (
+    question_id INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    answer      TEXT NOT NULL,
+    at          REAL NOT NULL,
+    PRIMARY KEY (question_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS persona_diary (
     guild_id   INTEGER NOT NULL,
     day        TEXT NOT NULL,
@@ -301,6 +347,13 @@ class Storage:
             cur = self._conn.execute(sql, params)
             self._conn.commit()
             return cur.rowcount
+
+    def _insert(self, sql: str, params: tuple) -> int:
+        """Run an INSERT and return the new row's id."""
+        with self._lock:
+            cur = self._conn.execute(sql, params)
+            self._conn.commit()
+            return int(cur.lastrowid or 0)
 
     def _read(self, sql: str, params: tuple) -> list[tuple]:
         return self._conn.execute(sql, params).fetchall()
