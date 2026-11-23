@@ -36,6 +36,8 @@ from discord.ext import commands
 
 from . import lavalink as ll
 from . import music_lists as lists
+from . import ai
+from . import music_match as match
 from . import music_sources as src
 from .moderation import BRAND, OK, WARN, embed, moderator, problem
 from .music_sources import FILTERS, Track, duration_text
@@ -49,6 +51,12 @@ IDLE_SECONDS = 180
 ALONE_SECONDS = 120
 PAGE = 10
 RETRIES = 2
+RADIO_PROMPT = """You pick songs for a Discord radio station. List real songs that clearly belong on the station \
+described: songs a fan of that genre would expect to hear. Mostly well-known tracks, a few deeper cuts, at most 2 \
+per artist, no songs from other genres. Use each song's exact official artist and title, in its original script \
+for non-English songs (e.g. Cyrillic for Russian). Only songs you are sure exist. Never repeat already-played ones.
+
+Reply with JSON only: {"songs": [{"artist": "...", "title": "..."}]}"""
 YT_RESUMES = 3     # Lavalink: reload a song YouTube cut off mid-play this many times before giving up
 
 
@@ -301,7 +309,10 @@ class Player:
             await vc.play_track(encoded, position_ms=int(position * 1000), volume=self.volume,
                                 filters=LL_FILTERS.get(self.filter, {}), after=self._after)
         except LookupError as error:
-            await self.say(problem("Skipped a song", f"**{track.label[:150]}**: {error}"))
+            if track.radio:   # a radio pick with no clean upload: just move on to the next one
+                log.info("Radio skipped %s: %s", track.label, error)
+            else:
+                await self.say(problem("Skipped a song", f"**{track.label[:150]}**: {error}"))
             return False
         except Exception as error:
             log.warning("Lavalink couldn't play in %s: %s", self.guild.id, error)
@@ -394,6 +405,14 @@ class Player:
                     position = self.position()
                     midsong = position > 3 and (not track.duration or track.is_live
                                                 or position < track.duration - 6)
+                    if not track.fallback and track.alternates:
+                        # This upload is blocked: switch to another upload of the same song, same second.
+                        track.encoded = track.alternates.pop(0)
+                        resume_at = max(0.0, position - 1) if midsong else 0.0
+                        log.info("YouTube refused %s; switching to another upload at %.0fs (%d left)",
+                                 track.label, resume_at, len(track.alternates))
+                        if await self._play(resume_at):
+                            return
                     if midsong and not track.fallback and self.retries < YT_RESUMES:
                         # YouTube cut the stream mid-song ("confirm you're not a bot"). It's usually a blip:
                         # wait a moment, load the song fresh and carry on from the same second.
@@ -764,6 +783,8 @@ class Music(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot
         self.players: dict[int, Player] = {}
+        self.radio_pool: dict[str, list[tuple[str, str]]] = {}   # AI-picked songs per station, not yet played
+        self.radio_asked: dict[str, float] = {}
         self._session = None
         self._alone: dict[int, asyncio.Task] = {}
         self.node: ll.Node | None = None
@@ -892,12 +913,19 @@ class Music(commands.Cog):
         return [], None, None
 
     async def ll_resolve(self, track: Track) -> str:
-        """The Lavalink id for a track, searching for it if it's just a name (Spotify, Apple Music, Deezer)."""
+        """The Lavalink id for a track, searching for it if it's just a name (radio, Spotify, Apple Music…).
+
+        Name searches look on YouTube Music and YouTube, keep only uploads that really are the song (no covers,
+        sped-up edits or hour loops) and remember the runners-up, so a blocked upload can be swapped out."""
         if track.encoded and not track.fallback:
             return track.encoded
         if track.encoded and track.fallback and "soundcloud" in (track.source or "").lower():
             return track.encoded
         text = track.query or track.title
+        if not track.fallback and track.query:
+            hit = await self._best_upload(track)
+            if hit is not None:
+                return hit
         prefixes = ["scsearch:"] if track.fallback else ["ytsearch:", "scsearch:"]
         last = None
         for prefix in prefixes:
@@ -907,17 +935,42 @@ class Music(commands.Cog):
                 found, error = [], str(err)
             last = error or last
             if found:
-                hit = ll_track(found[0])
-                track.encoded = hit.encoded
-                if not track.url or track.query or track.fallback:
-                    track.url = hit.url or track.url
-                track.source = hit.source or track.source
-                track.duration = track.duration or hit.duration
-                track.thumbnail = track.thumbnail or hit.thumbnail
-                if track.title == track.url:
-                    track.title = hit.title
+                self._take(track, ll_track(found[0]))
                 return track.encoded
         raise LookupError(src.clean_error(Exception(last)) if last else f"Couldn't find **{text[:100]}**.")
+
+    @staticmethod
+    def _take(track: Track, hit: Track) -> None:
+        track.encoded = hit.encoded
+        if not track.url or track.query or track.fallback:
+            track.url = hit.url or track.url
+        track.source = hit.source or track.source
+        track.duration = hit.duration or track.duration
+        track.thumbnail = track.thumbnail or hit.thumbnail
+        if track.title == track.url:
+            track.title = hit.title
+
+    async def _best_upload(self, track: Track) -> str | None:
+        title, artist = match.split_query(track.query, track.title)
+        searches = [f"ytmsearch:{artist} {title}".strip(), f"ytsearch:{artist} - {title}".strip(" -")]
+        results: list[dict] = []
+        loads = await asyncio.gather(*(self.ll_load(q) for q in searches), return_exceptions=True)
+        for load in loads:
+            if isinstance(load, Exception):
+                continue
+            for data in load[0][:8]:
+                info = data.get("info") or {}
+                results.append({"identifier": info.get("identifier"), "title": info.get("title") or "",
+                                "author": info.get("author") or "", "source": info.get("sourceName") or "",
+                                "duration": (info.get("length") or 0) / 1000 or None, "data": data})
+        picked = match.pick_uploads(title, artist, results)
+        if not picked:
+            log.info("No clean upload of %r (%d results)", track.query, len(results))
+            return None
+        best, *rest = picked
+        self._take(track, ll_track(best["data"]))
+        track.alternates = [r["data"]["encoded"] for r in rest if r["data"].get("encoded")]
+        return track.encoded
 
     async def ll_lookup(self, kind: str, value: str, requester: int) -> tuple[list[Track], str | None]:
         if kind == "url":
@@ -1494,29 +1547,95 @@ class Music(commands.Cog):
             log.warning("Couldn't record a play in %s", guild_id, exc_info=True)
 
     async def radio_fill(self, player: Player, count: int = RADIO_BATCH) -> None:
+        """Queue the next radio songs: the station's hand-picked list, songs the AI picks for the station's
+        description, and (only when neither has enough) filtered YouTube searches."""
         genre = player.radio
         if not genre:
             return
-        recent = {t.label.lower() for t in player.history[-60:]} | {t.label.lower() for t in player.queue}
+        recent = {t.label.lower() for t in player.history[-80:]} | {t.label.lower() for t in player.queue}
         if player.current is not None:
             recent.add(player.current.label.lower())
-        if genre in lists.GENRES:
-            pool = [(a, t) for a, t in lists.GENRES[genre] if f"{t} — {a}".lower() not in recent]
-            if len(pool) < count:  # gone through the list: start over, minus what just played
-                pool = [(a, t) for a, t in lists.GENRES[genre]
-                        if f"{t} — {a}".lower() not in {x.label.lower() for x in player.history[-8:]}]
-            random.shuffle(pool)
-            for artist, title in pool[:count]:
-                player.queue.append(Track(title=f"{title} — {artist}", query=f"{artist} - {title}", uploader=artist,
-                                          source="Radio"))
+
+        def add(artist: str, title: str) -> bool:
+            label = f"{title} — {artist}"
+            if label.lower() in recent:
+                return False
+            recent.add(label.lower())
+            player.queue.append(Track(title=label, query=f"{artist} - {title}", uploader=artist, source="Radio",
+                                      radio=genre))
+            return True
+
+        added = 0
+        fixed = list(lists.GENRES.get(genre, []))
+        random.shuffle(fixed)
+        ai_share = count // 2 if fixed else count
+        for artist, title in await self.radio_ai_picks(genre, ai_share, recent):
+            if added >= ai_share:
+                break
+            added += add(artist, title)
+        for artist, title in fixed:
+            if added >= count:
+                break
+            added += add(artist, title)
+        if added < count and fixed:  # gone through the list: start over, minus what just played
+            last = {x.label.lower() for x in player.history[-8:]}
+            for artist, title in fixed:
+                if added >= count:
+                    break
+                if f"{title} — {artist}".lower() not in last:
+                    recent.discard(f"{title} — {artist}".lower())
+                    added += add(artist, title)
+        if added < count:
+            added += await self._radio_search(player, genre, count - added, recent)
+
+    async def radio_ai_picks(self, genre: str, count: int, recent: set[str]) -> list[tuple[str, str]]:
+        """Real songs the AI picks for this station. The pool is refilled in the background while songs play,
+        so only the very first fill makes anyone wait."""
+        if count <= 0 or self.bot.settings.ai_provider == "none":
+            return []
+        pool = self.radio_pool.setdefault(genre, [])
+        pool[:] = [(a, t) for a, t in pool if f"{t} — {a}".lower() not in recent]
+        if not pool:
+            await self._refill_radio(genre, set(recent))
+        random.shuffle(pool)
+        picked, pool[:] = pool[:count], pool[count:]
+        if len(pool) < 2 * RADIO_BATCH:
+            asyncio.ensure_future(self._refill_radio(genre, set(recent) | {f"{t} — {a}".lower() for a, t in picked}))
+        return picked
+
+    async def _refill_radio(self, genre: str, recent: set[str]) -> None:
+        if time.monotonic() - self.radio_asked.get(genre, -1e9) < 60:
             return
-        seeds = list(lists.RADIO_SEARCHES.get(genre, []))
+        self.radio_asked[genre] = time.monotonic()
+        pool = self.radio_pool.setdefault(genre, [])
+        played = sorted(recent)[-40:]
+        brief = lists.STATION_BRIEFS.get(genre, f"{genre} music")
+        try:
+            data = await ai._complete(self.bot.settings, RADIO_PROMPT, (
+                f"Station: {genre} — {brief}\nHow many: 16\n"
+                f"Already played (don't repeat): {'; '.join(played) or 'nothing yet'}"), 0.9, 25)
+        except Exception as error:
+            log.info("Radio AI picks failed for %s: %s", genre, error)
+            return
+        for item in data.get("songs") or []:
+            artist = " ".join(str(item.get("artist") or "").split())[:80]
+            title = " ".join(str(item.get("title") or "").split())[:100]
+            if artist and title and f"{title} — {artist}".lower() not in recent and (artist, title) not in pool:
+                pool.append((artist, title))
+
+    async def _radio_search(self, player: Player, genre: str, count: int, recent: set[str]) -> int:
+        """Last resort for a station: search, and keep only results that look like real single songs."""
+        seeds = list(lists.RADIO_SEARCHES.get(genre, [])) or [f"{genre} music"]
         random.shuffle(seeds)
         added = 0
         for seed in seeds:
             try:
                 if self.node is not None:
-                    found, _, _ = await self.ll_load(f"ytsearch:{seed}")
+                    found = []
+                    for prefix in ("ytmsearch:", "ytsearch:"):
+                        found, _, _ = await self.ll_load(f"{prefix}{seed}")
+                        if found:
+                            break
                     candidates = [ll_track(t) for t in found]
                 else:
                     info = await src.extract(f"ytsearch10:{seed}", flat=True)
@@ -1525,14 +1644,16 @@ class Music(commands.Cog):
                 continue
             random.shuffle(candidates)
             for track in candidates:
-                if track.label.lower() in recent or (track.duration and track.duration > 900):
+                if track.label.lower() in recent or not match.plausible_song(track.title, track.duration):
                     continue
                 recent.add(track.label.lower())
+                track.radio = genre
                 player.queue.append(track)
                 added += 1
-                if added >= count:
-                    return
                 break  # one per search, so the mix stays varied
+            if added >= count:
+                break
+        return added
 
     def stations_card(self, ctx, lead: str = "") -> discord.Embed:
         p = self.p(ctx)

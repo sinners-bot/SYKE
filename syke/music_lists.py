@@ -157,6 +157,13 @@ GENRES: dict[str, list[tuple[str, str]]] = {
         ("Chopin", "Nocturne Op. 9 No. 2"), ("Satie", "Gymnopédie No. 1"), ("Carl Orff", "O Fortuna"),
         ("Johann Strauss II", "The Blue Danube"), ("Rossini", "William Tell Overture"),
     ],
+    "russian": [
+        ("JONY", "Комета"), ("Miyagi & Andy Panda", "Kosandra"), ("Little Big", "Skibidi"), ("Little Big", "Uno"),
+        ("t.A.T.u.", "All the Things She Said"), ("t.A.T.u.", "Нас не догонят"), ("Zivert", "Life"),
+        ("Morgenshtern & Элджей", "Cadillac"), ("Кино", "Группа крови"), ("Кино", "Кукушка"), ("Грибы", "Тает лёд"),
+        ("Rauf & Faik", "Детство"), ("HammAli & Navai", "Девочка-война"), ("Artik & Asti", "Под гипнозом"),
+        ("Руки Вверх", "Он тебя целует"),
+    ],
 }
 
 # Radio-only moods: endless search seeds rather than a fixed list.
@@ -181,6 +188,34 @@ RADIO_SEARCHES: dict[str, list[str]] = {
     "gaming": ["video game soundtrack", "gaming music mix song", "boss battle music", "minecraft soundtrack"],
     "sleep": ["sleep ambient music", "calm piano music", "ambient soundscape", "rain sleep music"],
     "christmas": ["christmas song", "classic christmas song", "christmas pop song", "christmas jazz song"],
+    "french": ["rap français son", "french pop song", "chanson française", "rap fr hit"],
+    "italian": ["canzone italiana", "rap italiano hit", "italian pop song", "musica italiana"],
+    "brazilian": ["funk brasileiro", "brazilian funk song", "sertanejo hit", "mpb song"],
+    "persian": ["persian pop song", "آهنگ ایرانی", "iranian song", "persian rap song"],
+}
+
+# What belongs on each station, for the AI that picks songs (and keeps the wrong genre out).
+STATION_BRIEFS: dict[str, str] = {
+    "rap": "mainstream US hip-hop hits and classics", "drill": "UK and US drill (Chicago, NY, UK drill)",
+    "uk": "UK rap and grime", "deutschrap": "German-language rap (Deutschrap)", "phonk": "phonk and drift phonk",
+    "pop": "global pop hits", "rnb": "R&B, old and new", "kpop": "Korean pop (K-pop) idol groups and soloists",
+    "latin": "reggaeton, Latin trap and Latin pop", "afro": "Afrobeats and Afropop", "anime": "anime openings, "
+    "endings and J-pop/J-rock used in anime", "rock": "rock classics and modern rock", "metal": "heavy metal, "
+    "nu metal, metalcore", "indie": "indie and alternative", "country": "country, old and new",
+    "reggae": "reggae and dancehall", "edm": "EDM: big-room, electro house, festival dance",
+    "house": "house music (deep, tech, afro, classic house)", "techno": "techno", "dnb": "drum and bass",
+    "amapiano": "amapiano from South Africa", "jerseyclub": "Jersey club", "disco": "disco and funk",
+    "synthwave": "synthwave and retrowave", "nightcore": "nightcore and sped-up versions of popular songs",
+    "balkan": "Balkan pop and rap (ex-Yugoslav, Albanian, Bulgarian)", "turkish": "Turkish pop and rap",
+    "arabic": "Arabic pop and rap", "bollywood": "Bollywood and Punjabi songs", "russian": "Russian-language "
+    "pop, rap and rock", "french": "French rap and pop (rap français, variété)", "italian": "Italian pop and "
+    "rap", "brazilian": "Brazilian funk, sertanejo, MPB and Brazilian pop", "persian": "Persian (Iranian) pop and "
+    "rap", "throwback": "2000s and 2010s hits everyone knows", "jazz": "jazz standards and modern jazz",
+    "classical": "classical music: well-known pieces", "chill": "chill, laid-back songs (indie, R&B, acoustic)",
+    "lofi": "lo-fi hip-hop beats to study to", "sad": "sad songs: heartbreak rap, sad pop, emotional R&B",
+    "gym": "hype workout songs: hard rap, phonk, rock anthems", "party": "party and club bangers",
+    "gaming": "video game soundtracks and gaming anthems", "sleep": "calm ambient and piano music for sleeping",
+    "christmas": "Christmas songs, classic and modern",
 }
 GENRE_ALIASES = {"uk drill": "drill", "ukdrill": "drill", "german": "deutschrap", "german rap": "deutschrap",
                  "deutsch": "deutschrap", "hiphop": "rap", "hip-hop": "rap", "hip hop": "rap", "r&b": "rnb",
@@ -196,7 +231,12 @@ GENRE_ALIASES = {"uk drill": "drill", "ukdrill": "drill", "german": "deutschrap"
                  "ex-yu": "balkan", "yugo": "balkan", "turkce": "turkish", "türkçe": "turkish", "arab": "arabic",
                  "hindi": "bollywood", "punjabi": "bollywood", "desi": "bollywood", "retrowave": "synthwave",
                  "sped up": "nightcore", "spedup": "nightcore", "games": "gaming", "game": "gaming",
-                 "ost": "gaming", "ambient": "sleep", "xmas": "christmas", "weihnachten": "christmas"}
+                 "ost": "gaming", "ambient": "sleep", "xmas": "christmas", "weihnachten": "christmas",
+                 "russia": "russian", "ru": "russian", "rus": "russian", "русский": "russian", "русская": "russian",
+                 "russian rap": "russian", "france": "french", "francais": "french", "français": "french",
+                 "rap fr": "french", "fr": "french", "italy": "italian", "italiano": "italian", "brazil": "brazilian",
+                 "brasil": "brazilian", "funk brasileiro": "brazilian", "baile funk": "brazilian",
+                 "iranian": "persian", "farsi": "persian", "iran": "persian"}
 
 
 def resolve_genre(text: str) -> str | None:
@@ -215,7 +255,8 @@ STATION_GROUPS: list[tuple[str, list[str]]] = [
     ("🎧 Pop & R&B", ["pop", "rnb", "kpop", "latin", "afro", "anime"]),
     ("🎸 Rock & more", ["rock", "metal", "indie", "country", "reggae"]),
     ("🪩 Dance", ["edm", "house", "techno", "dnb", "amapiano", "jerseyclub", "disco", "synthwave", "nightcore"]),
-    ("🌍 Around the world", ["balkan", "turkish", "arabic", "bollywood"]),
+    ("🌍 Around the world", ["russian", "balkan", "turkish", "arabic", "persian", "bollywood", "french", "italian",
+                            "brazilian"]),
     ("🕰️ Classics", ["throwback", "jazz", "classical"]),
     ("✨ Moods", ["chill", "lofi", "sad", "gym", "party", "gaming", "sleep", "christmas"]),
 ]

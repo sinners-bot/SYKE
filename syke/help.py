@@ -336,8 +336,9 @@ CATALOG: list[Category] = [
             "music": "The music commands as slash commands (`/music pause`, `/music loop`…), plus "
                      "`music dj @role` to let only a DJ role control playback.",
             "autoplay": "When the queue runs out, keep playing songs like the last one.",
-            "radio": "Endless music from 40 stations: rap (`drill`, `uk`, `deutschrap`, `phonk`), pop (`kpop`, "
-                     "`latin`, `afro`, `anime`), `rock`, `metal`, `indie`, `country`, `reggae`, dance (`house`, "
+            "radio": "Endless music from 45 stations, picked to fit each one (the right upload of the right song, "
+                     "never covers, sped-up edits or hour-long mixes): rap (`drill`, `uk`, `deutschrap`, `phonk`), pop (`kpop`, "
+                     "`latin`, `afro`, `anime`), `russian`, `french`, `italian`, `brazilian`, `persian`, `rock`, `metal`, `indie`, `country`, `reggae`, dance (`house`, "
                      "`techno`, `dnb`, `amapiano`, `jerseyclub`, `disco`), `balkan`, `turkish`, `arabic`, "
                      "`bollywood`, `jazz`, `classical` and moods (`chill`, `lofi`, `sad`, `gym`, `party`, `gaming`, "
                      "`sleep`, `christmas`). `radio` alone lists them all; `radio off` stops it.",

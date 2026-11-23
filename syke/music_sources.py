@@ -66,6 +66,8 @@ class Track:
     origin: str = ""              # the Spotify / Apple Music / Deezer link it came from
     encoded: str = ""             # Lavalink's track id, when playing through Lavalink
     fallback: bool = False        # Lavalink: YouTube failed, try SoundCloud next
+    alternates: list = field(default_factory=list)   # Lavalink: other uploads of the same song, best first
+    radio: str = ""               # the radio station this song was picked for
 
     @property
     def label(self) -> str:
