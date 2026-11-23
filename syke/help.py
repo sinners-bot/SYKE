@@ -406,7 +406,8 @@ CATALOG: list[Category] = [
                         "play/hop-on promise. `promises @user` for someone else.",
             "kept": "Tell SYKE you kept your latest promise (`kept 2` for another one).",
             "forgive": "`forgive @user`: SYKE drops his grudge. Only his father or a server manager can ask.",
-            "persona": "Managers: `persona callouts on|off` turns the broken-promise callouts on or off.",
+            "persona": "Managers: `persona callouts on|off` (broken-promise callouts) and `persona reactions on|off` "
+                       "(the emoji SYKE adds when someone's rude 😒 or nice 🥹 to him).",
         },
         sections=[("How he feels", ["mood", "bond", "favourites"]), ("His life", ["diary"]),
                   ("Promises", ["promises", "kept"]), ("Managers", ["forgive", "persona"])],

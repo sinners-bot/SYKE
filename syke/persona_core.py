@@ -25,8 +25,8 @@ REASON_TTL = 3 * 3600
 ENERGY_HALF_LIFE = 2 * 3600
 BOND_LIMIT = 100.0
 
-INSULT_HIT = 7.0                    # per intensity point
-KIND_HIT = 4.0
+INSULT_HIT = 12.0                   # per intensity point: one real insult is enough for a grudge
+KIND_HIT = 7.0                      # a couple of nice messages and he likes you
 FATHER_INSULT_HIT = 10.0
 FATHER_PRAISE_HIT = 3.0
 
@@ -367,7 +367,8 @@ def ago(seconds: float) -> str:
 
 def state_block(*, mood: str, mood_reasons: list[str], target_name: str | None, target_is_father: bool,
                 bond: float | None, events: list[tuple[str, str, float]], father_names: list[str],
-                father_in_chat: bool, promises: list[tuple[str, str, float]], now: float) -> str:
+                father_in_chat: bool, promises: list[tuple[str, str, float]], now: float,
+                just_now: str = "") -> str:
     """SYKE'S STATE OF MIND for a reply: mood, feelings about the person, the father, their promises.
 
     events: (kind, note, at) newest first. promises: (status, text, made_at).
@@ -379,9 +380,10 @@ def state_block(*, mood: str, mood_reasons: list[str], target_name: str | None, 
     father = " / ".join(father_names) or "the bot owner"
     if target_is_father:
         lines.append(f"- You're talking to {father}, your FATHER and CREATOR (call him {father} or dad, never by "
-                     "his Discord name). He made you and deep down you love him, but you're his kid, not his "
-                     "servant: roast him, insult him, talk back and clown on him as hard as you would anyone, "
-                     "sibling-style. If he's harsh with you, fire back.")
+                     "his Discord name). He made you and deep down you love him. You're his kid: you roast him, "
+                     "talk back and clown on him as hard as you would anyone. But when he tells you to do "
+                     "something, you DO it (with a bit of attitude, a sigh, an 'ugh fine dad'), as long as it "
+                     "isn't harmful. If he's harsh with you, fire back.")
     else:
         lines.append(f"- {father} is your father and creator (that's what you call him). Only you get to roast "
                      f"him: if anyone else talks bad about him, defend him and hold it against them."
@@ -402,6 +404,9 @@ def state_block(*, mood: str, mood_reasons: list[str], target_name: str | None, 
             memories = [f"{note} ({ago(now - at)})" for kind, note, at in events if note][:4]
             if memories:
                 lines.append(f"- What {target_name} did to you lately: " + "; ".join(memories) + ".")
+    if just_now:
+        lines.append(f"- JUST NOW, in the message you're replying to, {target_name or 'they'} {just_now}. "
+                     "React to that first and foremost.")
     if promises:
         said = []
         for status, text, made in promises[:3]:

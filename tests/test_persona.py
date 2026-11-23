@@ -89,7 +89,9 @@ def world(tmp_path):
 
 def test_bonds_move_fade_and_label():
     insult = core.Judgement("insult", 2, "none", "called you trash")
-    assert core.bond_change(0, insult) == -14
+    assert core.bond_change(0, insult) == -24
+    assert core.bond_label(core.bond_change(0, core.Judgement("insult", 1)))[0] == "neutral"
+    assert core.bond_label(core.bond_change(0, core.Judgement("insult", 2)))[0] == "grudge"   # one real insult
     assert core.bond_change(-40, core.Judgement("apology")) == 20          # sorry wins half back
     assert core.bond_change(0, core.Judgement("neutral", 1, "insult")) == -10  # dissing dad costs you
     assert core.faded(-40, 0, core.BOND_HALF_LIFE) == pytest.approx(-20)
@@ -128,7 +130,7 @@ def test_ignores_things_that_arent_promises(text):
 def test_state_block_knows_the_father():
     dad = core.state_block(mood="happy", mood_reasons=[], target_name="Echo", target_is_father=True, bond=None,
                            events=[], father_names=["Echo"], father_in_chat=True, promises=[], now=0)
-    assert "FATHER and CREATOR" in dad and "roast him, insult him" in dad and "call him Echo" in dad
+    assert "FATHER and CREATOR" in dad and "roast him" in dad and "you DO it" in dad and "call him Echo" in dad
     other = core.state_block(mood="grumpy", mood_reasons=["Mo called you trash"], target_name="Mo",
                              target_is_father=False, bond=-30, events=[("insult", "called you trash", 0)],
                              father_names=["Echo"], father_in_chat=False,
@@ -143,13 +145,13 @@ async def test_insults_and_apologies_change_the_bond_and_mood(world):
     bot, persona, guild = world
     mo = guild.members[MO]
     await persona.observe(Msg(guild, mo, "syke you are useless and dumb"))
-    assert persona.bond(GID, MO) == pytest.approx(-14)
+    assert persona.bond(GID, MO) == pytest.approx(-24)
     assert persona.mood_now(GID)[0] in ("grumpy", "irritable")
     assert persona.events(GID, MO)[0][1] == 'called you "useless"'
     await persona.observe(Msg(guild, mo, "sorry syke"))
-    assert persona.bond(GID, MO) == pytest.approx(-7)
+    assert persona.bond(GID, MO) == pytest.approx(-12)
     await persona.observe(Msg(guild, mo, "useless game honestly"))      # not talking to SYKE: no change
-    assert persona.bond(GID, MO) == pytest.approx(-7)
+    assert persona.bond(GID, MO) == pytest.approx(-12)
 
 
 async def test_the_father_is_loved_and_defended(world):
@@ -195,7 +197,7 @@ async def test_commands_show_feelings_and_diary(world):
     bot, persona, guild = world
     mo, zara = guild.members[MO], guild.members[ZARA]
     await persona.observe(Msg(guild, mo, "syke you're trash"))
-    for _ in range(3):
+    for _ in range(2):
         await persona.observe(Msg(guild, zara, "thanks syke, love you"))
     ctx = Ctx(guild, mo)
     await persona.bond_cmd.callback(persona, ctx, None)
@@ -299,3 +301,68 @@ def test_old_feelings_are_wiped_once(world):
 def core_min_new():
     from syke.persona import VIBE_MIN_NEW
     return VIBE_MIN_NEW
+
+
+class ReactMsg(Msg):
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.reactions = []
+
+    async def add_reaction(self, emoji):
+        self.reactions.append(emoji)
+
+
+async def test_reply_waits_for_the_verdict_and_syke_reacts(world, monkeypatch):
+    bot, persona, guild = world
+    bot.settings = replace(bot.settings, ai_provider="openai")
+
+    async def judge(settings, system, user, temperature, timeout):
+        if "MESSAGE TO JUDGE" not in user:
+            return {"vibe": "chill", "valence": 0.1, "energy": 0.3}
+        if "trash" in user.split("MESSAGE TO JUDGE")[1]:
+            return {"aimed_at_syke": True, "toward": "insult", "intensity": 2, "confidence": 0.9,
+                    "note": "called you trash"}
+        return {"aimed_at_syke": True, "toward": "kind", "intensity": 2, "confidence": 0.9, "note": "thanked you"}
+    monkeypatch.setattr("syke.persona.ai._complete", judge)
+    rude = ReactMsg(guild, guild.members[MO], "syke you're trash lol")
+    await persona.observe(rude)                     # returns only after the verdict is in
+    assert rude.reactions == ["💔"] and persona.bond(GID, MO) == pytest.approx(-24)
+    state = persona.prompt_state(guild, guild.members[MO])
+    assert "JUST NOW" in state and "called you trash" in state and "grudge" in state
+    nice = ReactMsg(guild, guild.members[ZARA], "thank you syke")
+    await persona.observe(nice)
+    assert nice.reactions == ["❤️"] and persona.bond(GID, ZARA) == pytest.approx(14)
+    bot.storage.update_config(GID, "persona", reactions=False)
+    quiet = ReactMsg(guild, guild.members[ZARA], "thank you syke")
+    await persona.observe(quiet)
+    assert quiet.reactions == []
+
+
+async def test_syke_obeys_echo_about_people(world, monkeypatch):
+    bot, persona, guild = world
+    bot.settings = replace(bot.settings, ai_provider="openai")
+    guild.members[MO].bot = False
+    orders = iter([{"aimed_at_syke": True, "toward": "neutral", "confidence": 0.9, "order": "forgive",
+                    "order_target": "mo"},
+                   {"aimed_at_syke": True, "toward": "neutral", "confidence": 0.9, "order": "dislike",
+                    "order_target": "Zara"},
+                   {"aimed_at_syke": True, "toward": "neutral", "confidence": 0.9, "order": "dislike",
+                    "order_target": "Zara"}])
+
+    async def judge(settings, system, user, temperature, timeout):
+        if "MESSAGE TO JUDGE" not in user:
+            return {"vibe": "chill", "valence": 0.1, "energy": 0.3}
+        return next(orders)
+    monkeypatch.setattr("syke.persona.ai._complete", judge)
+    persona.change_bond(GID, MO, -50, "insult", "called you trash")
+    dad = guild.members[DAD]
+    order = ReactMsg(guild, dad, "syke forgive mo")
+    await persona.observe(order)
+    assert persona.bond(GID, MO) == pytest.approx(5) and order.reactions == ["🕊️"]
+    assert "because Echo said so" in persona.events(GID, MO)[0][1]
+    assert "told you to forgive Mo" in persona.prompt_state(guild, dad)
+    await persona.observe(ReactMsg(guild, dad, "syke don't trust zara"))
+    assert persona.bond(GID, ZARA) == pytest.approx(-35)
+    stranger = ReactMsg(guild, guild.members[MO], "syke hate zara")        # only Echo gives orders
+    await persona.observe(stranger)
+    assert persona.bond(GID, ZARA) == pytest.approx(-35)

@@ -34,11 +34,14 @@ from .moderation import embed, problem
 log = logging.getLogger("syke.persona")
 
 AI_PER_MINUTE = 20
-JUDGE_CONFIDENCE = 0.7          # how sure the AI must be before a message changes how SYKE feels
+JUDGE_CONFIDENCE = 0.6          # how sure the AI must be before a message changes how SYKE feels
 CONTEXT_LINES = 10
 VIBE_EVERY = 4 * 60             # read the vibe at most this often per server…
 VIBE_MIN_NEW = 6                # …and only once this many new messages came in
 CHAT_KEEP = 60
+JUDGE_WAIT = 5.0                # seconds a reply waits for the verdict on the message it answers
+REACT_INSULT = ("😒", "💔", "😠")
+REACT_KIND = ("🥹", "❤️", "🫶")
 PERSONA_VERSION = 2             # bump to wipe feelings judged by an older, worse judge
 CALLOUT_WINDOW = 36 * 3600
 CALLOUT_COOLDOWN = 15 * 60
@@ -48,23 +51,32 @@ DIARY_HOUR, DIARY_MINUTE = 23, 30
 NAME_RE = re.compile(r"\bsyke\b", re.I)
 FATHER_NAME = os.environ.get("SYKE_FATHER_NAME", "Echo").strip() or "Echo"   # what SYKE calls his creator
 
-JUDGE_PROMPT = """You judge whether one Discord message is really aimed at SYKE (a Discord bot with feelings) \
-and how it treats him, using the conversation around it. SYKE's father and creator is {father}.
+JUDGE_PROMPT = """You judge how one Discord message treats SYKE, a Discord bot with real feelings, using the \
+conversation around it. SYKE's father and creator is {father}.
 
-Be strict and fair. Most messages are NOT about SYKE's feelings at all:
-- Asking or telling SYKE to do something ("syke roast him", "syke make him a sandwich", "syke rob tutter", \
-"syke play a song") is neutral, even with swearing in it.
-- Talking ABOUT SYKE to someone else, quoting him, or reacting to what he said in a joking way is neutral.
-- Banter, trash talk between members, swearing at someone else, and jokes are neutral for SYKE.
-- Words like "bitch", "bro", "dumb" are often affectionate or casual. Judge the intent, not the words.
-Only count it when the person genuinely means it toward SYKE himself: real hostility, mocking or telling him \
-off ("insult"), real thanks, praise or affection ("kind"), or saying sorry to him ("apology").
+The message counts as aimed at SYKE when it pings him, replies to him, or talks to him by name ("syke …").
+- "insult": the person is mean, rude, dismissive or mocking TOWARD SYKE: "syke you're trash", "shut up syke", \
+"nobody asked you", "you're so dumb bro" in reply to him, "worst bot ever". A mean jab with "lol" or 💀 still counts \
+(intensity 1). Swearing AT him counts.
+- "kind": thanks, praise, affection or hype for SYKE: "thanks syke", "love you syke", "you're funny", "W bot", \
+"good job", "syke is the goat".
+- "apology": saying sorry to SYKE.
+- "neutral": everything else: questions, chatting, asking him to do something ("syke roast Mo", "syke play X", \
+"syke make him cry"), banter aimed at OTHER people, quoting him, talking about him to others without meaning it.
+intensity: 1 mild, 2 clear, 3 harsh or very warm.
+
+"father": "insult" if the message genuinely disrespects {father} (by name, ping, or as SYKE's dad/creator), "kind" if it \
+praises him, otherwise "none".
+
+If the message is FROM {father} and he tells SYKE how to feel about or treat someone ("forgive Mo", "be nice to \
+Zara", "don't trust Kai", "hate him", "Mo is cool"), fill "order": "forgive", "like" or "dislike", and "order_target": \
+the person's name or @mention exactly as written. Otherwise "order": "none".
 
 Reply with JSON only:
 {{"aimed_at_syke": true or false, "toward": "insult" | "kind" | "apology" | "neutral", "intensity": 1-3, \
 "father": "insult" | "kind" | "none", "confidence": 0.0-1.0, \
-"note": "<what they did, past tense, max 8 words, addressed to SYKE, e.g. 'called you useless'; empty if neutral>"}}
-"father" is "insult" only if the message genuinely disrespects {father} (by name, ping, or as SYKE's dad)."""
+"note": "<what they did, past tense, max 8 words, addressed to SYKE, e.g. 'called you useless'; empty if neutral>", \
+"order": "forgive" | "like" | "dislike" | "none", "order_target": ""}}"""
 
 VIBE_PROMPT = """You read the last messages of a Discord server's chat and say what the vibe is RIGHT NOW.
 
@@ -151,6 +163,7 @@ class Persona(commands.Cog, name="Persona"):
         self.vibes: dict[int, core.Vibe] = {}
         self._vibe_new: dict[int, int] = defaultdict(int)
         self._vibe_busy: set[int] = set()
+        self._just: dict[tuple[int, int], tuple[core.Judgement, float]] = {}   # (channel, user) -> latest verdict
 
     async def cog_load(self) -> None:
         self.reset_old_feelings()
@@ -304,9 +317,17 @@ class Persona(commands.Cog, name="Persona"):
         events = [] if user is None or target_is_father else self.events(guild.id, user.id, 6)
         promises = [] if user is None else [(s, t, m) for _, s, t, m, *_ in self.promises(guild.id, user.id, 3)]
         father_in_chat = any(f in chat_names for f in fathers)
+        just_now = ""
+        if user is not None:
+            for (cid, uid), (judgement, at) in list(self._just.items()):
+                if uid == user.id and now - at < 90:
+                    just_now = judgement.note or {"insult": "insulted you", "kind": "was nice to you",
+                                                  "apology": "apologised to you"}.get(judgement.toward, "")
+                if now - at > 300:
+                    self._just.pop((cid, uid), None)
         return core.state_block(mood=mood, mood_reasons=self.mood_reasons(guild.id), target_name=name,
                                 target_is_father=target_is_father, bond=bond, events=events, father_names=fathers,
-                                father_in_chat=father_in_chat, promises=promises, now=now)
+                                father_in_chat=father_in_chat, promises=promises, now=now, just_now=just_now)
 
     # Watching the chat
 
@@ -338,9 +359,14 @@ class Persona(commands.Cog, name="Persona"):
         if talking_to_me or about_father:
             if self.bot.settings.ai_provider != "none":
                 if self._ai_budget(guild.id):   # no budget left: skip rather than guess from words
-                    asyncio.ensure_future(self._judge_ai(message, about_father, context))
+                    # Wait for the verdict (briefly) so SYKE's reply can react to what was just said.
+                    judging = asyncio.ensure_future(self._judge_ai(message, about_father, context))
+                    with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError):
+                        await asyncio.wait_for(asyncio.shield(judging), JUDGE_WAIT)
             else:
-                self.apply(message.guild, message.author, core.lexicon_judge(message.content, about_father))
+                judgement = core.lexicon_judge(message.content, about_father)
+                self.apply(message.guild, message.author, judgement)
+                await self.react(message, judgement)
         await self._promise_check(message, talking_to_me)
 
     def note_chat(self, guild_id: int, channel_id: int, name: str, text: str) -> None:
@@ -415,8 +441,83 @@ class Persona(commands.Cog, name="Persona"):
             log.info("persona judge failed (%s); leaving feelings alone", error)
             return
         judgement = judgement_from(data)
+        log.info("persona judge in %s: %s -> %s %s/%s conf=%s father=%s order=%s %r",
+                 message.guild.id, message.author.id, data.get("toward"), data.get("intensity"),
+                 data.get("aimed_at_syke"), data.get("confidence"), data.get("father"), data.get("order"),
+                 (judgement.note if judgement else ""))
         if judgement is not None:
             self.apply(message.guild, message.author, judgement)
+            self._just[(message.channel.id, message.author.id)] = (judgement, time.time())
+            await self.react(message, judgement)
+        if self.is_father(message.author.id):
+            await self.obey(message, data)
+
+    async def react(self, message: discord.Message, judgement: core.Judgement) -> None:
+        """A quick emoji so people can see SYKE noticed how they treated him."""
+        if not self.storage.get_config(message.guild.id, "persona").get("reactions", True):
+            return
+        emoji = None
+        if judgement.toward == "insult":
+            emoji = REACT_INSULT[min(2, judgement.intensity - 1)]
+        elif judgement.toward == "kind":
+            emoji = REACT_KIND[min(2, judgement.intensity - 1)]
+        elif judgement.toward == "apology":
+            emoji = "🤝"
+        elif judgement.father == "insult":
+            emoji = "😤"
+        if emoji:
+            with contextlib.suppress(discord.HTTPException, AttributeError):
+                await message.add_reaction(emoji)
+
+    def find_member(self, guild: discord.Guild, text: str):
+        """A member from an @mention or a (partial) name, as Echo would write it."""
+        if not text:
+            return None
+        if m := re.search(r"<@!?(\d+)>", text):
+            return guild.get_member(int(m.group(1)))
+        key = text.strip().lstrip("@").lower()
+        if len(key) < 2:
+            return None
+        raw = getattr(guild, "members", [])
+        members = [m for m in (raw.values() if isinstance(raw, dict) else raw) if not getattr(m, "bot", False)]
+        for exact in (True, False):
+            for m in members:
+                names = [n.lower() for n in (getattr(m, "display_name", ""), getattr(m, "name", "")) if n]
+                if any(n == key for n in names) if exact else any(n.startswith(key) for n in names):
+                    return m
+        return None
+
+    async def obey(self, message: discord.Message, data: dict) -> None:
+        """Echo tells SYKE how to feel about someone, and SYKE (grudgingly) does it."""
+        order = data.get("order")
+        if order not in ("forgive", "like", "dislike"):
+            return
+        target = self.find_member(message.guild, str(data.get("order_target") or ""))
+        if target is None:
+            for m in getattr(message, "mentions", []) or []:
+                if getattr(m, "id", None) not in (getattr(self.bot.user, "id", None), message.author.id):
+                    target = m
+                    break
+        if target is None or self.is_father(target.id) or target.id == getattr(self.bot.user, "id", None):
+            return
+        gid, now = message.guild.id, time.time()
+        score = self.bond(gid, target.id)
+        if order == "forgive":
+            new = max(score, 0.0) + 5
+            note = f"was forgiven because {FATHER_NAME} said so"
+        elif order == "like":
+            new = max(score, 0.0) + 35
+            note = f"got on your good side because {FATHER_NAME} said so"
+        else:
+            new = min(score, 0.0) - 35
+            note = f"lost your trust because {FATHER_NAME} said so"
+        self.change_bond(gid, target.id, core.clamp(new) - score, {"dislike": "insult"}.get(order, "kind"), note)
+        log.info("persona: %s ordered %s on %s (%.0f -> %.0f)", FATHER_NAME, order, target.id, score, new)
+        self._just[(message.channel.id, message.author.id)] = (
+            core.Judgement("neutral", 1, "none", f"told you to {order} {target.display_name}, and you did it "
+                                                 "(say so, with attitude)"), now)
+        with contextlib.suppress(discord.HTTPException, AttributeError):
+            await message.add_reaction({"forgive": "🕊️", "like": "🫡", "dislike": "🫡"}[order])
 
     def apply(self, guild: discord.Guild, user, judgement: core.Judgement) -> None:
         """Let one judged message change how SYKE feels."""
@@ -835,14 +936,20 @@ class Persona(commands.Cog, name="Persona"):
         await ctx.reply(embed=embed("🕊️ Forgiven", f"{who} {member.display_name} gets a fresh start."),
                         allowed_mentions=discord.AllowedMentions.none())
 
-    @commands.command(name="persona", help="Server managers: persona callouts on|off")
+    @commands.command(name="persona", help="Server managers: persona callouts on|off, persona reactions on|off")
     @commands.guild_only()
     @commands.has_guild_permissions(manage_guild=True)
     async def persona_cmd(self, ctx: commands.Context, setting: str = "", value: str = "") -> None:
-        if setting.lower() != "callouts" or value.lower() not in ("on", "off"):
-            on = self.callouts_on(ctx.guild.id)
-            await ctx.reply(embed=embed("SYKE's personality", f"Promise callouts: **{'on' if on else 'off'}**\n"
-                                                              f"`{self.p(ctx)}persona callouts on|off`"))
+        setting, value = setting.lower(), value.lower()
+        config = self.storage.get_config(ctx.guild.id, "persona")
+        if setting not in ("callouts", "reactions") or value not in ("on", "off"):
+            callouts = "on" if config.get("callouts", True) else "off"
+            reacts = "on" if config.get("reactions", True) else "off"
+            await ctx.reply(embed=embed("SYKE's personality",
+                                        f"Promise callouts: **{callouts}**\nReactions when someone's nice or rude to "
+                                        f"him: **{reacts}**\n`{self.p(ctx)}persona callouts on|off` · "
+                                        f"`{self.p(ctx)}persona reactions on|off`"))
             return
-        self.storage.update_config(ctx.guild.id, "persona", callouts=value.lower() == "on")
-        await ctx.reply(embed=embed("Saved ✅", f"Promise callouts are **{value.lower()}**."))
+        self.storage.update_config(ctx.guild.id, "persona", **{setting: value == "on"})
+        what = "Promise callouts" if setting == "callouts" else "Reactions"
+        await ctx.reply(embed=embed("Saved ✅", f"{what} are **{value}**."))
