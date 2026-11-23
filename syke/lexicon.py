@@ -222,3 +222,32 @@ STOPWORDS = {
     "of", "to", "in", "on", "at", "is", "it", "be", "so", "do", "if", "or", "an", "as",
     "we", "us", "am", "by", "we're", "they're", "i've", "i'd", "i'll",
 }
+
+
+# Words that say nothing about a person: greetings, chat shorthand, apostrophe-less contractions, everyday
+# verbs, fillers, intensifiers and time words. Wrapped's "top words" skips them.
+CHAT_FILLER = set("""
+hey heya hi hii hello helo hallo yo yoo sup wassup wsg wsp wsup gm gn gmorning goodnight morning night bye byee
+cya seeya later welcome hru hbu wbu wyd wbu hyd wru wya wtf wth omg omfg idk idc ikr imo imho btw fyi tbh ngl fr
+frfr rn tho tbf smh nvm np ty thx thanks thank tysm pls plz please sorry sry mb ofc obv istg ong ion iykyk
+ok okay okk okie kk alr alright aight ight bet yeah yea yep yup ye yuh nah nope naw sure true facts real word
+fine cool nice good great bad better best worst okayy damn dang bruh bro bru broo sis dude man guys guy girl
+ill im ive id youre youll youve youd hes shes theyre theyll weve were thats whats wheres whos hows theres
+heres lets dont doesnt didnt cant couldnt wont wouldnt shouldnt isnt arent wasnt werent havent hasnt hadnt
+aint gonna wanna gotta kinda sorta lemme gimme dunno tryna finna imma ima boutta outta lotta
+i'll i've i'd you're you'll you've you'd he's she's they're they'll we've we're that's what's where's who's
+how's there's here's let's doesn't didn't can't couldn't won't wouldn't shouldn't isn't aren't wasn't
+weren't haven't hasn't hadn't ain't y'all yall
+get gets getting got gotten go goes going gone went come comes coming came make makes making made take takes
+taking took know knows knew known think thinks thinking thought want wants wanted need needs needed say says
+saying said see sees seeing saw seen look looks looking looked tell tells told give gives gave given let feel
+feels felt keep kept put mean means meant try tries trying tried use used call called work talk talking talked
+wait waiting leave left start started stop stopped play playing played send sent ask asked
+really actually literally basically lowkey highkey definitely probably maybe still even also just only already
+always never ever again too very much many more most less lot lots some any every something anything
+everything nothing someone anyone everyone nobody somebody anybody everybody people person thing things stuff
+way ways kind sort bit part place time times today tonight tomorrow yesterday day days week weeks month year
+now then soon later rn earlier back here there where when why how what which who whose whom
+yes no not all one two three first last next new old big little long same other another own different
+lol lmao lmfao rofl xd haha hehe hihi
+""".split())

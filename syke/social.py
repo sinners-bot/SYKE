@@ -32,7 +32,7 @@ from discord.ext import commands, tasks
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from . import ai
-from .lexicon import CHAT_SLANG, LAUGH_EMOJIS, STOPWORDS
+from .lexicon import CHAT_FILLER, CHAT_SLANG, LAUGH_EMOJIS, STOPWORDS
 from .lexicon import LAUGH_WORDS as LAUGH_WORD_SET
 from .moderation import BRAND, OK, WARN, embed, moderator, problem
 from .tldr import (Line, digest, from_discord_message, offline_summary, prompt_facts, prompt_sample, span_label,
@@ -64,6 +64,8 @@ EXTRA_SKIP = {"gif", "gifs", "klipy", "tenor", "giphy", "imgur", "png", "jpg", "
               "not", "are", "was", "have", "its", "it's", "i'm", "dont", "don't", "like", "what", "yeah", "can",
               "get", "got", "all", "they", "she", "his", "her", "him", "about", "your", "one", "out", "how",
               "der", "die", "das", "und", "ist", "ich", "nicht", "mit", "was", "auf", "ein", "eine", "aber", "auch"}
+SKIP_WORDS = STOPWORDS | EXTRA_SKIP | CHAT_SLANG | LAUGH_WORD_SET | CHAT_FILLER
+WORD_POOL = 20            # signature-word candidates the AI chooses Wrapped's top 5 from
 QUOTEBOOK_MIN = 3
 QUOTEBOOK_PAGES = 40
 TIME_SPANS = {"d": 1, "w": 7, "m": 30, "y": 365}
@@ -124,12 +126,29 @@ def word_tokens(content: str) -> list[str]:
     out = []
     for w in WORD.findall(LINKS.sub(" ", content or "")):
         lw = w.lower().strip("'")
-        if len(lw) < 3 or lw in STOPWORDS or lw in EXTRA_SKIP or lw in CHAT_SLANG or lw in LAUGH_WORD_SET:
+        plain = re.sub(r"(.)\1+", r"\1", lw)          # "heyyy" -> "hey", "okayyy" -> "okay"
+        if len(lw) < 3 or any(x in SKIP_WORDS for x in (lw, plain, lw.replace("'", ""))):
             continue
         if LAUGHY.match(lw) or re.search(r"(.)\1\1", lw) and len(set(lw)) <= 3:
             continue   # hahaha, lmaooo, xddd, aaaaa
         out.append(re.sub(r"(.)\1{2,}", r"\1\1", lw))   # "sooooo" counts as "soo"
     return out
+
+
+def word_examples(rows: list[tuple], words: list[str], per_word: int = 2) -> dict[str, list[str]]:
+    """A couple of short real messages using each word, so the AI can tell "ill" (sick) from "ill" (I'll)."""
+    found: dict[str, list[str]] = {w: [] for w in words}
+    for row in rows:
+        text = " ".join(LINKS.sub(" ", row[2] or "").split())
+        if not text or len(text) > 160:
+            continue
+        tokens = set(word_tokens(text))
+        for word in words:
+            if word in tokens and len(found[word]) < per_word:
+                found[word].append(text)
+        if all(len(v) >= per_word for v in found.values()):
+            break
+    return found
 
 
 def word_baseline(texts: list[str]) -> Counter:
@@ -160,8 +179,8 @@ def signature_words(mine: Counter, my_messages: int, server: Counter | None, top
             continue   # everyone says it
         scored.append((n * math.log(lift), word))
     picked = [w for _, w in sorted(scored, reverse=True)[:top]]
-    for word, _ in mine.most_common():
-        if len(picked) >= top:
+    for word, _ in mine.most_common():   # few signature words: top up with their own common ones
+        if len(picked) >= min(top, 5):
             break
         if word not in picked and mine[word] >= minimum:
             picked.append(word)
@@ -203,6 +222,7 @@ def wrapped_stats(rows: list[tuple], tz, server_rank: tuple[int, int] | None = N
         "messages": len(rows),
         "words": sum(len(LINKS.sub(" ", r[2] or "").split()) for r in rows),
         "top_words": signature_words(words, len(rows), baseline),
+        "word_pool": [(w, words[w]) for w in signature_words(words, len(rows), baseline, top=WORD_POOL)],
         "emoji": emojis.most_common(1)[0][0] if emojis else None,
         "emoji_count": emojis.most_common(1)[0][1] if emojis else 0,
         "hour": hour,
@@ -916,6 +936,12 @@ class Social(commands.Cog, name="Social"):
             rank = (ranked.index(who.id) + 1, len(ranked)) if who.id in ranked else None
             names = {c.id: c.name for c in guild.channels}
             stats = wrapped_stats(rows, tz, rank, partners, names, baseline)
+            pool = stats.get("word_pool") or []
+            if len(pool) > 5 and self.bot.settings.ai_provider != "none":
+                examples = await asyncio.to_thread(word_examples, rows, [w for w, _ in pool])
+                chosen = await ai.pick_top_words(self.bot.settings, pool, examples)
+                if chosen:
+                    stats["top_words"] = chosen
             avatar = await self.fetch(who.display_avatar.replace(size=256, static_format="png").url)
             icon = await self.emoji_image(stats.get("emoji"))
             badge_list = []

@@ -479,6 +479,46 @@ async def pick_line(settings: Settings, chat: list[Turn], lines: list[str], tone
     return index if 0 <= index < len(lines) else None
 
 
+TOP_WORDS_PROMPT = """You pick the 5 words for someone's Discord Wrapped card: "your top words". You get \
+CANDIDATES — words this person uses a lot, and more than the rest of their server — each with how often they \
+used it and real example messages.
+
+Pick the 5 that say the most about THIS person: their topics, games, music, food, places, the names they \
+bring up, the in-jokes and their own personal slang or catchphrases. Their friends should read the card \
+and think "yep, that's them".
+
+Never pick filler: greetings (hey, yo, sup), chat shorthand (hru, hbu, wyd, idk, ngl, fr), contractions \
+written without the apostrophe (ill = "I'll", im, dont, youre), everyday verbs and adjectives (get, make, \
+good, nice), time words, laughs, or words that only look meaningful. Use the examples to judge what a word \
+really means here. Use the words exactly as given; never invent or merge words. If fewer than 5 are good, \
+return fewer.
+
+Reply with JSON only: {"words": ["...", "..."]}"""
+
+
+async def pick_top_words(settings: Settings, pool: list[tuple[str, int]], examples: dict[str, list[str]],
+                         timeout: float = 20) -> list[str]:
+    """Wrapped's top 5 words, chosen from signature-word candidates. [] when the AI can't help."""
+    if settings.ai_provider == "none" or not pool:
+        return []
+    lines = []
+    for word, count in pool:
+        shown = " | ".join(readable(t)[:120] for t in examples.get(word, []))
+        lines.append(f"- {word} ({count}x){': ' + shown if shown else ''}")
+    try:
+        data = await _complete(settings, TOP_WORDS_PROMPT, "CANDIDATES:\n" + "\n".join(lines), 0.3, timeout)
+    except Exception:
+        log.exception("top words pick failed")
+        return []
+    allowed = {w for w, _ in pool}
+    picked = []
+    for word in data.get("words") or []:
+        word = str(word).strip().lower()
+        if word in allowed and word not in picked:
+            picked.append(word)
+    return picked[:5]
+
+
 _PING = re.compile(r"<@[!&]?\d+>|@(everyone|here)\b", re.IGNORECASE)
 SHIP_TIMEOUT = 40
 TLDR_TIMEOUT = 50

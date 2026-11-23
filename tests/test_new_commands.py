@@ -250,14 +250,14 @@ def test_wrapped_skips_crying_and_skull_emoji():
 
 
 def test_top_words_drop_slang_and_favour_your_own_words():
-    assert social.word_tokens("hahahaha lmaooo bro that pizza was sooooo good xddd 2024 tbh ngl") == ["pizza", "good"]
-    server = [f"good game {i}" for i in range(400)] + ["pizza once"] * 10
+    assert social.word_tokens("hahahaha lmaooo bro that pizza was sooooo good xddd 2024 tbh ngl") == ["pizza"]
+    server = [f"arsenal game {i}" for i in range(400)] + ["pizza once"] * 10
     baseline = social.word_baseline(server)
-    mine = [(i, 1, "good pizza with friends, good pizza", 1.7e9, 0, 0) for i in range(5)] + \
-           [(9, 1, "good good good", 1.7e9, 0, 0)] * 5
+    mine = [(i, 1, "arsenal pizza with friends, arsenal pizza", 1.7e9, 0, 0) for i in range(5)] + \
+           [(9, 1, "arsenal arsenal arsenal", 1.7e9, 0, 0)] * 5
     stats = social.wrapped_stats(mine, ZoneInfo("UTC"), baseline=baseline)
-    assert stats["top_words"][0] == "pizza"          # "good" is said by everyone, "pizza" is theirs
-    assert "good" in stats["top_words"]              # still listed, just lower
+    assert stats["top_words"][0] == "pizza"          # "arsenal" is said by everyone, "pizza" is theirs
+    assert "arsenal" in stats["top_words"]              # still listed, just lower
 
 
 def test_talks_to_most_counts_mentions_and_replies(tmp_path):
@@ -271,6 +271,36 @@ def test_talks_to_most_counts_mentions_and_replies(tmp_path):
             (7, 10, "<@666> <@7>", 1.7e9, 0, 0)]
     names = {8: "Bo", 9: "Cy", 666: "SomeBot"}
     assert social.mention_partners(rows, replies, 7, names, {666}) == [("Cy", 3), ("Bo", 2)]
+
+
+def test_top_words_skip_chat_filler():
+    words = social.word_tokens("heyyy hru hbu ill be there later, okayyy wyd gonna play valorant with kai "
+                               "tryna get radiant lowkey, youre literally obsessed with arsenal")
+    assert words == ["valorant", "kai", "radiant", "obsessed", "arsenal"]
+    filler = [(i, 1, "hey hru ill wyd hbu sup imma", 1.7e9, 0, 0) for i in range(20)]
+    assert social.wrapped_stats(filler, ZoneInfo("UTC"))["top_words"] == []
+
+
+def test_ai_picks_top_words_from_the_pool(monkeypatch):
+    import asyncio
+    from dataclasses import replace
+    from syke import ai
+    from syke.config import load_settings
+    seen = {}
+
+    async def fake(s, system, user, temperature=1.0, timeout=30, model=None):
+        seen["user"] = user
+        return '{"words": ["arsenal", "made-up", "nobu", "arsenal", "valorant"]}'
+
+    monkeypatch.setattr(ai, "_call_openai", fake)
+    settings = replace(load_settings(), ai_provider="openai", openai_api_key="k")
+    pool = [("arsenal", 30), ("nobu", 12), ("valorant", 9), ("sick", 8), ("stuff", 7), ("kai", 6)]
+    rows = [(1, 1, "arsenal won again lets gooo", 1.7e9, 0, 0), (2, 1, "nobu sushi tonight", 1.7e9, 0, 0)]
+    examples = social.word_examples(rows, [w for w, _ in pool])
+    assert examples["arsenal"] == ["arsenal won again lets gooo"]
+    picked = asyncio.run(ai.pick_top_words(settings, pool, examples))
+    assert picked == ["arsenal", "nobu", "valorant"]          # only real candidates, no duplicates
+    assert "- arsenal (30x): arsenal won again lets gooo" in seen["user"]
 
 
 def test_wrapped_card_draws_badges():
