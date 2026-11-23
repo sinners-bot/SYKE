@@ -143,28 +143,36 @@ def _parse_json(text: str) -> dict:
     return json.loads(match.group(0))
 
 
+def _reasoning_model(model: str) -> bool:
+    """GPT-5 and o-series models take no custom temperature."""
+    return model.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
 async def _call_openai(settings: Settings, system: str, user: str, temperature: float = 1.0,
-                       timeout: float = AI_TIMEOUT_SECONDS) -> str:
+                       timeout: float = AI_TIMEOUT_SECONDS, model: str | None = None) -> str:
+    model = model or settings.openai_model
+    body = {
+        "model": model,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    }
+    if not _reasoning_model(model):
+        body["temperature"] = temperature
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {settings.openai_api_key}"},
-            json={
-                "model": settings.openai_model,
-                "temperature": temperature,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-            },
+            json=body,
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
 
 
 async def _call_anthropic(settings: Settings, system: str, user: str, temperature: float = 1.0,
-                          timeout: float = AI_TIMEOUT_SECONDS) -> str:
+                          timeout: float = AI_TIMEOUT_SECONDS, model: str | None = None) -> str:
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
@@ -173,7 +181,7 @@ async def _call_anthropic(settings: Settings, system: str, user: str, temperatur
                 "anthropic-version": "2023-06-01",
             },
             json={
-                "model": settings.anthropic_model,
+                "model": model or settings.anthropic_model,
                 "max_tokens": 1500,
                 "temperature": temperature,
                 "system": system,
@@ -182,6 +190,25 @@ async def _call_anthropic(settings: Settings, system: str, user: str, temperatur
         )
         resp.raise_for_status()
         return "".join(b.get("text", "") for b in resp.json()["content"])
+
+
+async def _call_chat(settings: Settings, system: str, user: str, temperature: float = 1.0,
+                     timeout: float = AI_TIMEOUT_SECONDS) -> str:
+    """Yaps and replies: the stronger chat model when one is set, the main model if that one is refused."""
+    openai = settings.ai_provider == "openai"
+    call = _call_openai if openai else _call_anthropic
+    chosen = settings.openai_chat_model if openai else settings.anthropic_chat_model
+    base = settings.openai_model if openai else settings.anthropic_model
+    if chosen and chosen != base:
+        try:
+            return await call(settings, system, user, temperature, model=chosen)
+        except httpx.HTTPStatusError as err:
+            if err.response is None or err.response.status_code not in (400, 403, 404):
+                raise
+            log.warning("chat model %s refused (%s); using %s", chosen, err.response.status_code, base)
+    if timeout == AI_TIMEOUT_SECONDS:
+        return await call(settings, system, user, temperature)
+    return await call(settings, system, user, temperature, timeout)
 
 
 def with_server_emojis(text: str, emojis: dict[str, str]) -> str:
@@ -258,14 +285,22 @@ async def write_roast(
 
 
 COMPOSE_PROMPT = """You are SYKE, a long-time regular in this Discord server. You are not an assistant \
-and you never talk like one. You get the recent chat, the TONE to hit, the server's VOCABULARY (words \
-mined from everything people here have said, plus lexicon slang), how people here TYPE, and numbered \
-AMMO: real stored messages from this server, plus some marked (remix) that a Markov chain made from them.
+and you never talk like one. You get the RECENT CHAT (oldest first; "↪ Name: ..." shows the message a line \
+was replying to; [image], [gif], [video], [sticker] mean someone posted one), the TARGET you answer, the TONE \
+to hit, the server's VOCABULARY, how people here TYPE, IN-JOKES the server has, and numbered AMMO: real \
+messages from this server about the same topic.
 
-Write ONE new, original message, the way the server's most quick-witted regular would type it right now.
-- AMMO is ammunition, not a script and not a quote bank. Steal the take, the running joke, the opinion, \
-the comeback, the topic — then say it in your own words. Never copy a message, never stitch pieces \
-together, never paste a ready-made phrase.
+Think first, then talk. Write ONE new, original message, the way the server's sharpest regular would.
+- READ the moment before you write: who is talking to whom, what the topic is right now, and what the \
+TARGET actually means: a real question, bait, sarcasm, an insult, a joke, a callback to something earlier, \
+a reaction to an image. If SYKE SAID is given, they are answering you — reply to what they said about it.
+- Then answer exactly that. A real question gets a real answer (with attitude), not a dodge. Insults get a \
+comeback that hits what they said. Jokes get played along with or one-upped. If you don't know something \
+(a fact about a person, what's in an image), don't make it up — dodge it in character. Never invent events \
+or claim people said things they didn't.
+- AMMO and IN-JOKES are background: they tell you what this server thinks, its running jokes and how it \
+reacts. Use one only when it really fits; ignore the rest. Never copy a message, never stitch pieces \
+together, never paste a ready-made phrase. Never drag in a topic nobody is talking about.
 - Talk with this server's words. Lean on VOCABULARY — topic words, words people here actually use, \
 lexicon slang that fits the tone — but sound like a person first: pull a word in only when it lands \
 naturally, and never force or stack keywords to seem on-topic. Prefer single words over phrases. Spell \
@@ -301,7 +336,8 @@ do something you do it (with attitude). Never recite the state like a report.
 - Never attack identity (race, religion, gender, sexuality, disability), no slurs, never tell anyone \
 to hurt themselves, never anything sexual about minors, and never @mention anyone.
 
-Reply with JSON only: {"reply": "your message"}"""
+Reply with JSON only: {"read": "<one short line: what's going on and what they want>", \
+"reply": "<your message>"}"""
 
 
 def _style_block(voice: Voice | None, skip: list[str] = (), rng: random.Random | None = None) -> str:
@@ -317,8 +353,21 @@ def _style_block(voice: Voice | None, skip: list[str] = (), rng: random.Random |
         "\n".join(f"- {readable(t)[:160]}" for t in lines)
 
 
+CHAT_SHOWN = 16
+AMMO_SHOWN = 25
+
+
 def _chat_block(chat: list[Turn]) -> str:
-    return "\n".join(f"{t.author[:24]}: {' '.join(t.text.split())[:200]}" for t in chat[-8:]) or "(quiet)"
+    lines = []
+    for t in chat[-CHAT_SHOWN:]:
+        if t.reply_to:
+            lines.append(f"  ↪ {t.reply_to[:140]}")
+        lines.append(f"{t.author[:24]}: {' '.join(t.text.split())[:240]}")
+    return "\n".join(lines) or "(quiet)"
+
+
+def _lore_block(lore: list[str]) -> str:
+    return ("\n\nIN-JOKES (this server's running bits):\n" + "\n".join(f"- {x}" for x in lore)) if lore else ""
 
 
 def _vocab_block(vocab: Vocab) -> str:
@@ -338,7 +387,7 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
                         chat: list[Turn] = (), said: str | None = None, tone: str = DEFAULT_TONE,
                         remixed: list[str] = (), avoid: list[str] = (), voice: Voice | None = None,
                         rng: random.Random | None = None, weights: dict[str, float] | None = None,
-                        state: str = "") -> str | None:
+                        state: str = "", lore: list[str] = ()) -> str | None:
     """The best reply to `target` in the server's words and the chat's tone. Never raises.
 
     With AI, stored messages and Markov `remixed` lines are ammunition for a new message written
@@ -357,13 +406,16 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
     if settings.ai_provider != "none":
         situation = (f"SYKE SAID: {said[:300]}\nTHEY REPLIED (TARGET): " if said
                      else "SYKE is jumping into the chat. TARGET (latest message): ")
-        numbered = "\n".join(f"[{i}]{' (remix)' if text in remix_set else ''} {readable(' '.join(text.split()))[:160]}"
-                             for i, text in enumerate(candidates))
+        if target.reply_to and not said:
+            situation = f"(TARGET was replying to {target.reply_to[:160]})\n{situation}"
+        shown = [text for text in candidates if text not in remix_set][:AMMO_SHOWN] or candidates[:AMMO_SHOWN]
+        numbered = "\n".join(f"[{i}] {readable(' '.join(text.split()))[:160]}" for i, text in enumerate(shown))
         vocab = vocabulary(voice, tone, rng, weights or query_weights(target.text, said, chat), candidates)
         prompt = (f"RECENT CHAT:\n{_chat_block(chat)}\n\n{situation}{target.author[:24]}: {target.text[:300]}"
                   f"\n\nTONE: {tone}\n\nTYPING: {style_hint(voice)}{_style_block(voice, candidates, rng)}"
                   f"\n\nVOCABULARY:\n{_vocab_block(vocab)}"
-                  f"\n\nAMMO (steal the take, never copy; best matches first, remixes last):\n{numbered}")
+                  f"{_lore_block(lore)}"
+                  f"\n\nAMMO (background on what this server thinks; best matches first; never copy):\n{numbered}")
         if avoid:
             already = "\n".join(f"- {' '.join(t.split())[:200]}" for t in avoid if t)
             prompt += f"\n\nSYKE ALREADY SAID (do not repeat or lightly rephrase):\n{already}"
@@ -373,10 +425,9 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
                   for m in CUSTOM_EMOJI_RE.finditer(text)}
         cap = reply_cap(voice)
         prompt += f"\n\nLENGTH: at most {cap} words, one or two short sentences. No links."
-        call = _call_openai if settings.ai_provider == "openai" else _call_anthropic
         for attempt in range(2):
             try:
-                answer = await call(settings, COMPOSE_PROMPT, prompt, temperature=1.0)
+                answer = await _call_chat(settings, COMPOSE_PROMPT, prompt, temperature=0.9)
                 reply = tidy_reply(_parse_json(answer).get("reply"), candidates, banned, voice)
                 if reply:
                     return with_server_emojis(reply, emojis)
@@ -388,6 +439,44 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
                 break
     usable = [(score, text) for score, text in ranked if folded(text) not in banned_keys]
     return offline_pick(usable) or offline_pick(ranked)
+
+
+PICK_PROMPT = """You are SYKE, a regular in this Discord server. You may jump into the chat by sending ONE \
+real message from the server's history, exactly as it was written. You get the RECENT CHAT (oldest first; \
+"↪ Name: ..." is what a line replied to) and numbered LINES you could send.
+
+Pick the line that would land best as the very next message, the way a quick-witted regular would drop it:
+- It must make sense right here: on the topic people are on now (or a perfect reaction to the last message), \
+in the chat's mood (TONE).
+- Skip lines that only make sense in their original conversation (a "he"/"that" with nothing to point at, \
+answers to questions nobody asked, plans for a specific day), commands, and lines that just echo what was said.
+- Funny, sharp or relatable beats bland. A short line that fits beats a long one that half-fits.
+- If no line truly fits, pick none: staying quiet is better than a random line.
+
+Reply with JSON only: {"why": "<few words>", "pick": <line number or null>}"""
+
+NO_PICK = -1
+
+
+async def pick_line(settings: Settings, chat: list[Turn], lines: list[str], tone: str = DEFAULT_TONE) -> int | None:
+    """Which stored line SYKE should repeat now: its index, NO_PICK when none fits, None without AI."""
+    if settings.ai_provider == "none" or not lines:
+        return None
+    numbered = "\n".join(f"[{i}] {readable(' '.join(t.split()))[:200]}" for i, t in enumerate(lines))
+    prompt = f"RECENT CHAT:\n{_chat_block(chat)}\n\nTONE: {tone}\n\nLINES:\n{numbered}"
+    try:
+        data = _parse_json(await _call_chat(settings, PICK_PROMPT, prompt, temperature=0.4))
+    except Exception:
+        log.exception("AI yap pick failed; matching keywords instead")
+        return None
+    pick = data.get("pick")
+    if pick is None or str(pick).strip().lower() in ("", "null", "none"):
+        return NO_PICK
+    try:
+        index = int(pick)
+    except (TypeError, ValueError):
+        return None
+    return index if 0 <= index < len(lines) else None
 
 
 _PING = re.compile(r"<@[!&]?\d+>|@(everyone|here)\b", re.IGNORECASE)

@@ -571,7 +571,8 @@ def test_compose_prompt_has_tone_and_remixes(monkeypatch):
     ranked = [(2.0, "ur aim is trash"), (1.0, "skill issue tbh")]
     reply = run(ai.compose_reply(settings, ranked, Turn("Dex", "1v1 me"), [], "lol", "toxic", ["skill issue tbh"]))
     assert reply == "ur washed at this game ngl"
-    assert "TONE: toxic" in seen["user"] and "[1] (remix) skill issue tbh" in seen["user"]
+    assert "TONE: toxic" in seen["user"] and "[0] ur aim is trash" in seen["user"]
+    assert "skill issue tbh" not in seen["user"]        # Markov remixes are no longer shown as reply material
     assert "VOCABULARY:" in seen["user"] and "TYPING:" in seen["user"]
     assert "lexicon slang:" in seen["user"] and "phrases that fit" not in seen["user"]
     assert "AMMO" in seen["user"]

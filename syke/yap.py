@@ -66,6 +66,7 @@ NEVER_OFFER = {"retard", "retarded", "cunt", "kys", "kill", "incel", "yourself",
 class Turn:
     author: str
     text: str
+    reply_to: str = ""   # "Name: what they said" when this message answers someone
 
 
 def folded(text: str) -> str:

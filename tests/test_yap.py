@@ -119,10 +119,12 @@ async def test_random_yap_repeats_a_real_message_word_for_word(cog, monkeypatch)
     bot = cog.bot
     bot.settings = replace(bot.settings, ai_provider="openai", openai_api_key="k")
 
-    async def no_ai(*a, **k):
-        raise AssertionError("random yaps must not be written by the AI")
+    async def picks_only(s, system, user, temperature=1.0, timeout=30, model=None):
+        assert "LINES:" in user and "reply" not in system.split("JSON only")[-1]   # it chooses, never writes
+        line = next(l for l in user.splitlines() if "pizza" in l and l.startswith("["))
+        return '{"why": "pizza talk", "pick": %s}' % line[1:line.index("]")]
 
-    monkeypatch.setattr("syke.ai._call_openai", no_ai)
+    monkeypatch.setattr("syke.ai._call_openai", picks_only)
     said = ["pizza from luigis is lowkey elite", "who wants pizza tonight fr", "valorant ranked is pain",
             "bro the bus was late again", "anyone up for movies later"]
     bot.storage.add_corpus(42, [(i + 1, 10, 100 + i, text) for i, text in enumerate(said)])
@@ -242,3 +244,104 @@ async def test_yap_sticker_only_reply(cog, monkeypatch):
     await cog.bot._send_yap(msg, "yo", reply_to=False)        # SYKE jumping in on his own
     content, kwargs = ch.sent[-1]
     assert content is None and kwargs.get("stickers") == [sticker]   # sticker, no text
+
+
+async def test_random_yap_stays_quiet_when_nothing_fits(cog, monkeypatch):
+    from dataclasses import replace
+    bot = cog.bot
+    bot.settings = replace(bot.settings, ai_provider="openai", openai_api_key="k")
+
+    async def none_fit(*a, **k):
+        return '{"why": "nothing fits", "pick": null}'
+
+    monkeypatch.setattr("syke.ai._call_openai", none_fit)
+    bot.storage.add_corpus(42, [(1, 10, 100, "he really did that on tuesday"), (2, 10, 101, "who took my charger")])
+    msg = _message(types.SimpleNamespace(id=42, emojis=[], stickers=[]), _channel())
+    msg.content = "anyone watching the match"
+    assert await bot.contextual_yap(msg) is None
+
+
+def test_chat_context_shows_replies_and_media(cog):
+    from syke.ai import _chat_block
+    from syke.yap import Turn
+    bot = cog.bot
+    pic = types.SimpleNamespace(content_type="image/png")
+    original = types.SimpleNamespace(author=types.SimpleNamespace(id=5, display_name="Bo", name="bo"),
+                                     content="rate my fit", attachments=[pic], stickers=[], reference=None)
+    reply = types.SimpleNamespace(author=types.SimpleNamespace(id=6, display_name="Cy", name="cy"),
+                                  content="https://tenor.com/view/no-gif-1", attachments=[], stickers=[],
+                                  reference=types.SimpleNamespace(resolved=original))
+    assert bot.turn_text(original) == "rate my fit [image]"
+    assert bot.turn_text(reply).endswith("[gif]")
+    assert bot.replied_to(reply).endswith("rate my fit [image]")
+    block = _chat_block([Turn("Bo", "rate my fit [image]"), Turn("Cy", "nah", "Bo: rate my fit [image]")])
+    assert "  ↪ Bo: rate my fit [image]\nCy: nah" in block
+
+
+def test_reply_model_is_separate_and_falls_back(monkeypatch):
+    import asyncio
+    from dataclasses import replace
+    import httpx
+    from syke import ai
+    from syke.config import load_settings
+    settings = replace(load_settings(), ai_provider="openai", openai_api_key="k", openai_model="gpt-4o-mini",
+                       openai_chat_model="gpt-5.4-mini")
+    used = []
+
+    async def fake(s, system, user, temperature=1.0, timeout=30, model=None):
+        used.append(model or s.openai_model)
+        if model == "gpt-5.4-mini":
+            request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+            raise httpx.HTTPStatusError("nope", request=request, response=httpx.Response(404, request=request))
+        return '{"reply": "ok"}'
+
+    monkeypatch.setattr(ai, "_call_openai", fake)
+    assert asyncio.run(ai._call_chat(settings, "s", "u")) == '{"reply": "ok"}'
+    assert used == ["gpt-5.4-mini", "gpt-4o-mini"]          # tried the reply model, then the main one
+    assert ai._reasoning_model("gpt-5.4-mini") and not ai._reasoning_model("gpt-4o-mini")
+
+
+def test_openai_body_drops_temperature_for_gpt5(monkeypatch):
+    import asyncio
+    from dataclasses import replace
+    from syke import ai
+    from syke.config import load_settings
+    sent = []
+
+    class Client:
+        def __init__(self, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def post(self, url, headers, json):
+            sent.append(json)
+            return types.SimpleNamespace(raise_for_status=lambda: None,
+                                         json=lambda: {"choices": [{"message": {"content": "{}"}}]})
+
+    monkeypatch.setattr(ai.httpx, "AsyncClient", Client)
+    settings = replace(load_settings(), openai_api_key="k")
+    asyncio.run(ai._call_openai(settings, "s", "u", 0.9, model="gpt-5.4-mini"))
+    asyncio.run(ai._call_openai(settings, "s", "u", 0.9, model="gpt-4o-mini"))
+    assert "temperature" not in sent[0] and sent[0]["model"] == "gpt-5.4-mini"
+    assert sent[1]["temperature"] == 0.9
+
+
+def test_reply_prompt_reads_the_moment_and_knows_in_jokes(monkeypatch):
+    import asyncio
+    from dataclasses import replace
+    from syke import ai
+    from syke.config import load_settings
+    from syke.yap import Turn
+    seen = {}
+
+    async def fake(s, system, user, temperature=1.0, timeout=30, model=None):
+        seen["system"], seen["user"] = system, user
+        return '{"read": "bo asks if his fit is good", "reply": "the fit is mid bo"}'
+
+    monkeypatch.setattr(ai, "_call_openai", fake)
+    settings = replace(load_settings(), ai_provider="openai", openai_api_key="k")
+    out = asyncio.run(ai.compose_reply(settings, [(1.0, "fits in here are mid")], Turn("Bo", "syke rate it", "Bo: my fit [image]"),
+                                       lore=['"crocs gang": Bo wears crocs to everything']))
+    assert out == "the fit is mid bo"                       # "read" is thinking only, never sent
+    assert "TARGET was replying to Bo: my fit [image]" in seen["user"]
+    assert "IN-JOKES" in seen["user"] and "crocs gang" in seen["user"]
+    assert "READ the moment" in seen["system"]

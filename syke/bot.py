@@ -7,6 +7,7 @@ import contextlib
 import logging
 import os
 import random
+import re
 import sys
 import time
 from dataclasses import replace
@@ -18,7 +19,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from .ai import compose_reply, write_roast, write_ship_blurb, write_tldr
+from .ai import NO_PICK, compose_reply, pick_line, write_roast, write_ship_blurb, write_tldr
 from .ask import AskUnavailable, ask
 from .cards import MESSAGE_VIEW_TIMEOUT, ProfileView, aura_page, build_pages, iq_page, leaderboard_page
 from .config import Settings, load_settings
@@ -118,6 +119,7 @@ from .yap import (
 )
 
 log = logging.getLogger("syke")
+URL_GIF = re.compile(r"tenor\.com/|giphy\.com/|klipy\.com/|\.gif\b", re.IGNORECASE)
 
 BRAND = discord.Colour.from_str("#8B5CF6")
 WARN = discord.Colour.from_str("#F59E0B")
@@ -150,7 +152,8 @@ COLLECT_PROGRESS_SECONDS = 8
 YAP_REPLY_COOLDOWN = 4
 YAP_SEARCH = 150
 YAP_RANDOM = 40
-YAP_CONTEXT = 12
+YAP_CONTEXT = 20
+PICK_SHOWN = 30           # best-matching real lines the AI chooses a random yap from
 YAP_TONED = 40
 YAP_CHAIN_SIZE = 15000
 YAP_CHAIN_TTL = 600
@@ -941,10 +944,21 @@ class Syke(commands.Bot):
         if not ranked:
             return None
         log.info("Yap in %s: tone %s, %d candidates (%d remixes)", guild_id, tone, len(ranked), len(remixed))
-        return await compose_reply(self.settings, ranked, Turn(self.speaker_name(message.author), text),
+        target_turn = Turn(self.speaker_name(message.author), self.turn_text(message) if target is None else text,
+                           "" if said else self.replied_to(message))
+        return await compose_reply(self.settings, ranked, target_turn,
                                    chat, said, tone, remixed, avoid=list(used),
                                    voice=await self.server_voice(guild_id), weights=weights,
-                                   state=self.persona_state(message.guild, message.author, chat))
+                                   state=self.persona_state(message.guild, message.author, chat),
+                                   lore=self.lore_notes(guild_id))
+
+    def lore_notes(self, guild_id: int) -> list[str]:
+        """The server's in-jokes SYKE already worked out (from `lore`), so replies can get the references."""
+        cog = self.get_cog("Lore")
+        hit = getattr(cog, "_cache", {}).get(guild_id) if cog else None
+        stories = hit[3] if hit and len(hit) > 3 else {}
+        return [f'"{phrase}": {str(item.get("story", ""))[:200]}' for phrase, item in list(stories.items())[:8]
+                if item.get("story")]
 
     async def rank_yap(self, guild_id: int, weights: dict[str, float], tone: str, target: str,
                        exclude: set[str]) -> tuple[list[tuple[float, str]], list[str]]:
@@ -964,13 +978,37 @@ class Syke(commands.Bot):
         turns: list[Turn] = []
         try:
             async for m in history(limit=limit, before=message):
-                if not m.content or self.is_command_text(message.guild.id, m.content):
+                text = self.turn_text(m)
+                if not text or (m.content and self.is_command_text(message.guild.id, m.content)):
                     continue
-                name = "SYKE" if self.user and m.author.id == self.user.id else self.speaker_name(m.author)
-                turns.append(Turn(name, m.content))
+                turns.append(Turn(self.turn_name(m.author), text, self.replied_to(m)))
         except discord.HTTPException:
             return []
         return turns[::-1]
+
+    def turn_name(self, author) -> str:
+        return "SYKE" if self.user and getattr(author, "id", None) == self.user.id else self.speaker_name(author)
+
+    @staticmethod
+    def turn_text(m) -> str:
+        """What a message says, with what it carries ([image], [gif], [sticker: wave]) so the AI can follow."""
+        parts = [m.content or ""]
+        for a in getattr(m, "attachments", None) or []:
+            kind = (getattr(a, "content_type", "") or "").split("/")[0]
+            parts.append("[video]" if kind == "video" else "[voice message]" if kind == "audio" else "[image]")
+        for st in getattr(m, "stickers", None) or []:
+            parts.append(f"[sticker: {getattr(st, 'name', '')}]")
+        if m.content and URL_GIF.search(m.content):
+            parts.append("[gif]")
+        return " ".join(p for p in parts if p).strip()
+
+    def replied_to(self, m) -> str:
+        """'Name: text' of the message `m` answers, if Discord already resolved it."""
+        ref = getattr(m, "reference", None)
+        target = getattr(ref, "resolved", None) if ref else None
+        if target is None or not hasattr(target, "author"):
+            return ""
+        return f"{self.turn_name(target.author)}: {' '.join((self.turn_text(target) or '').split())[:120]}"
 
     async def answer_yap_reply(self, message: discord.Message, said: str) -> None:
         """Someone answered a yap: reply in the server's voice, written from stored messages."""
@@ -1137,6 +1175,15 @@ class Syke(commands.Bot):
         used = {message.content} | {t.text for t in chat} | set(self.recent_yaps(message.channel.id))
         pool, labelled = self.yap_pool(guild_id, weights, tone, used)
         ranked = rank(pool, weights, message.content, tone=tone, labelled=set(labelled))
+        lines = [text for _, text in ranked[:PICK_SHOWN]]
+        choice = await pick_line(self.settings, chat + [Turn(self.turn_name(message.author),
+                                                             self.turn_text(message), self.replied_to(message))],
+                                 lines, tone)
+        if choice == NO_PICK:
+            log.info("Yap in %s: nothing fits, staying quiet", guild_id)
+            return None
+        if choice is not None:
+            return lines[choice]
         return offline_pick(ranked) or self.pick_yap(guild_id, exclude_id=message.id, exclude=used)
 
     async def maybe_yap(self, message: discord.Message) -> None:

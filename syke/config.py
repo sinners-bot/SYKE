@@ -28,6 +28,8 @@ class Settings:
     default_prefix: str
     owner_ids: frozenset[int] = frozenset()
     yap_chance: float = 0.2
+    openai_chat_model: str = ""      # model for yaps and replies; empty = openai_model
+    anthropic_chat_model: str = ""   # same for Anthropic
     yap_cooldown: int = 75
     deep_scan_limit: int = 20000
     manage_install: bool = True
@@ -81,6 +83,8 @@ def load_settings() -> Settings:
         openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip(),
         anthropic_api_key=anthropic_key,
         anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest").strip(),
+        openai_chat_model=os.getenv("OPENAI_CHAT_MODEL", "").strip(),
+        anthropic_chat_model=os.getenv("ANTHROPIC_CHAT_MODEL", "").strip(),
         db_path=os.getenv("SYKE_DB_PATH", "syke.db").strip(),
         scan_limit=_int("SYKE_SCAN_LIMIT", 3000),
         min_messages=_int("SYKE_MIN_MESSAGES", 15),
