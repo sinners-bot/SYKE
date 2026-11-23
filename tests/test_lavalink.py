@@ -185,3 +185,31 @@ async def test_effects_volume_and_seek_change_live(rig):
     p.skip()
     await settle()
     assert node.updates[-1][1] == {"track": {"encoded": None}}
+
+
+async def test_song_cut_off_mid_play_is_reloaded_and_resumed_not_skipped(rig, monkeypatch):
+    import time as _time
+    node, voice, p = rig.node, rig.voice, rig.player
+
+    async def no_wait(_seconds):
+        return None
+    monkeypatch.setattr(music, "resume_wait", no_wait)
+    node.loads["ytsearch:Dr. Dre - Still D.R.E."] = {"loadType": "search",
+                                                       "data": [lltrack("Still DRE", "https://youtu.be/d")]}
+    node.loads["scsearch:Dr. Dre - Still D.R.E."] = {"loadType": "search",
+                                                       "data": [lltrack("Still DRE SC", "https://sc/d", "soundcloud")]}
+    p.queue.append(Track(title="Still D.R.E. — Dr. Dre", query="Dr. Dre - Still D.R.E.", duration=270))
+    p.queue.append(Track(title="Next", url="https://youtu.be/n", encoded="enc-next", duration=100))
+    await p.start_or_queue()
+    for attempt in range(music.YT_RESUMES):
+        p.base, p.t0 = 90.0, _time.monotonic()                        # 1:30 into the song
+        voice._event({"type": "TrackExceptionEvent", "exception": {"message": "All clients failed to load the item."}})
+        voice._event({"type": "TrackEndEvent", "reason": "loadFailed"})
+        await settle()
+        body = node.updates[-1][1]
+        assert body["track"] == {"encoded": "enc-Still DRE"} and 88000 <= body["position"] <= 90000
+        assert p.current.title == "Still D.R.E. — Dr. Dre"                # same song, same spot
+    p.base, p.t0 = 95.0, _time.monotonic()
+    voice._event({"type": "TrackEndEvent", "reason": "loadFailed"})       # YouTube keeps refusing: SoundCloud
+    await settle()
+    assert node.updates[-1][1]["track"] == {"encoded": "enc-Still DRE SC"}

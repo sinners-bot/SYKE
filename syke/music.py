@@ -49,6 +49,12 @@ IDLE_SECONDS = 180
 ALONE_SECONDS = 120
 PAGE = 10
 RETRIES = 2
+YT_RESUMES = 3     # Lavalink: reload a song YouTube cut off mid-play this many times before giving up
+
+
+async def resume_wait(seconds: float) -> None:
+    """The pause before reloading a song YouTube cut off (its blocks are usually brief)."""
+    await asyncio.sleep(seconds)
 QUIZ_CLIP = 15
 QUIZ_GRACE = 5
 QUIZ_PRIZE = 150
@@ -385,6 +391,22 @@ class Player:
             if isinstance(vc, ll.LavalinkVoice):
                 if track is not None and not self.skipping and vc.last_end_reason == "loadFailed":
                     reason = vc.last_exception or "it wouldn't load"
+                    position = self.position()
+                    midsong = position > 3 and (not track.duration or track.is_live
+                                                or position < track.duration - 6)
+                    if midsong and not track.fallback and self.retries < YT_RESUMES:
+                        # YouTube cut the stream mid-song ("confirm you're not a bot"). It's usually a blip:
+                        # wait a moment, load the song fresh and carry on from the same second.
+                        self.retries += 1
+                        await resume_wait(1.5 * self.retries)
+                        if self.stopped or self.current is not track:
+                            return
+                        track.encoded, track.resolved_at = "", 0
+                        resume_at = max(0.0, position - 1)
+                        log.info("YouTube cut %s off at %.0fs; reloading and resuming (try %d of %d)",
+                                 track.label, position, self.retries, YT_RESUMES)
+                        if await self._play(resume_at):
+                            return
                     if not track.fallback:  # YouTube refused it: try the same song on SoundCloud
                         track.fallback, track.encoded = True, ""
                         track.query = track.query or track.title
