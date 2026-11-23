@@ -57,6 +57,7 @@ from .slurs import SlurCount
 from .memory_archive import MemoryArchive
 from .persona import Persona
 from .polls import Polls
+from .music_liked import LikedSongs
 from .lore import Lore
 from .moderation import Moderation, help_lines as moderation_help, pretty as pretty_permission
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
@@ -399,6 +400,7 @@ class Syke(commands.Bot):
         await self.add_cog(MemoryArchive(self))
         await self.add_cog(Persona(self))
         await self.add_cog(Polls(self))
+        await self.add_cog(LikedSongs(self))
         await self.add_cog(Lore(self))
         if self.settings.web_enabled:
             try:

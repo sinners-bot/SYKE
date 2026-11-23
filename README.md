@@ -120,6 +120,8 @@ land in the game. Needs `SYKE_STRIP_GAME_URL` (see **Configuration**). Also `/lo
 The Strip also has `!weekly` (a growing weekly payout), `!jobs` / `!job` (shifts are quick mini-games; better jobs
 unlock as you work) and `!stocks` (six tickers that move every 15 minutes with the server's chat, laughs, voice,
 casino action, late nights and deleted messages). Music has `!radio <station>` (45 stations: genres from drill to classical, Russian, French, Italian, Brazilian, Persian and more, plus moods like gym, sad, sleep and christmas; each station mixes a hand-picked list with songs the AI picks for that station's description, and every song is matched to its real upload on YouTube Music/YouTube with backups if one is blocked), `!songquiz [genre] [rounds]` and
+
+**Liked songs:** tap **❤️ Like** on the now-playing card (anyone can) or use `!like` to save the song that's playing to your own library, which follows you to every server. `!liked [@user]` shows a library with buttons to play, shuffle, add (by name or link), edit (remove, move to the top) and clear; also `!liked play|shuffle|add <song>|remove <n>|move <from> <to>|clear`, and `/music like`, `/music liked`. Up to 500 songs each.
 `!topsongs` (also `!top songs`, `!top djs`).
 
 ### Music

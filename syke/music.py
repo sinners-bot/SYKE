@@ -635,12 +635,16 @@ class Controls(discord.ui.View):
             self.loop_button.style = discord.ButtonStyle.secondary if player.loop == "off" else discord.ButtonStyle.primary
             track = player.current
             if track is not None:
+                from .music_liked import LikeButton
+                self.add_item(LikeButton(guild_id, row=2))
                 service, _, _ = style(track)
                 target = track.origin if track.origin and service in ("Spotify", "Apple Music", "Deezer") else track.url
                 if target.startswith("http"):
                     self.add_item(discord.ui.Button(label=f"Open on {service}"[:80], url=target, row=2))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if str((interaction.data or {}).get("custom_id", "")).startswith("syke:like:"):
+            return True   # anyone can like the song, even without music controls
         problem_text = self.cog.control_problem(interaction.guild, interaction.user)
         if problem_text:
             await interaction.response.send_message(problem_text, ephemeral=True)
@@ -922,6 +926,14 @@ class Music(commands.Cog):
         if track.encoded and track.fallback and "soundcloud" in (track.source or "").lower():
             return track.encoded
         text = track.query or track.title
+        if not track.fallback and not track.query and track.url.startswith("http"):
+            try:   # a saved song: load its own link first (it's the exact upload that was liked)
+                found, _, _ = await self.ll_load(track.url)
+            except Exception:
+                found = []
+            if found:
+                self._take(track, ll_track(found[0]))
+                return track.encoded
         if not track.fallback and track.query:
             hit = await self._best_upload(track)
             if hit is not None:
@@ -2014,6 +2026,29 @@ class Music(commands.Cog):
         dj = self.config(ctx.guild.id).get("dj")
         body += f"\n\nOnly <@&{dj}> controls the music here." if dj else ""
         await self.say(ctx, embed=embed("🎵 Music", body), ephemeral=True)
+
+    @music.command(name="like", description="Save the song that's playing to your Liked songs")
+    async def m_like(self, interaction: discord.Interaction) -> None:
+        liked = self.bot.get_cog("LikedSongs")
+        player = self.players.get(interaction.guild.id)
+        if liked is None or player is None or player.current is None:
+            await interaction.response.send_message("Nothing's playing right now.", ephemeral=True)
+            return
+        await interaction.response.send_message(**liked._like(interaction.user.id, player.current), ephemeral=True)
+
+    @music.command(name="liked", description="Your Liked songs (or someone's): play, shuffle, add, edit")
+    @app_commands.describe(member="Whose library to open (empty = yours)")
+    async def m_liked(self, interaction: discord.Interaction, member: discord.Member | None = None) -> None:
+        liked = self.bot.get_cog("LikedSongs")
+        if liked is None:
+            await interaction.response.send_message("Liked songs are offline right now.", ephemeral=True)
+            return
+        from .music_liked import LibraryView
+        owner = member or interaction.user
+        view = LibraryView(liked, owner, interaction.user.id)
+        await interaction.response.send_message(embed=view.card(), view=view,
+                                                allowed_mentions=discord.AllowedMentions.none())
+        view.message = await interaction.original_response()
 
     @music.command(name="playnext", description="Queue a song to play right after this one")
     @app_commands.describe(query="A song name or link")

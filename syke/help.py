@@ -321,7 +321,7 @@ CATALOG: list[Category] = [
         "Play songs in voice from YouTube, Spotify, SoundCloud, Apple Music, Deezer and more.",
         ["play", "playnext", "skip", "queue", "nowplaying", "pause", "resume", "stop", "leave", "join", "volume",
          "loop", "shuffle", "remove", "move", "seek", "clearqueue", "autoplay", "247", "fx", "search", "music",
-         "radio", "songquiz", "topsongs"],
+         "radio", "songquiz", "topsongs", "like", "liked"],
         {
             "play": "`play <song name or link>`: YouTube, YouTube Music, Spotify (songs, albums, playlists), "
                     "SoundCloud, Apple Music, Deezer, Bandcamp, Twitch, Vimeo, TikTok, Mixcloud, radio streams and "
@@ -342,12 +342,19 @@ CATALOG: list[Category] = [
                      "`techno`, `dnb`, `amapiano`, `jerseyclub`, `disco`), `balkan`, `turkish`, `arabic`, "
                      "`bollywood`, `jazz`, `classical` and moods (`chill`, `lofi`, `sad`, `gym`, `party`, `gaming`, "
                      "`sleep`, `christmas`). `radio` alone lists them all; `radio off` stops it.",
+            "like": "Save the song that's playing to your Liked songs (or tap ❤️ Like on the now-playing card; "
+                    "anyone can, no DJ rights needed).",
+            "liked": "Your own music library, in every server: `liked` (or `liked @user`) shows it with buttons to "
+                     "play, shuffle, add songs, edit (remove or move to the top) and clear. Also `liked play`, "
+                     "`liked shuffle`, `liked add <song or link>`, `liked remove 3`, `liked move 5 1`, `liked clear`. "
+                     "Up to 500 songs. Slash: `/music like`, `/music liked`.",
             "songquiz": "SYKE plays 15 seconds of a song in voice; first to type the title wins the round (and Strip "
                         "cash when the economy's open). `songquiz drill 10` for 10 drill songs.",
             "topsongs": "The server's most played songs and biggest DJs: `topsongs`, `topsongs djs month`. "
                         "Also `top songs` and `top djs`.",
         },
         sections=[("Play", ["play", "playnext", "search", "queue", "nowplaying", "radio"]),
+                  ("Your library", ["like", "liked"]),
                   ("Fun", ["songquiz", "topsongs"]),
                   ("Control", ["skip", "pause", "resume", "stop", "seek", "volume", "loop", "shuffle", "fx"]),
                   ("Queue", ["remove", "move", "clearqueue", "autoplay"]),
@@ -512,7 +519,7 @@ BRIEF = {
     "dashboard": "Every setting, with buttons", "demo": "Add fake test members", "sample": "A demo member's report",
     "daily": "Daily cash and streak", "weekly": "Weekly cash and streak", "jobs": "Pick a job",
     "job": "Work a mini-game shift", "stocks": "Server stock market", "radio": "Endless music by genre",
-    "songquiz": "Name that song", "topsongs": "Most played and top DJs", "afk": "Go away politely",
+    "songquiz": "Name that song", "topsongs": "Most played and top DJs", "like": "Like the current song", "liked": "Your Liked songs", "afk": "Go away politely",
     "birthday": "Birthdays", "wrapped": "Your year in review", "vibe": "Channel mood check",
     "catchup": "What you missed", "timemachine": "A year ago today", "quotebook": "Best quotes book", "lore": "Inside jokes", "mood": "How SYKE feels", "bond": "How SYKE feels about you", "favourites": "SYKE's favourites and grudges", "diary": "SYKE's nightly diary", "promises": "Promises SYKE remembers", "kept": "Keep a promise", "forgive": "Make SYKE drop a grudge", "persona": "Persona settings", "racist": "Slur counter", "work": "Clock a shift", "hustle": "Risky quick cash", "pay": "Send cash",
     "balance": "Players Club card", "deposit": "Bank it (robber-proof)", "withdraw": "Take cash out",

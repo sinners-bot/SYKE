@@ -293,6 +293,23 @@ CREATE TABLE IF NOT EXISTS question_answers (
     at          REAL NOT NULL,
     PRIMARY KEY (question_id, user_id)
 );
+CREATE TABLE IF NOT EXISTS liked_songs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    song_key   TEXT NOT NULL,
+    title      TEXT NOT NULL,
+    url        TEXT NOT NULL DEFAULT '',
+    query      TEXT NOT NULL DEFAULT '',
+    uploader   TEXT NOT NULL DEFAULT '',
+    duration   REAL,
+    thumbnail  TEXT NOT NULL DEFAULT '',
+    source     TEXT NOT NULL DEFAULT '',
+    origin     TEXT NOT NULL DEFAULT '',
+    position   REAL NOT NULL,
+    added_at   REAL NOT NULL,
+    UNIQUE (user_id, song_key)
+);
+CREATE INDEX IF NOT EXISTS liked_songs_user ON liked_songs (user_id, position);
 CREATE TABLE IF NOT EXISTS persona_diary (
     guild_id   INTEGER NOT NULL,
     day        TEXT NOT NULL,
