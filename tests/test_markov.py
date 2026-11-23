@@ -262,7 +262,7 @@ def test_ranking_prefers_rare_shared_keywords_and_answers():
 
 
 def test_tidy_reply_sounds_like_chat_and_rejects_copies():
-    from syke.yap import tidy_reply
+    from syke.yap import Voice, tidy_reply
 
     sources = ["nah pineapple pizza is a crime", "touch grass immediately"]
     assert tidy_reply("Nah pineapple on it is wild ngl.", sources) == "nah pineapple on it is wild ngl"
@@ -274,7 +274,11 @@ def test_tidy_reply_sounds_like_chat_and_rejects_copies():
     assert tidy_reply("SYKE: mid pizza", sources) == "mid pizza"
     assert tidy_reply("ok", sources) is None, "too short"
     assert tidy_reply("this is a long assistant paragraph that explains the joke in way too many words for chat and keeps going until it sounds like a bot", sources) is None
-    assert tidy_reply("first thought. second thought. third.", sources) is None
+    assert tidy_reply("first thought. second thought. third.", sources) == "first thought. second thought"
+    assert tidy_reply("look who's talking, you clown", ["look who's talking"]) == "look who's talking, you clown"
+    assert tidy_reply("lmao https://tenor.com/view/x-gif-1 so true", sources) == "lmao so true"
+    long = "bro if yall keep this up, i might start charging for lessons on how to shoot your shot fr fr no cap"
+    assert tidy_reply(long, sources, voice=Voice(None, length=3, lowercase=0.8)) == "bro if yall keep this up"
     assert tidy_reply({"reply": "no"}) is None
 
 
@@ -643,3 +647,24 @@ def test_collect_since_reads_back_to_a_date(lab, monkeypatch):
     assert cog.bot.storage.corpus_size(42)[0] >= 6
     run(cog.collect.callback(cog, ctx, channel, amount="since whenever"))
     assert ctx.replies[-1].title == "How far back?"
+
+
+async def test_unusable_ai_reply_is_retried_not_swapped_for_a_random_line(monkeypatch):
+    from dataclasses import replace
+
+    from syke import ai
+    from syke.config import load_settings
+    from syke.yap import Turn, Voice
+
+    answers = iter(['{"reply": "https://tenor.com/view/lol-gif-1"}', '{"reply": "nah you did NOT just say that"}'])
+    prompts = []
+
+    async def fake(settings, system, user, temperature=1.0):
+        prompts.append(user)
+        return next(answers)
+    monkeypatch.setattr(ai, "_call_openai", fake)
+    settings = replace(load_settings(), ai_provider="openai")
+    reply = await ai.compose_reply(settings, [(1.0, "some old stored line here"), (0.5, "another random thing said")],
+                                   Turn("Mo", "syke i just beat you"), voice=Voice(None, length=4, lowercase=0.9))
+    assert reply == "nah you did NOT just say that" and len(prompts) == 2
+    assert "LENGTH: at most" in prompts[0] and "unusable" in prompts[1]

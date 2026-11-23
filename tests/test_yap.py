@@ -135,11 +135,29 @@ async def test_yap_gif_only(cog, monkeypatch):
     guild = types.SimpleNamespace(id=42, emojis=[], stickers=[])
     ch = _channel()
     msg = _message(guild, ch)
-    msg.content = "so happy right now"
-    await cog.bot._send_yap(msg, "happy energy", reply_to=False)
+    msg.content = "so happy right now, dance time"
+    await cog.bot._send_yap(msg, "happy dance energy", reply_to=False)
     assert len(ch.sent) == 1                                 # just the GIF, no separate text
     content, kwargs = ch.sent[0]
     assert content == gifs[0] and "stickers" not in kwargs
+    msg.content = "so happy"                                 # one loose word isn't enough to swap for a GIF
+    await cog.bot._send_yap(msg, "good energy", reply_to=False)
+    assert ch.sent[-1][0] == "good energy"
+
+
+async def test_replies_to_people_are_always_words(cog, monkeypatch):
+    monkeypatch.setattr(botmod, "YAP_EMOJI_CHANCE", 0.0)
+    monkeypatch.setattr(botmod, "YAP_STICKER_CHANCE", 0.5)
+    monkeypatch.setattr(botmod, "YAP_GIF_CHANCE", 0.5)
+    _seed_voice(cog.bot, 42, emojis=[], gifs=["https://tenor.com/view/happy-dance-gif-1"])
+    sticker = types.SimpleNamespace(id=900, name="wave")
+    guild = types.SimpleNamespace(id=42, emojis=[], stickers=[sticker])
+    past = [types.SimpleNamespace(stickers=[types.SimpleNamespace(id=900)])]
+    msg = _message(guild, _channel(past))
+    msg.content = "syke are you happy dance"
+    for _ in range(10):
+        await cog.bot._send_yap(msg, "always happy dance mode", reply_to=True)
+    assert all(content == "always happy dance mode" and not kwargs.get("stickers") for content, kwargs in msg.replies)
 
 
 async def test_yap_gif_fits_context(cog):
@@ -149,7 +167,8 @@ async def test_yap_gif_fits_context(cog):
     guild = types.SimpleNamespace(id=42, emojis=[], stickers=[])
     msg = _message(guild, _channel())
     msg.content = "i am so happy today"
-    assert await cog.bot.yap_gif(msg, "yeah good vibes", voice) == gifs[0]
+    assert await cog.bot.yap_gif(msg, "happy dance vibes", voice) == gifs[0]
+    assert await cog.bot.yap_gif(msg, "yeah good vibes", voice) is None      # one word in common: not enough
     msg.content = "quarterly spreadsheet numbers"
     assert await cog.bot.yap_gif(msg, "boring meeting", voice) is None
 
@@ -163,7 +182,7 @@ async def test_yap_sticker_only_reply(cog, monkeypatch):
     past = [types.SimpleNamespace(stickers=[types.SimpleNamespace(id=900)])]
     _seed_voice(cog.bot, 42, emojis=[], gifs=[])
     msg = _message(guild, _channel(past))
-    await cog.bot._send_yap(msg, "yo", reply_to=True)
-    content, kwargs = msg.replies[-1]
-    assert content is None and kwargs.get("stickers") == [sticker]   # sticker reply, no text
-    assert kwargs.get("mention_author") is False
+    ch = msg.channel
+    await cog.bot._send_yap(msg, "yo", reply_to=False)        # SYKE jumping in on his own
+    content, kwargs = ch.sent[-1]
+    assert content is None and kwargs.get("stickers") == [sticker]   # sticker, no text

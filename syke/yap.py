@@ -205,9 +205,9 @@ def gif_keywords(url: str) -> set[str]:
     return words
 
 
-def pick_gif(gifs: list[str], context: str) -> str | None:
-    """Choose the GIF whose slug words best overlap the conversation; None if none fit."""
-    terms = {w for w in re.findall(r"[a-z]{3,}", (context or "").lower())}
+def pick_gif(gifs: list[str], context: str, minimum: int = 1) -> str | None:
+    """Choose the GIF whose slug words best overlap the conversation; None if fewer than `minimum` match."""
+    terms = {w for w in re.findall(r"[a-z]{3,}", (context or "").lower())} - STOPWORDS
     if not terms:
         return None
     best, best_score = None, 0
@@ -215,7 +215,7 @@ def pick_gif(gifs: list[str], context: str) -> str | None:
         score = len(gif_keywords(g) & terms)
         if score > best_score:
             best, best_score = g, score
-    return best
+    return best if best_score >= minimum else None
 
 
 def mine_expressions(texts: Iterable[str]) -> tuple[list[str], list[str]]:
@@ -350,12 +350,59 @@ def copies(reply: str, sources: Iterable[str], run: int = COPY_RUN) -> bool:
         if folded(source).strip(" .!?") == key:
             return True
         theirs = tuple(_words_of(source))
-        if len(theirs) >= 3 and any(words[i:i + len(theirs)] == theirs
+        if len(theirs) >= run and any(words[i:i + len(theirs)] == theirs
                                     for i in range(len(words) - len(theirs) + 1)):
             return True
         if long and any(theirs[i:i + run] in long for i in range(len(theirs) - run + 1)):
             return True
     return False
+
+
+def reply_cap(voice: Voice | None) -> int:
+    """Most words a reply may have: a bit more than this server's typical message."""
+    if voice is None or not voice.length:
+        return 24
+    return max(16, min(30, voice.length * 3 + 8))
+
+
+_SENTENCE_END = re.compile(r"(?<=[.!?…])\s+(?=\S)")
+_CLAUSE_END = re.compile(r"(?<=[,;:])\s+|\s+(?:—|-|–)\s+")
+
+
+def fit_reply(text: str, cap: int, voice: Voice | None = None) -> str | None:
+    """Trim a good reply to chat size instead of throwing it away.
+
+    At most two sentences (one when this server never uses full stops), cut at a sentence or clause
+    end so it stays within `cap` words. None if there's no clean place to cut.
+    """
+    sentences = [x.strip() for x in _SENTENCE_END.split(text) if x.strip()]
+    sentences = sentences[:2]
+    out = []
+    for sentence in sentences:
+        if len(" ".join([*out, sentence]).split()) <= cap:
+            out.append(sentence)
+        else:
+            break
+    if out:
+        joined = " ".join(out)
+        if joined.endswith(".") and not joined.endswith("..") and (voice is None or voice.periods < 0.2):
+            joined = joined[:-1].rstrip()
+        return joined
+    first = sentences[0] if sentences else text
+    pieces = _CLAUSE_END.split(first)
+    built = ""
+    for piece in pieces:
+        trial = f"{built} {piece}".strip() if built else piece
+        if len(trial.split()) > cap:
+            break
+        built = trial
+    built = built.rstrip(",;:—–- ")
+    return built if built and len(built.split()) >= 3 else None
+
+
+def strip_links(text: str) -> str:
+    """A stored line without links (GIF links would make the 'text' reply a GIF)."""
+    return " ".join(w for w in (text or "").split() if not w.lower().startswith(("http://", "https://", "<http")))
 
 
 def tidy_reply(text, sources: Iterable[str] = (), banned: Iterable[str] = (),
@@ -367,6 +414,7 @@ def tidy_reply(text, sources: Iterable[str] = (), banned: Iterable[str] = (),
     text = SPEAKER_TAG.sub("", text).strip()
     if len(text) >= 2 and text[0] in "\"“'" and text[-1] in "\"”'":
         text = text[1:-1].strip()
+    text = strip_links(text)
     if not text or len(text) > MAX_REPLY or len(text.split()) < 2 or PINGS.search(text) or BOT_TELLS.search(text):
         return None
     if voice is None or voice.periods < 0.2:
@@ -374,10 +422,8 @@ def tidy_reply(text, sources: Iterable[str] = (), banned: Iterable[str] = (),
             text = text[:-1].rstrip()
     if not text or len(text.split()) < 2:
         return None
-    cap = 24 if voice is None or not voice.length else max(12, min(28, voice.length * 3 + 6))
-    if len(text.split()) > cap:
-        return None
-    if (voice is None or voice.periods < 0.2) and len(re.findall(r"[.!?]+(?:\s+\S)", text)) >= 2:
+    text = fit_reply(text, reply_cap(voice), voice)
+    if not text or len(text.split()) < 2:
         return None
     first = text.split()[0]
     if (voice is None or voice.lowercase >= 0.5) and first[0].isupper() and not (len(first) > 1 and first.isupper()):

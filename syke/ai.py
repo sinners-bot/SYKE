@@ -15,7 +15,7 @@ from .profile import Profile
 from .roast import fallback_summary
 from .stats import CUSTOM_EMOJI_RE
 from .traits import HIGHLIGHT_TRAITS, TRAITS
-from .yap import (DEFAULT_TONE, Turn, Vocab, Voice, folded, offline_pick, query_weights, style_hint,
+from .yap import (DEFAULT_TONE, reply_cap, Turn, Vocab, Voice, folded, offline_pick, query_weights, style_hint,
                   tidy_reply, vocabulary)
 
 log = logging.getLogger("syke.ai")
@@ -349,17 +349,21 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
             prompt += f"\n\n{state}"
         emojis = {m.group(1): m.group(0) for text in [*candidates, *vocab.emojis]
                   for m in CUSTOM_EMOJI_RE.finditer(text)}
-        try:
-            if settings.ai_provider == "openai":
-                answer = await _call_openai(settings, COMPOSE_PROMPT, prompt, temperature=1.0)
-            else:
-                answer = await _call_anthropic(settings, COMPOSE_PROMPT, prompt, temperature=1.0)
-            reply = tidy_reply(_parse_json(answer).get("reply"), candidates, banned, voice)
-            if reply:
-                return with_server_emojis(reply, emojis)
-            log.warning("AI yap reply unusable: %r", answer[:200])
-        except Exception:
-            log.exception("AI yap reply failed; matching keywords instead")
+        cap = reply_cap(voice)
+        prompt += f"\n\nLENGTH: at most {cap} words, one or two short sentences. No links."
+        call = _call_openai if settings.ai_provider == "openai" else _call_anthropic
+        for attempt in range(2):
+            try:
+                answer = await call(settings, COMPOSE_PROMPT, prompt, temperature=1.0)
+                reply = tidy_reply(_parse_json(answer).get("reply"), candidates, banned, voice)
+                if reply:
+                    return with_server_emojis(reply, emojis)
+                log.warning("AI yap reply unusable (try %d): %r", attempt + 1, answer[:200])
+                prompt += (f"\n\nYour last reply was unusable: keep it under {cap} words, in your own words "
+                           "(never copy AMMO), no links. Try again.")
+            except Exception:
+                log.exception("AI yap reply failed; matching keywords instead")
+                break
     usable = [(score, text) for score, text in ranked if folded(text) not in banned_keys]
     return offline_pick(usable) or offline_pick(ranked)
 

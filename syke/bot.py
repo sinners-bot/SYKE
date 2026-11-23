@@ -100,6 +100,7 @@ from .yap import (
     Turn,
     Voice,
     build_voice,
+    strip_links,
     detect_tone,
     emoji_id,
     pick_gif,
@@ -150,8 +151,8 @@ YAP_CHAIN_TTL = 600
 YAP_RECENT = 16
 # How often a yap carries a server emoji / sticker / gif the chat actually uses.
 YAP_EMOJI_CHANCE = 0.4
-YAP_STICKER_CHANCE = 0.1
-YAP_GIF_CHANCE = 0.1
+YAP_STICKER_CHANCE = 0.05     # only when SYKE jumps in on his own; replies to people are always words
+YAP_GIF_CHANCE = 0.08
 YAP_STICKER_SCAN = 60
 ASK_TAG = "SYKE AI"
 ASK_COOLDOWN = 3
@@ -876,9 +877,14 @@ class Syke(commands.Bot):
         return self.usable_lines(guild_id, pool, exclude), labelled
 
     def usable_lines(self, guild_id: int, lines: list[str], exclude: set[str]) -> list[str]:
+        """Stored or remixed lines SYKE may build a text reply from: links stripped (a GIF link would turn
+        the reply into a GIF), commands and one-word lines dropped."""
         seen = {folded(e) for e in exclude}
         out = []
-        for text in lines:
+        for raw in lines:
+            if self.is_command_text(guild_id, raw):
+                continue
+            text = strip_links(raw)
             key = folded(text)
             if key in seen or len(text.split()) < 2 or self.is_command_text(guild_id, text):
                 continue
@@ -1036,12 +1042,11 @@ class Syke(commands.Bot):
             self.storage.update_config(guild_id, "yap_memory", stickers=ids)
 
     async def yap_gif(self, message: discord.Message, text: str, voice: Voice) -> str | None:
-        """A GIF the server uses that fits what's being talked about (no chance roll)."""
+        """A GIF the server uses that fits what SYKE would have said and what's being talked about."""
         pool = self.remembered_gifs(message.guild.id, voice)
         if not pool:
             return None
-        chat = " ".join(t.text for t in await self.recent_chat(message, YAP_CONTEXT // 2))
-        return pick_gif(pool[:40], f"{text} {message.content or ''} {chat}")
+        return pick_gif(pool[:60], f"{text} {message.content or ''}", minimum=2)
 
     def _text_with_emoji(self, guild, voice: Voice, text: str) -> str:
         """Maybe append a server emoji members use (stays part of the text form)."""
@@ -1055,14 +1060,17 @@ class Syke(commands.Bot):
         """Send a yap as exactly ONE of: a sticker, a GIF, or text — never combined."""
         guild = message.guild
         voice = await self.server_voice(guild.id)
-        roll = random.random()
         sticker = gif = None
-        if roll < YAP_STICKER_CHANCE:
-            found = await self.recent_stickers(message)
-            if found:
-                sticker = random.choice(found)
-        elif roll < YAP_STICKER_CHANCE + YAP_GIF_CHANCE:
-            gif = await self.yap_gif(message, text, voice)
+        # Someone talking to SYKE gets an answer in words. Stickers and GIFs are only for SYKE jumping into
+        # the chat on his own, now and then, and a GIF only when it matches what he'd have said.
+        if not reply_to:
+            roll = random.random()
+            if roll < YAP_STICKER_CHANCE:
+                found = await self.recent_stickers(message)
+                if found:
+                    sticker = random.choice(found)
+            elif roll < YAP_STICKER_CHANCE + YAP_GIF_CHANCE:
+                gif = await self.yap_gif(message, text, voice)
         am = discord.AllowedMentions.none()
 
         async def deliver(**kwargs):
@@ -1098,8 +1106,11 @@ class Syke(commands.Bot):
     def pick_yap(self, guild_id: int, exclude_id: int = 0, exclude: set[str] = frozenset()) -> str | None:
         seen = {folded(e) for e in exclude}
         fallback = None
-        for text in self.storage.random_messages(guild_id, 40, exclude_id):
-            if len(text.split()) < 3 or self.is_command_text(guild_id, text):
+        for raw in self.storage.random_messages(guild_id, 40, exclude_id):
+            if self.is_command_text(guild_id, raw):
+                continue
+            text = strip_links(raw)
+            if len(text.split()) < 3:
                 continue
             if folded(text) in seen:
                 fallback = fallback or text
