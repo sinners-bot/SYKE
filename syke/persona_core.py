@@ -19,7 +19,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 BOND_HALF_LIFE = 21 * 86400        # feelings fade by half in three weeks
-MOOD_HALF_LIFE = 6 * 3600
+MOOD_HALF_LIFE = 2 * 3600         # how people treated SYKE fades within hours
+VIBE_HALF_LIFE = 45 * 60         # a vibe read goes stale when the chat moves on
+REASON_TTL = 3 * 3600
 ENERGY_HALF_LIFE = 2 * 3600
 BOND_LIMIT = 100.0
 
@@ -126,7 +128,7 @@ class Mood:
     updated: float = 0.0
     energy: float = 0.3         # 0 asleep … 1 wired (from chat activity; not stored)
     energy_at: float = 0.0
-    reasons: list[str] = field(default_factory=list)
+    reasons: list[tuple[str, float]] = field(default_factory=list)
 
     def now(self, at: float) -> tuple[float, float]:
         value = self.value * 0.5 ** (max(0.0, at - self.updated) / MOOD_HALF_LIFE)
@@ -137,7 +139,10 @@ class Mood:
         value, _ = self.now(at)
         self.value, self.updated = max(-1.0, min(1.0, value + delta)), at
         if reason:
-            self.reasons = [reason, *[r for r in self.reasons if r != reason]][:6]
+            self.reasons = [(reason, at), *[r for r in self.reasons if r[0] != reason]][:6]
+
+    def recent_reasons(self, now: float) -> list[str]:
+        return [text for text, at in self.reasons if now - at < REASON_TTL]
 
     def bump_energy(self, at: float, amount: float = 0.02) -> None:
         _, energy = self.now(at)
@@ -146,14 +151,69 @@ class Mood:
 
 def mood_change(judgement: Judgement, father: bool) -> float:
     if judgement.toward == "insult":
-        return -0.12 * judgement.intensity * (2.0 if father else 1.0)
+        return -0.07 * judgement.intensity * (1.5 if father else 1.0)
     if judgement.toward == "kind":
-        return 0.08 * judgement.intensity * (3.0 if father else 1.0)
+        return 0.06 * judgement.intensity * (2.5 if father else 1.0)
     if judgement.toward == "apology":
-        return 0.05
+        return 0.04
     if judgement.father == "insult":
-        return -0.15
+        return -0.08
     return 0.0
+
+
+# The chat's vibe right now (read by the AI every few minutes, or from words offline)
+
+VIBES = {
+    "hype": (0.6, 0.9, "🔥", "everyone's hyped"),
+    "funny": (0.5, 0.7, "😂", "the chat is funny"),
+    "wholesome": (0.55, 0.4, "🥹", "the chat is wholesome"),
+    "flirty": (0.35, 0.6, "😏", "the chat is flirty"),
+    "chill": (0.15, 0.35, "😌", "the chat is chill"),
+    "dead": (-0.1, 0.05, "🦗", "the chat is dead"),
+    "sad": (-0.35, 0.3, "😔", "the chat is sad"),
+    "tense": (-0.35, 0.65, "😬", "people are arguing"),
+    "toxic": (-0.55, 0.8, "☢️", "the chat is toxic"),
+}
+
+
+@dataclass
+class Vibe:
+    label: str = "chill"
+    valence: float = 0.0
+    energy: float = 0.3
+    summary: str = ""
+    at: float = 0.0
+
+    def weight(self, now: float) -> float:
+        """How much this read still counts (fades as it gets old)."""
+        return 0.5 ** (max(0.0, now - self.at) / VIBE_HALF_LIFE) if self.at else 0.0
+
+
+_LAUGH = re.compile(r"\b(?:l+o+l+|lmf?a+o+|ha(?:ha)+|hehe+|dead|crying|i'?m weak|bruh+)\b|😂|🤣|💀|😭", re.I)
+_LOVE = re.compile(r"\b(?:love|ily|cute|proud|congrats|happy|w\b|goat|best|fire|lets go+|yay+)\b|❤️|🥹|🫶|🔥|💜", re.I)
+_ANGRY = re.compile(r"\b(?:shut up|stfu|fuck (?:you|off|u)|hate|annoying|idiot|stupid|dumb|trash|kys|bitch|loser|"
+                    r"clown|pathetic|cringe)\b|😡|🤬", re.I)
+_SAD = re.compile(r"\b(?:sad|depressed|lonely|miss (?:you|him|her)|cry(?:ing)?|rip|tired|sick|ugh)\b|😢|💔", re.I)
+
+
+def word_vibe(texts: list[str], minutes: float, now: float) -> Vibe:
+    """A rough vibe from the words in the last messages (used when there's no AI)."""
+    if not texts:
+        return Vibe("dead", -0.1, 0.05, "nobody's talking", now)
+    laugh = sum(bool(_LAUGH.search(t)) for t in texts)
+    love = sum(bool(_LOVE.search(t)) for t in texts)
+    angry = sum(bool(_ANGRY.search(t)) for t in texts)
+    sad = sum(bool(_SAD.search(t)) for t in texts)
+    n = len(texts)
+    rate = n / max(1.0, minutes)
+    scores = {"funny": laugh / n, "wholesome": love / n, "toxic": angry / n, "sad": sad / n}
+    label, share = max(scores.items(), key=lambda kv: kv[1])
+    if share < 0.15:
+        label = "hype" if rate > 6 else "chill" if rate > 0.3 else "dead"
+    elif label == "toxic" and share < 0.3:
+        label = "tense"
+    valence, energy, _, words = VIBES[label]
+    return Vibe(label, valence, max(energy, min(1.0, rate / 8)), words, now)
 
 
 MOODS = {
@@ -168,6 +228,12 @@ MOODS = {
     "irritable": ("😠", "irritable: snappy, quick to clap back"),
     "furious": ("🤬", "furious: cold, savage comebacks, holding grudges hard (still no slurs or real cruelty)"),
 }
+
+
+def blend(treated: float, vibe: Vibe | None, now: float) -> float:
+    """SYKE's mood: mostly the chat's vibe right now, pushed by how people have been treating him."""
+    weight = vibe.weight(now) if vibe else 0.0
+    return max(-1.0, min(1.0, 0.75 * weight * vibe.valence + treated)) if vibe else max(-1.0, min(1.0, treated))
 
 
 def mood_label(value: float, energy: float, local_hour: int) -> str:

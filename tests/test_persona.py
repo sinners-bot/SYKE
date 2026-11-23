@@ -1,5 +1,6 @@
 """SYKE's life of its own: bonds, the father, mood, promises, diary, and what the AI is told."""
 
+import asyncio
 import time
 import types
 from dataclasses import replace
@@ -102,7 +103,8 @@ def test_mood_fades_back_to_calm():
     value, _ = mood.now(1000)
     assert core.mood_label(value, 0.3, 15) == "furious"
     later, _ = mood.now(1000 + 3 * core.MOOD_HALF_LIFE)
-    assert core.mood_label(later, 0.3, 15) == "chill" and mood.reasons == ["Mo called you trash"]
+    assert core.mood_label(later, 0.3, 15) == "chill" and mood.recent_reasons(1000) == ["Mo called you trash"]
+    assert mood.recent_reasons(1000 + core.REASON_TTL + 1) == []
     assert core.mood_label(0, 0.05, 3) == "sleepy" and core.mood_label(0, 0.05, 15) == "bored"
     assert core.mood_label(0, 0.9, 15) == "wired"
 
@@ -221,3 +223,79 @@ async def test_forgive_needs_dad_or_a_manager(world):
     assert persona.bond(GID, MO) < 0
     await persona.forgive_cmd.callback(persona, Ctx(guild, guild.members[DAD]), mo)
     assert persona.bond(GID, MO) == pytest.approx(0)
+
+
+# Judging in context, and the chat's vibe
+
+def test_only_confident_judgements_aimed_at_syke_count():
+    from syke.persona import judgement_from
+    assert judgement_from({"aimed_at_syke": True, "toward": "insult", "confidence": 0.9, "intensity": 2,
+                           "note": "called you useless"}).note == "called you useless"
+    assert judgement_from({"aimed_at_syke": True, "toward": "insult", "confidence": 0.5}) is None
+    assert judgement_from({"aimed_at_syke": False, "toward": "insult", "confidence": 0.95}) is None
+    dad = judgement_from({"aimed_at_syke": False, "toward": "neutral", "father": "insult", "confidence": 0.9})
+    assert dad.toward == "neutral" and dad.father == "insult"
+    assert judgement_from({"toward": "insult", "confidence": "lots"}) is None
+
+
+async def test_the_ai_judge_sees_the_conversation(world, monkeypatch):
+    bot, persona, guild = world
+    bot.settings = replace(bot.settings, ai_provider="openai")
+    seen = []
+
+    async def judge(settings, system, user, temperature, timeout):
+        seen.append(user)
+        if "MESSAGE TO JUDGE" in user:
+            return {"aimed_at_syke": False, "toward": "neutral", "confidence": 0.95}
+        return {"vibe": "funny", "valence": 0.5, "energy": 0.6, "summary": "roasting Kai"}
+    monkeypatch.setattr("syke.persona.ai._complete", judge)
+    mo, zara = guild.members[MO], guild.members[ZARA]
+    await persona.observe(Msg(guild, zara, "kai your haircut is a crime"))
+    await persona.observe(Msg(guild, mo, "syke make him cry bitch"))
+    for _ in range(3):
+        await asyncio.sleep(0)
+    judged = [u for u in seen if "MESSAGE TO JUDGE" in u][0]
+    assert "Zara: kai your haircut is a crime" in judged and "Mo: syke make him cry bitch" in judged
+    assert persona.bond(GID, MO) == 0 and persona.events(GID, MO) == []      # a request, not an insult
+
+
+async def test_the_chat_vibe_drives_the_mood(world, monkeypatch):
+    bot, persona, guild = world
+    bot.settings = replace(bot.settings, ai_provider="openai")
+
+    async def vibe(settings, system, user, temperature, timeout):
+        return {"vibe": "funny", "valence": 0.6, "energy": 0.7, "summary": "everyone roasting Kai's haircut"}
+    monkeypatch.setattr("syke.persona.ai._complete", vibe)
+    for i in range(core_min_new()):
+        await persona.observe(Msg(guild, guild.members[ZARA], f"lmao kai {i}"))
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert persona.vibes[GID].label == "funny"
+    persona.mood(GID).nudge(-0.1, time.time(), "Mo was rude to you")       # one rude person can't ruin it
+    label, value, _ = persona.mood_now(GID)
+    assert label in ("happy", "good", "wired") and value > 0.2
+    reasons = persona.mood_reasons(GID)
+    assert reasons[0].startswith("chat vibe: funny") and "roasting Kai" in reasons[0]
+
+
+def test_word_vibe_without_ai():
+    now = time.time()
+    assert core.word_vibe(["lmao", "💀💀", "im dead", "ok"], 5, now).label == "funny"
+    assert core.word_vibe(["shut up idiot", "you're trash", "stfu", "fine"], 5, now).label == "toxic"
+    assert core.word_vibe([], 30, now).label == "dead"
+
+
+def test_old_feelings_are_wiped_once(world):
+    bot, persona, guild = world
+    bot.storage.update_config(0, "persona_meta", version=1)
+    persona.change_bond(GID, MO, -40, "insult", "told you to make him")
+    persona.reset_old_feelings()
+    assert persona.bond(GID, MO) == 0 and persona.events(GID, MO) == []
+    persona.change_bond(GID, MO, -10, "insult", "called you useless")
+    persona.reset_old_feelings()                                            # only once
+    assert persona.bond(GID, MO) == pytest.approx(-10)
+
+
+def core_min_new():
+    from syke.persona import VIBE_MIN_NEW
+    return VIBE_MIN_NEW

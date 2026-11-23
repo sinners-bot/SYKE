@@ -34,6 +34,12 @@ from .moderation import embed, problem
 log = logging.getLogger("syke.persona")
 
 AI_PER_MINUTE = 20
+JUDGE_CONFIDENCE = 0.7          # how sure the AI must be before a message changes how SYKE feels
+CONTEXT_LINES = 10
+VIBE_EVERY = 4 * 60             # read the vibe at most this often per server…
+VIBE_MIN_NEW = 6                # …and only once this many new messages came in
+CHAT_KEEP = 60
+PERSONA_VERSION = 2             # bump to wipe feelings judged by an older, worse judge
 CALLOUT_WINDOW = 36 * 3600
 CALLOUT_COOLDOWN = 15 * 60
 OPEN_PER_USER = 5
@@ -42,19 +48,31 @@ DIARY_HOUR, DIARY_MINUTE = 23, 30
 NAME_RE = re.compile(r"\bsyke\b", re.I)
 FATHER_NAME = os.environ.get("SYKE_FATHER_NAME", "Echo").strip() or "Echo"   # what SYKE calls his creator
 
-JUDGE_PROMPT = """You read one Discord message and judge how it treats SYKE (a Discord bot with feelings) \
-and SYKE's father and creator ({father}).
+JUDGE_PROMPT = """You judge whether one Discord message is really aimed at SYKE (a Discord bot with feelings) \
+and how it treats him, using the conversation around it. SYKE's father and creator is {father}.
 
-- toward: "insult" (rude, mocking, dismissive, telling SYKE off), "kind" (thanks, praise, affection), \
-"apology" (saying sorry to SYKE), or "neutral" (anything else, including normal questions and banter that \
-isn't really aimed at hurting). Friendly trash talk between mates counts as insult only if it's actually mean.
-- intensity: 1 mild, 2 clear, 3 harsh.
-- father: "insult" if it disrespects {father} (by name, ping, or as SYKE's dad/creator/owner), "kind" if it \
-praises him, else "none".
-- note: what they did to SYKE, past tense, at most 8 words, addressed to SYKE ("called you useless", \
-"thanked you for the song", "said your dad is a clown"). Empty if neutral.
+Be strict and fair. Most messages are NOT about SYKE's feelings at all:
+- Asking or telling SYKE to do something ("syke roast him", "syke make him a sandwich", "syke rob tutter", \
+"syke play a song") is neutral, even with swearing in it.
+- Talking ABOUT SYKE to someone else, quoting him, or reacting to what he said in a joking way is neutral.
+- Banter, trash talk between members, swearing at someone else, and jokes are neutral for SYKE.
+- Words like "bitch", "bro", "dumb" are often affectionate or casual. Judge the intent, not the words.
+Only count it when the person genuinely means it toward SYKE himself: real hostility, mocking or telling him \
+off ("insult"), real thanks, praise or affection ("kind"), or saying sorry to him ("apology").
 
-Reply with JSON only: {{"toward": "...", "intensity": 1, "father": "...", "note": "..."}}"""
+Reply with JSON only:
+{{"aimed_at_syke": true or false, "toward": "insult" | "kind" | "apology" | "neutral", "intensity": 1-3, \
+"father": "insult" | "kind" | "none", "confidence": 0.0-1.0, \
+"note": "<what they did, past tense, max 8 words, addressed to SYKE, e.g. 'called you useless'; empty if neutral>"}}
+"father" is "insult" only if the message genuinely disrespects {father} (by name, ping, or as SYKE's dad)."""
+
+VIBE_PROMPT = """You read the last messages of a Discord server's chat and say what the vibe is RIGHT NOW.
+
+Pick one label: hype, funny, wholesome, flirty, chill, dead, sad, tense (people arguing), toxic (people being \
+genuinely nasty). Casual swearing and roasting each other for fun is "funny", not toxic.
+
+Reply with JSON only: {{"vibe": "<label>", "valence": -1.0 to 1.0, "energy": 0.0 to 1.0, \
+"summary": "<what's going on, max 10 words, e.g. 'everyone roasting Kai's haircut'>"}}"""
 
 DIARY_PROMPT = """You are SYKE, a Discord bot with a real personality, writing tonight's entry in your private \
 diary about your day in the server "{server}". Your father and creator is {father}.
@@ -101,6 +119,27 @@ def offline_diary(day: str, notes: dict) -> str:
     return " ".join(bits)
 
 
+def judgement_from(data: dict) -> core.Judgement | None:
+    """The AI's verdict, kept only when it's sure the message was really aimed at SYKE (or his father)."""
+    try:
+        confidence = float(data.get("confidence", 0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if confidence < JUDGE_CONFIDENCE:
+        return None
+    toward = data.get("toward") if data.get("toward") in ("insult", "kind", "apology") else "neutral"
+    if data.get("aimed_at_syke") is not True:
+        toward = "neutral"
+    father = data.get("father") if data.get("father") in ("insult", "kind") else "none"
+    if toward == "neutral" and father == "none":
+        return None
+    try:
+        intensity = max(1, min(3, int(data.get("intensity") or 1)))
+    except (TypeError, ValueError):
+        intensity = 1
+    return core.Judgement(toward, intensity, father, ai.public_text(data.get("note"), 80))
+
+
 class Persona(commands.Cog, name="Persona"):
     def __init__(self, bot) -> None:
         self.bot = bot
@@ -108,9 +147,24 @@ class Persona(commands.Cog, name="Persona"):
         self._ai_calls: dict[int, deque] = defaultdict(deque)
         self._callout_at: dict[int, float] = {}
         self._father_seen: dict[int, float] = {}
+        self.chat: dict[int, deque] = defaultdict(lambda: deque(maxlen=CHAT_KEEP))   # (at, channel, name, text)
+        self.vibes: dict[int, core.Vibe] = {}
+        self._vibe_new: dict[int, int] = defaultdict(int)
+        self._vibe_busy: set[int] = set()
 
     async def cog_load(self) -> None:
+        self.reset_old_feelings()
         self.diary_loop.start()
+
+    def reset_old_feelings(self) -> None:
+        """Feelings judged by an older judge (no context, word-list fallback) are wiped once."""
+        meta = self.storage.get_config(0, "persona_meta")
+        if int(meta.get("version", 1)) >= PERSONA_VERSION:
+            return
+        for table in ("persona_bonds", "persona_events", "persona_mood"):
+            self.storage._write(f"DELETE FROM {table}", ())
+        self.storage.update_config(0, "persona_meta", version=PERSONA_VERSION)
+        log.info("Persona: cleared feelings from the old judge (v%d)", PERSONA_VERSION)
 
     def cog_unload(self) -> None:
         self.diary_loop.cancel()
@@ -171,9 +225,32 @@ class Persona(commands.Cog, name="Persona"):
     def local_now(self, guild_id: int) -> datetime:
         return datetime.now(self.bot.tz_for(guild_id))
 
+    def vibe(self, guild_id: int) -> core.Vibe:
+        """The chat's vibe: the last AI read while it's fresh, otherwise read from the words."""
+        now = time.time()
+        read = self.vibes.get(guild_id)
+        if read is not None and now - read.at < 20 * 60:
+            return read
+        recent = [(at, text) for at, _, _, text in self.chat.get(guild_id, ()) if now - at < 30 * 60]
+        minutes = (now - recent[0][0]) / 60 if recent else 30
+        return core.word_vibe([t for _, t in recent], minutes, now)
+
     def mood_now(self, guild_id: int) -> tuple[str, float, float]:
-        value, energy = self.mood(guild_id).now(time.time())
+        now = time.time()
+        treated, energy = self.mood(guild_id).now(now)
+        vibe = self.vibe(guild_id)
+        value = core.blend(treated, vibe, now)
+        energy = max(energy, vibe.energy * vibe.weight(now)) if vibe.at else energy
         return core.mood_label(value, energy, self.local_now(guild_id).hour), value, energy
+
+    def mood_reasons(self, guild_id: int) -> list[str]:
+        now = time.time()
+        vibe = self.vibe(guild_id)
+        reasons = []
+        if vibe.at and vibe.weight(now) > 0.3:
+            icon = core.VIBES.get(vibe.label, (0, 0, "", ""))[2]
+            reasons.append(f"chat vibe: {vibe.label} {icon}" + (f" ({vibe.summary})" if vibe.summary else ""))
+        return reasons + self.mood(guild_id).recent_reasons(now)
 
     # Bonds
 
@@ -227,7 +304,7 @@ class Persona(commands.Cog, name="Persona"):
         events = [] if user is None or target_is_father else self.events(guild.id, user.id, 6)
         promises = [] if user is None else [(s, t, m) for _, s, t, m, *_ in self.promises(guild.id, user.id, 3)]
         father_in_chat = any(f in chat_names for f in fathers)
-        return core.state_block(mood=mood, mood_reasons=self.mood(guild.id).reasons, target_name=name,
+        return core.state_block(mood=mood, mood_reasons=self.mood_reasons(guild.id), target_name=name,
                                 target_is_father=target_is_father, bond=bond, events=events, father_names=fathers,
                                 father_in_chat=father_in_chat, promises=promises, now=now)
 
@@ -254,14 +331,69 @@ class Persona(commands.Cog, name="Persona"):
             return
         if message.author.id in self.storage.optouts(guild.id):
             return
+        context = self.context_for(message)
+        self.note_chat(guild.id, message.channel.id, self.bot.speaker_name(message.author), message.content)
         talking_to_me = await self.addressed(message)
         about_father = not self.is_father(message.author.id) and self.mentions_father(message)
         if talking_to_me or about_father:
-            if self.bot.settings.ai_provider != "none" and self._ai_budget(guild.id):
-                asyncio.ensure_future(self._judge_ai(message, about_father))
+            if self.bot.settings.ai_provider != "none":
+                if self._ai_budget(guild.id):   # no budget left: skip rather than guess from words
+                    asyncio.ensure_future(self._judge_ai(message, about_father, context))
             else:
                 self.apply(message.guild, message.author, core.lexicon_judge(message.content, about_father))
         await self._promise_check(message, talking_to_me)
+
+    def note_chat(self, guild_id: int, channel_id: int, name: str, text: str) -> None:
+        """Remember the latest chat lines (for judging in context and reading the vibe)."""
+        self.chat[guild_id].append((time.time(), channel_id, name, " ".join((text or "").split())[:300]))
+        self._vibe_new[guild_id] += 1
+        if self.bot.settings.ai_provider == "none" or guild_id in self._vibe_busy:
+            return
+        last = self.vibes.get(guild_id)
+        since = time.time() - (last.at if last else 0)
+        if since >= VIBE_EVERY and self._vibe_new[guild_id] >= VIBE_MIN_NEW:
+            self._vibe_busy.add(guild_id)
+            asyncio.ensure_future(self._read_vibe(guild_id))
+
+    def context_for(self, message: discord.Message) -> list[str]:
+        lines = [f"{name}: {text}" for _, cid, name, text in self.chat.get(message.guild.id, ())
+                 if cid == message.channel.id][-CONTEXT_LINES:]
+        ref = getattr(message, "reference", None)
+        resolved = getattr(ref, "resolved", None) if ref else None
+        if isinstance(resolved, discord.Message) and resolved.content:
+            who = "SYKE" if getattr(resolved.author, "id", None) == getattr(self.bot.user, "id", None) else \
+                self.bot.speaker_name(resolved.author)
+            lines.append(f"(the message below is a reply to {who}: {' '.join(resolved.content.split())[:200]})")
+        return lines
+
+    async def _read_vibe(self, guild_id: int) -> None:
+        try:
+            now = time.time()
+            lines = [f"{name}: {text}" for at, _, name, text in self.chat.get(guild_id, ()) if now - at < 30 * 60][-30:]
+            if not lines:
+                return
+            data = await ai._complete(self.bot.settings, VIBE_PROMPT, "\n".join(lines), 0.2, 15)
+            label = str(data.get("vibe", "chill")).lower()
+            if label not in core.VIBES:
+                label = "chill"
+            base_valence, base_energy, _, words = core.VIBES[label]
+            valence = max(-1.0, min(1.0, float(data.get("valence", base_valence))))
+            energy = max(0.0, min(1.0, float(data.get("energy", base_energy))))
+            self.vibes[guild_id] = core.Vibe(label, valence, energy, ai.public_text(data.get("summary"), 80) or words,
+                                             time.time())
+            self._vibe_new[guild_id] = 0
+        except Exception as error:
+            log.info("vibe read failed: %s", error)
+        finally:
+            self._vibe_busy.discard(guild_id)
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        """SYKE's own lines go into the chat memory too, so the judge knows what he said."""
+        me = getattr(self.bot.user, "id", None)
+        if message.guild is not None and getattr(message.author, "id", None) == me and message.content:
+            self.chat[message.guild.id].append((time.time(), message.channel.id, "SYKE",
+                                                " ".join(message.content.split())[:300]))
 
     def _ai_budget(self, guild_id: int) -> bool:
         calls, now = self._ai_calls[guild_id], time.monotonic()
@@ -272,21 +404,19 @@ class Persona(commands.Cog, name="Persona"):
         calls.append(now)
         return True
 
-    async def _judge_ai(self, message: discord.Message, about_father: bool) -> None:
+    async def _judge_ai(self, message: discord.Message, about_father: bool, context: list[str] = ()) -> None:
         father = " / ".join(self.father_names(message.guild)) or "the bot owner"
+        before = "\n".join(context) if context else "(no earlier messages)"
+        user = (f"CONVERSATION SO FAR:\n{before}\n\nMESSAGE TO JUDGE:\n"
+                f"{self.bot.speaker_name(message.author)}: {message.content[:500]}")
         try:
-            data = await ai._complete(self.bot.settings, JUDGE_PROMPT.format(father=father),
-                                      f"{message.author.display_name}: {message.content[:500]}", 0.0, 12)
-            judgement = core.Judgement(
-                toward=str(data.get("toward", "neutral")) if data.get("toward") in
-                ("insult", "kind", "apology", "neutral") else "neutral",
-                intensity=max(1, min(3, int(data.get("intensity") or 1))),
-                father=str(data.get("father", "none")) if data.get("father") in ("insult", "kind") else "none",
-                note=ai.public_text(data.get("note"), 80))
+            data = await ai._complete(self.bot.settings, JUDGE_PROMPT.format(father=father), user, 0.0, 12)
         except Exception as error:
-            log.info("persona judge failed (%s); using the word list", error)
-            judgement = core.lexicon_judge(message.content, about_father)
-        self.apply(message.guild, message.author, judgement)
+            log.info("persona judge failed (%s); leaving feelings alone", error)
+            return
+        judgement = judgement_from(data)
+        if judgement is not None:
+            self.apply(message.guild, message.author, judgement)
 
     def apply(self, guild: discord.Guild, user, judgement: core.Judgement) -> None:
         """Let one judged message change how SYKE feels."""
@@ -471,7 +601,7 @@ class Persona(commands.Cog, name="Persona"):
             "promises": [(who(u), t, s) for u, t, s in made],
             "broken": ", ".join(f'{who(u)} ("{core.snippet(t, 40)}")' for u, t, s in made if s == "broken"),
             "songs": ", ".join(t for t, _ in songs),
-            "mood": mood, "reasons": self.mood(gid).reasons[:4], "father_seen": father_seen,
+            "mood": mood, "reasons": self.mood_reasons(gid)[:4], "father_seen": father_seen,
         }
 
     async def write_diary(self, guild: discord.Guild, day, force: bool = False) -> str | None:
@@ -529,11 +659,12 @@ class Persona(commands.Cog, name="Persona"):
     async def mood_cmd(self, ctx: commands.Context) -> None:
         label, value, energy = self.mood_now(ctx.guild.id)
         icon, how = core.MOODS[label]
-        reasons = self.mood(ctx.guild.id).reasons[:4]
-        body = (f"**{label.title()}** {icon}\n{core.mood_score_text(value)}\n*{how.split(':')[0]}*\n"
+        feel = how.split(":", 1)[1].strip() if ":" in how else how
+        body = (f"**{label.title()}** {icon}\n{core.mood_score_text(value)}\n*{feel}*\n"
                 f"Energy: {'⚡' * max(1, round(energy * 5))}")
+        reasons = self.mood_reasons(ctx.guild.id)[:5]
         if reasons:
-            body += "\n\n**Lately:**\n" + "\n".join(f"• {discord.utils.escape_markdown(r)}" for r in reasons)
+            body += "\n\n**Why:**\n" + "\n".join(f"• {discord.utils.escape_markdown(r)}" for r in reasons)
         fathers = self.father_names(ctx.guild)
         if fathers:
             body += f"\n\n-# Made by my dad, {fathers[0]} 🫶"
