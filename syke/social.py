@@ -840,7 +840,7 @@ class Social(commands.Cog, name="Social"):
                         + ("" if used_ai else " · offline read"))
         await ctx.reply(embed=card, allowed_mentions=discord.AllowedMentions.none())
 
-    @commands.command(name="vibe", aliases=["vibecheck", "mood"], help="Read the last 100 messages and sum up the mood")
+    @commands.command(name="vibe", aliases=["vibecheck", "roommood"], help="Read the last 100 messages and sum up the mood")
     @commands.guild_only()
     @commands.cooldown(1, 20, commands.BucketType.channel)
     async def vibe_cmd(self, ctx: commands.Context) -> None:

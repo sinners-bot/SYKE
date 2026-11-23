@@ -71,13 +71,17 @@ async def _anthropic(settings: Settings, system: str, messages: list[dict]) -> s
 
 
 async def ask(settings: Settings, question: str, history: list[dict] | None = None,
-              asker: str = "someone", where: str = "a Discord server") -> str:
+              asker: str = "someone", where: str = "a Discord server", state: str = "") -> str:
     """The answer to `question`, continuing `history` ([{"role", "content"}, ...]). Raises on failure."""
     if settings.ai_provider == "none":
         raise AskUnavailable
     messages = [*(history or [])[-HISTORY_TURNS:], {"role": "user", "content": question[:MAX_QUESTION]}]
     call = _openai if settings.ai_provider == "openai" else _anthropic
-    answer = (await call(settings, system_prompt(asker, where), messages)).strip()
+    system = system_prompt(asker, where)
+    if state:
+        system += ("\n\nYou have feelings. Let this colour your tone (never at the cost of a correct, helpful "
+                   "answer, and never recite it):\n" + state)
+    answer = (await call(settings, system, messages)).strip()
     if not answer:
         raise ValueError("empty answer")
     return answer

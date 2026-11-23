@@ -109,6 +109,12 @@ land in the game. Needs `SYKE_STRIP_GAME_URL` (see **Configuration**). Also `/lo
 | `!vibe` | Scores the last 100 messages here: hype, chaos, wholesome, toxic, drama, brainrot. Also `/recap vibe` |
 | `!catchup` | What happened here since you last talked, plus who mentioned you. Also `/recap catchup` |
 | `!lore [phrase]` | The server's inside jokes and catchphrases: phrases several people keep using across weeks that get more reactions than usual, each explained (with AI on) and credited to whoever said it first, with a jump link. `!lore <phrase>` gives one phrase's story: first use, biggest users, peak month, best-received use. Also `/recap lore` |
+| `!mood` | SYKE's own mood and why. It moves with how people treat him and how busy the chat is, fades back to calm, and colours every yap and `!ask` answer |
+| `!bond [@user]` | How SYKE feels about someone, from nemesis to bestie, and what they did ("called you useless · 2 days ago"). Insults lower it, kindness raises it, an apology wins half back, feelings fade over weeks. SYKE's owners (`SYKE_OWNER_IDS`) are his **father and creator**: fixed max bond, never roasted for real, and insulting them makes SYKE hold it against you. Aliases `!feelings`, `!opinion` |
+| `!favourites` | SYKE's favourites, his grudges, and his father. Aliases `!grudges`, `!besties` |
+| `!diary [yesterday \| list \| <date>]` | SYKE's diary: around 23:30 server time he writes about the day (who was nice, who was rude, broken promises, music, his mood). `!diary channel #ch` (Manage Server) posts it every night |
+| `!promises [@user]` / `!kept [n]` | Promises SYKE heard with a deadline ("i'll play tonight", "hopping on in 10"). Miss it and keep chatting in a yap channel and he calls you out; joining voice keeps a play/hop-on promise; `!kept` says you did it. `!persona callouts on\|off` (Manage Server) |
+| `!forgive @user` | SYKE drops a grudge. Only his father or a server manager can ask |
 
 The Strip also has `!weekly` (a growing weekly payout), `!jobs` / `!job` (shifts are quick mini-games; better jobs
 unlock as you work) and `!stocks` (six tickers that move every 15 minutes with the server's chat, laughs, voice,

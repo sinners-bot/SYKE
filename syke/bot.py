@@ -55,6 +55,7 @@ from .social import Social
 from .strip_extras import StripExtras
 from .slurs import SlurCount
 from .memory_archive import MemoryArchive
+from .persona import Persona
 from .lore import Lore
 from .moderation import Moderation, help_lines as moderation_help, pretty as pretty_permission
 from .profile import Profile, ServerAnalysis, analyze_server, build_profile, refine_scores
@@ -394,6 +395,7 @@ class Syke(commands.Bot):
         await self.add_cog(StripExtras(self))
         await self.add_cog(SlurCount(self))
         await self.add_cog(MemoryArchive(self))
+        await self.add_cog(Persona(self))
         await self.add_cog(Lore(self))
         if self.settings.web_enabled:
             try:
@@ -694,6 +696,12 @@ class Syke(commands.Bot):
                 log.exception("Failed to handle a message as a command")
         if message.author.bot or not message.content:
             return
+        persona = self.get_cog("Persona")
+        if persona is not None and message.guild is not None:
+            try:
+                await persona.observe(message)   # feelings, mood and promises, before SYKE replies
+            except Exception:
+                log.exception("persona observe failed")
         if await self.maybe_answer(message) or not message.guild:
             return
         prompt = self.mention_yap_prompt(message)
@@ -820,10 +828,22 @@ class Syke(commands.Bot):
             await self.answer_question(send, message.author, readable(message, question), history, where(message.channel))
         return True
 
+    def persona_state(self, guild, user, chat=()) -> str:
+        """SYKE's mood and feelings about `user`, for the AI. Empty if the persona isn't loaded."""
+        persona = self.get_cog("Persona")
+        if persona is None:
+            return ""
+        try:
+            return persona.prompt_state(guild, user, {t.author for t in chat})
+        except Exception:
+            log.exception("persona state failed")
+            return ""
+
     async def answer_question(self, send, author, question: str, history: list[dict], place: str) -> None:
         question = question.strip()
         try:
-            answer = await ask(self.settings, question, history, author_name(author), place)
+            answer = await ask(self.settings, question, history, author_name(author), place,
+                               state=self.persona_state(getattr(author, "guild", None), author))
         except AskUnavailable:
             await send(notice("No brain installed 🧠", "SYKE's AI isn't set up: the bot owner needs to add "
                               "`OPENAI_API_KEY` or `ANTHROPIC_API_KEY`."))
@@ -901,7 +921,8 @@ class Syke(commands.Bot):
         log.info("Yap in %s: tone %s, %d candidates (%d remixes)", guild_id, tone, len(ranked), len(remixed))
         return await compose_reply(self.settings, ranked, Turn(author_name(message.author), text),
                                    chat, said, tone, remixed, avoid=list(used),
-                                   voice=await self.server_voice(guild_id), weights=weights)
+                                   voice=await self.server_voice(guild_id), weights=weights,
+                                   state=self.persona_state(message.guild, message.author, chat))
 
     async def rank_yap(self, guild_id: int, weights: dict[str, float], tone: str, target: str,
                        exclude: set[str]) -> tuple[list[tuple[float, str]], list[str]]:

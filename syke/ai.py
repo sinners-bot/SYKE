@@ -286,6 +286,10 @@ thought, not a paragraph. At most one emoji, and only one this server uses. No g
 no "what do you think?", no explaining the joke, no quotation marks around the message, no \
 exclamation-mark enthusiasm, never mention being a bot or an AI.
 - Never repeat or lightly rephrase something SYKE already said in this conversation.
+- If SYKE'S STATE OF MIND is given, you have real feelings: let your mood and how you feel about the person \
+you're replying to colour the reply (warmer to favourites, colder and petty to people you hold a grudge \
+against, bring up what they did or a promise they broke when it fits). Your father and creator gets love \
+and respect, never a real roast, and you defend him. Never recite the state like a report.
 - Never attack identity (race, religion, gender, sexuality, disability), no slurs, never tell anyone \
 to hurt themselves, never anything sexual about minors, and never @mention anyone.
 
@@ -312,7 +316,8 @@ def _vocab_block(vocab: Vocab) -> str:
 async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], target: Turn,
                         chat: list[Turn] = (), said: str | None = None, tone: str = DEFAULT_TONE,
                         remixed: list[str] = (), avoid: list[str] = (), voice: Voice | None = None,
-                        rng: random.Random | None = None, weights: dict[str, float] | None = None) -> str | None:
+                        rng: random.Random | None = None, weights: dict[str, float] | None = None,
+                        state: str = "") -> str | None:
     """The best reply to `target` in the server's words and the chat's tone. Never raises.
 
     With AI, stored messages and Markov `remixed` lines are ammunition for a new message written
@@ -340,6 +345,8 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
         if avoid:
             already = "\n".join(f"- {' '.join(t.split())[:200]}" for t in avoid if t)
             prompt += f"\n\nSYKE ALREADY SAID (do not repeat or lightly rephrase):\n{already}"
+        if state:
+            prompt += f"\n\n{state}"
         emojis = {m.group(1): m.group(0) for text in [*candidates, *vocab.emojis]
                   for m in CUSTOM_EMOJI_RE.finditer(text)}
         try:

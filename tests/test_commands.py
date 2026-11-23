@@ -394,7 +394,7 @@ def test_ask_by_mention_dm_and_follow_up(cog, monkeypatch):
     bot._connection.user = types.SimpleNamespace(id=999, mention="<@999>", name="SYKE")
     calls = []
 
-    async def fake_ask(settings, question, history, asker, place):
+    async def fake_ask(settings, question, history, asker, place, state=""):
         calls.append((question, list(history), place))
         return f"answer {len(calls)}"
 

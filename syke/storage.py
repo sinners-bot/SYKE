@@ -211,6 +211,49 @@ CREATE TABLE IF NOT EXISTS econ_shops (
     collected_at REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (guild_id, shop)
 );
+CREATE TABLE IF NOT EXISTS persona_bonds (
+    guild_id   INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL,
+    score      REAL NOT NULL DEFAULT 0,
+    updated    REAL NOT NULL DEFAULT 0,
+    insults    INTEGER NOT NULL DEFAULT 0,
+    kindness   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS persona_events (
+    guild_id   INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL,
+    kind       TEXT NOT NULL,
+    weight     REAL NOT NULL DEFAULT 1,
+    note       TEXT NOT NULL DEFAULT '',
+    at         REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS persona_events_user ON persona_events (guild_id, user_id, at);
+CREATE INDEX IF NOT EXISTS persona_events_time ON persona_events (guild_id, at);
+CREATE TABLE IF NOT EXISTS persona_mood (
+    guild_id   INTEGER PRIMARY KEY,
+    mood       REAL NOT NULL DEFAULT 0,
+    updated    REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS persona_promises (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id   INTEGER NOT NULL,
+    channel_id INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL,
+    message_id INTEGER NOT NULL DEFAULT 0,
+    text       TEXT NOT NULL,
+    made_at    REAL NOT NULL,
+    due        REAL NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'open'
+);
+CREATE INDEX IF NOT EXISTS persona_promises_user ON persona_promises (guild_id, user_id, status);
+CREATE TABLE IF NOT EXISTS persona_diary (
+    guild_id   INTEGER NOT NULL,
+    day        TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    written    REAL NOT NULL,
+    PRIMARY KEY (guild_id, day)
+);
 """
 
 
