@@ -107,8 +107,64 @@ async def test_yap_text_mode_only(cog, monkeypatch):
     await cog.bot._send_yap(_message(guild, ch), "hello", reply_to=False)
     assert len(ch.sent) == 1                                 # exactly one message
     content, kwargs = ch.sent[0]
-    assert content == "hello <:pepe:111>"                    # only the still-available emoji
+    assert content == "hello"                                # a repeated line goes out exactly as said
     assert "stickers" not in kwargs                          # no sticker alongside
+    msg = _message(guild, ch)
+    await cog.bot._send_yap(msg, "hello", reply_to=True)
+    assert msg.replies[0][0] == "hello <:pepe:111>"          # replies may carry a still-available emoji
+
+
+async def test_random_yap_repeats_a_real_message_word_for_word(cog, monkeypatch):
+    from dataclasses import replace
+    bot = cog.bot
+    bot.settings = replace(bot.settings, ai_provider="openai", openai_api_key="k")
+
+    async def no_ai(*a, **k):
+        raise AssertionError("random yaps must not be written by the AI")
+
+    monkeypatch.setattr("syke.ai._call_openai", no_ai)
+    said = ["pizza from luigis is lowkey elite", "who wants pizza tonight fr", "valorant ranked is pain",
+            "bro the bus was late again", "anyone up for movies later"]
+    bot.storage.add_corpus(42, [(i + 1, 10, 100 + i, text) for i, text in enumerate(said)])
+    guild = types.SimpleNamespace(id=42, emojis=[], stickers=[])
+    msg = _message(guild, _channel())
+    msg.content = "i want pizza so bad"
+    for _ in range(5):
+        line = await bot.contextual_yap(msg)
+        assert line in said and "pizza" in line             # verbatim, and on topic
+
+
+def test_style_samples_and_emoji_vocab():
+    from syke.yap import FILLER_EMOJI, build_voice, vocabulary
+    texts = ["nah fr 😭", "lmaooo 💀💀", "ts pmo icl", "https://tenor.com/view/x-gif-1", "<@5> come vc",
+             "pizza time 🍕", "pizza time 🍕", "who tryna hop on 🔥", "who tryna hop on 🔥 rn"] * 3
+    voice = build_voice(texts)
+    assert "ts pmo icl" in voice.samples
+    assert not any("tenor" in t or "<@" in t for t in voice.samples)        # no links or pings
+    vocab = vocabulary(voice, "funny")
+    assert not FILLER_EMOJI & set(vocab.emojis) and "🍕" in vocab.emojis   # 😭/💀 never offered as the go-to
+
+
+def test_reply_prompt_shows_how_the_server_types(monkeypatch):
+    from dataclasses import replace
+    from syke import ai
+    from syke.config import load_settings
+    from syke.yap import Turn, build_voice
+    settings = replace(load_settings(), ai_provider="openai", openai_api_key="k")
+    voice = build_voice(["ts pmo icl", "who tryna hop on rn", "nah bc why is it raining again"] * 5)
+    seen = {}
+
+    async def fake(s, system, user, temperature=1.0):
+        seen["system"], seen["user"] = system, user
+        return '{"reply": "bro its always raining here 🌧️"}'
+
+    monkeypatch.setattr(ai, "_call_openai", fake)
+    import asyncio
+    out = asyncio.run(ai.compose_reply(settings, [(1.0, "rain again ugh")], Turn("Mo", "why is it raining"),
+                                       said="weather", voice=voice))
+    assert out == "bro its always raining here 🌧️"
+    assert "HOW THEY TYPE" in seen["user"] and "ts pmo icl" in seen["user"]
+    assert "Don't fall back on 😭, 💀 or 😂" in seen["system"]
 
 
 async def test_yap_sticker_only(cog, monkeypatch):

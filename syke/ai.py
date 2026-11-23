@@ -15,7 +15,7 @@ from .profile import Profile
 from .roast import fallback_summary
 from .stats import CUSTOM_EMOJI_RE
 from .traits import HIGHLIGHT_TRAITS, TRAITS
-from .yap import (DEFAULT_TONE, reply_cap, Turn, Vocab, Voice, folded, offline_pick, query_weights, style_hint,
+from .yap import (DEFAULT_TONE, STYLE_SHOWN, reply_cap, Turn, Vocab, Voice, folded, offline_pick, query_weights, style_hint,
                   tidy_reply, vocabulary)
 
 log = logging.getLogger("syke.ai")
@@ -281,10 +281,17 @@ everyone with a paragraph.
   - toxic: savage trash talk, roast them back, petty and disrespectful.
   - funny: a joke, an absurd twist, perfectly timed banter.
   - freaky: suggestive innuendo, down-bad flirting, unhinged thirst; PG-13, never explicit.
-- Type like a person on their phone, following TYPING: short, casual, slang, grammar optional. One \
-thought, not a paragraph. At most one emoji, and only one this server uses. No greetings, no hashtags, \
-no "what do you think?", no explaining the joke, no quotation marks around the message, no \
-exclamation-mark enthusiasm, never mention being a bot or an AI.
+- Sound EXACTLY like the people in this server. HOW THEY TYPE shows real messages from here: copy their \
+style to the letter — their spelling and misspellings, abbreviations, slang, language (and language \
+mixing), capitalisation, punctuation, message length and rhythm. Someone reading the chat should not be \
+able to tell your message from a member's. Copy the style, never the words of those lines. Follow TYPING \
+too. One thought, not a paragraph. No greetings, no hashtags, no "what do you think?", no explaining the \
+joke, no quotation marks around the message, never mention being a bot or an AI. Don't be more polite, \
+more correct or more enthusiastic than they are.
+- Emoji are optional. If you use one (at most one), pick whichever emoji actually fits what your message \
+says — any emoji, or one of the server's custom ones — e.g. 🍕 for food, 🔥 for hype, 😴 bored, 🙄 \
+annoyed, 👀 drama, 🤝 agreeing, 🫡 respect. Don't fall back on 😭, 💀 or 😂 as filler; only use them \
+when the message really is crying, dead or laughing.
 - Never repeat or lightly rephrase something SYKE already said in this conversation.
 - If SYKE'S STATE OF MIND is given, you have real feelings: let your mood and how you feel about the person \
 you're replying to colour the reply (warmer to favourites, colder and petty to people you hold a grudge \
@@ -295,6 +302,19 @@ do something you do it (with attitude). Never recite the state like a report.
 to hurt themselves, never anything sexual about minors, and never @mention anyone.
 
 Reply with JSON only: {"reply": "your message"}"""
+
+
+def _style_block(voice: Voice | None, skip: list[str] = (), rng: random.Random | None = None) -> str:
+    """Real lines from this server, so the reply is typed the way members type."""
+    if voice is None or not voice.samples:
+        return ""
+    taken = {folded(t) for t in skip}
+    lines = [t for t in voice.samples if folded(t) not in taken]
+    lines = (rng or random).sample(lines, min(STYLE_SHOWN, len(lines)))
+    if not lines:
+        return ""
+    return "\n\nHOW THEY TYPE (real messages from this server; copy the style, not the words):\n" + \
+        "\n".join(f"- {readable(t)[:160]}" for t in lines)
 
 
 def _chat_block(chat: list[Turn]) -> str:
@@ -341,7 +361,8 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
                              for i, text in enumerate(candidates))
         vocab = vocabulary(voice, tone, rng, weights or query_weights(target.text, said, chat), candidates)
         prompt = (f"RECENT CHAT:\n{_chat_block(chat)}\n\n{situation}{target.author[:24]}: {target.text[:300]}"
-                  f"\n\nTONE: {tone}\n\nTYPING: {style_hint(voice)}\n\nVOCABULARY:\n{_vocab_block(vocab)}"
+                  f"\n\nTONE: {tone}\n\nTYPING: {style_hint(voice)}{_style_block(voice, candidates, rng)}"
+                  f"\n\nVOCABULARY:\n{_vocab_block(vocab)}"
                   f"\n\nAMMO (steal the take, never copy; best matches first, remixes last):\n{numbered}")
         if avoid:
             already = "\n".join(f"- {' '.join(t.split())[:200]}" for t in avoid if t)

@@ -36,6 +36,10 @@ VOCAB_SLANG = 36
 VOCAB_SLANG_MIN = 18
 VOCAB_TOPIC = 40
 VOCAB_EMOJIS = 10
+STYLE_SAMPLES = 60         # real lines kept per server to show the AI how people type
+STYLE_SHOWN = 16           # of those, shown in one prompt
+# Laugh/cry emoji every chat spams: SYKE may still use them, but they're never offered as "the server's emoji".
+FILLER_EMOJI = {"😭", "💀", "😂", "🤣", "😹", "☠️", "☠", "🥲", "😩"}
 TONES = ("toxic", "funny", "freaky")
 DEFAULT_TONE = "funny"
 TONE_FLOOR = 0.45
@@ -169,6 +173,7 @@ class Voice:
     length: int = 0
     emojis: list[str] = field(default_factory=list)   # custom emojis users have used, most-used first
     gifs: list[str] = field(default_factory=list)      # GIF links users have posted, most-used first
+    samples: list[str] = field(default_factory=list)   # real everyday lines, to copy how people type
 
 
 def emoji_id(tag: str) -> int | None:
@@ -280,7 +285,26 @@ def build_voice(texts: list[str]) -> Voice:
         length=lengths[len(lengths) // 2],
         emojis=emojis,
         gifs=gifs,
+        samples=style_samples(texts),
     )
+
+
+def style_samples(texts: list[str], count: int = STYLE_SAMPLES, rng: random.Random | None = None) -> list[str]:
+    """Ordinary chat lines (no links, pings or GIFs, 2-25 words), spread over the corpus."""
+    rng = rng or random.Random(len(texts))
+    ok = []
+    seen = set()
+    for text in texts:
+        line = " ".join(text.split())
+        n = len(line.split())
+        if not 2 <= n <= 25 or URL.search(line) or PINGS.search(line) or line.startswith((">", "```")):
+            continue
+        key = folded(line)
+        if key in seen:
+            continue
+        seen.add(key)
+        ok.append(line)
+    return rng.sample(ok, min(count, len(ok)))
 
 
 def _is_emoji(token: str) -> bool:
@@ -320,7 +344,8 @@ def vocabulary(voice: Voice | None, tone: str, rng: random.Random | None = None,
     unused = sorted(w for w in tone_words if not counts[w] and w.isalpha())
     slang = used + rng.sample(unused, min(max(VOCAB_SLANG_MIN - len(used), 4), len(unused)))
 
-    emojis = [w for w, n in counts.most_common() if _is_emoji(w) and n >= 2][:VOCAB_EMOJIS]
+    emojis = [w for w, n in counts.most_common()
+              if _is_emoji(w) and n >= 2 and w not in FILLER_EMOJI][:VOCAB_EMOJIS]
     return Vocab(words, slang, emojis, topic_words(counts, weights or {}))
 
 

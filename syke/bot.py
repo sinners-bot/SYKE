@@ -110,6 +110,7 @@ from .yap import (
     emoji_id,
     pick_gif,
     folded,
+    offline_pick,
     query_weights,
     rank,
     remixes,
@@ -1092,8 +1093,8 @@ class Syke(commands.Bot):
                 await deliver(stickers=[sticker])
             elif gif is not None:
                 await deliver(content=gif)
-            else:
-                await deliver(content=self._text_with_emoji(guild, voice, text))
+            else:   # a repeated line goes out exactly as it was said; replies may carry a server emoji
+                await deliver(content=self._text_with_emoji(guild, voice, text) if reply_to else text)
             self.remember_yap(message.channel.id, text)
 
     def is_command_text(self, guild_id: int, text: str) -> bool:
@@ -1127,10 +1128,16 @@ class Syke(commands.Bot):
         return fallback
 
     async def contextual_yap(self, message: discord.Message) -> str | None:
-        """Something in the server's words that fits what's being talked about; random if nothing does."""
-        used = set(self.recent_yaps(message.channel.id)) | {message.content}
-        return await self.build_yap(message) or self.pick_yap(
-            message.guild.id, exclude_id=message.id, exclude=used)
+        """Something a member really said, word for word, picked to fit what's being talked about
+        (random if nothing fits). Jumping in unprompted, SYKE only ever repeats the server."""
+        guild_id = message.guild.id
+        chat = await self.recent_chat(message, YAP_CONTEXT // 2)
+        tone = detect_tone(message.content, chat)
+        weights = query_weights(message.content, None, chat)
+        used = {message.content} | {t.text for t in chat} | set(self.recent_yaps(message.channel.id))
+        pool, labelled = self.yap_pool(guild_id, weights, tone, used)
+        ranked = rank(pool, weights, message.content, tone=tone, labelled=set(labelled))
+        return offline_pick(ranked) or self.pick_yap(guild_id, exclude_id=message.id, exclude=used)
 
     async def maybe_yap(self, message: discord.Message) -> None:
         """In yap channels, now and then answer chat with something a member said in the past."""
