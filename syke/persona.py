@@ -383,6 +383,24 @@ class Persona(commands.Cog, name="Persona"):
                 await self.react(message, judgement)
         await self._promise_check(message, talking_to_me)
 
+    async def observe_dm(self, message: discord.Message, guild, context: list[str] = ()) -> None:
+        """A DM to SYKE counts toward the bond in the person's home server, like talking to him there."""
+        if message.author.bot or not message.content or guild is None:
+            return
+        if message.author.id in self.storage.optouts(guild.id):
+            return
+        self.mood(guild.id).bump_energy(time.time())
+        if self.bot.settings.ai_provider != "none":
+            if self._ai_budget(guild.id):
+                judging = asyncio.ensure_future(self._judge_ai(message, False, list(context), guild))
+                with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError):
+                    await asyncio.wait_for(asyncio.shield(judging), JUDGE_WAIT)
+        else:
+            judgement = core.lexicon_judge(message.content, False)
+            self.apply(guild, message.author, judgement)
+            self._just[(message.channel.id, message.author.id)] = (judgement, time.time())
+            await self.react(message, judgement, guild)
+
     def note_chat(self, guild_id: int, channel_id: int, name: str, text: str, user_id: int = 0) -> None:
         """Remember the latest chat lines (for judging in context and reading the vibe)."""
         self.chat[guild_id].append((time.time(), channel_id, name, " ".join((text or "").split())[:300], user_id))
@@ -448,8 +466,12 @@ class Persona(commands.Cog, name="Persona"):
         calls.append(now)
         return True
 
-    async def _judge_ai(self, message: discord.Message, about_father: bool, context: list[str] = ()) -> None:
-        father = " / ".join(self.father_names(message.guild)) or "the bot owner"
+    async def _judge_ai(self, message: discord.Message, about_father: bool, context: list[str] = (),
+                        guild=None) -> None:
+        """Judge a message aimed at SYKE. `guild` is the server whose feelings it changes (a DM's home server)."""
+        guild = guild or message.guild
+        dm = message.guild is None
+        father = " / ".join(self.father_names(guild)) or "the bot owner"
         before = "\n".join(context) if context else "(no earlier messages)"
         user = (f"CONVERSATION SO FAR:\n{before}\n\nMESSAGE TO JUDGE:\n"
                 f"{self.bot.speaker_name(message.author)}: {message.content[:500]}")
@@ -460,19 +482,20 @@ class Persona(commands.Cog, name="Persona"):
             return
         judgement = judgement_from(data)
         log.info("persona judge in %s: %s -> %s %s/%s conf=%s father=%s order=%s %r",
-                 message.guild.id, message.author.id, data.get("toward"), data.get("intensity"),
+                 guild.id, message.author.id, data.get("toward"), data.get("intensity"),
                  data.get("aimed_at_syke"), data.get("confidence"), data.get("father"), data.get("order"),
                  (judgement.note if judgement else ""))
         if judgement is not None:
-            self.apply(message.guild, message.author, judgement)
+            self.apply(guild, message.author, judgement)
             self._just[(message.channel.id, message.author.id)] = (judgement, time.time())
-            await self.react(message, judgement)
-        if self.is_father(message.author.id):
+            await self.react(message, judgement, guild)
+        if self.is_father(message.author.id) and not dm:   # orders about the server are given in the server
             await self.obey(message, data)
 
-    async def react(self, message: discord.Message, judgement: core.Judgement) -> None:
+    async def react(self, message: discord.Message, judgement: core.Judgement, guild=None) -> None:
         """A quick emoji so people can see SYKE noticed how they treated him."""
-        if not self.storage.get_config(message.guild.id, "persona").get("reactions", True):
+        guild = guild or message.guild
+        if not self.storage.get_config(guild.id, "persona").get("reactions", True):
             return
         emoji = None
         if judgement.toward == "insult":

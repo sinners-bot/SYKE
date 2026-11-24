@@ -403,7 +403,7 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
                         remixed: list[str] = (), avoid: list[str] = (), voice: Voice | None = None,
                         rng: random.Random | None = None, weights: dict[str, float] | None = None,
                         state: str = "", lore: list[str] = (), edge: str = "", memory: str = "",
-                        full: bool = False):
+                        full: bool = False, dm: bool = False):
     """The best reply to `target` in the server's words and the chat's tone. Never raises.
 
     With AI, stored messages and Markov `remixed` lines are ammunition for a new message written
@@ -433,6 +433,8 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
         return None
     if settings.ai_provider != "none":
         situation = (f"SYKE SAID: {said[:300]}\nTHEY REPLIED (TARGET): " if said
+                     else "This is a private DM between you and them; they're someone from your server and "
+                          "everything you feel about them still counts here. TARGET (their latest DM): " if dm
                      else "SYKE is jumping into the chat. TARGET (latest message): ")
         if target.reply_to and not said:
             situation = f"(TARGET was replying to {target.reply_to[:160]})\n{situation}"

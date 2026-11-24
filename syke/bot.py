@@ -166,6 +166,7 @@ YAP_SEARCH = 150
 YAP_RANDOM = 40
 YAP_CONTEXT = 20
 PICK_SHOWN = 30
+DM_COOLDOWN = 2.0           # seconds between DM replies to one person
 TYPO_CHANCE = 0.04          # a reply goes out with a typo, fixed with "*word" a second later
 EDIT_INSTEAD = 0.15         # of two-part replies: edit the first message instead of sending a second
 NVM_CHANCE = 0.006          # very rarely: delete the reply and send "nvm"
@@ -382,6 +383,8 @@ class Syke(commands.Bot):
         self._last_yap: dict[int, float] = {}
         self._last_comeback: dict[tuple[int, int], float] = {}
         self.human_pace = 1.0   # scales the gaps between split messages (tests set 0)
+        self._homes: dict[int, tuple[float, int | None]] = {}   # user -> (checked at, home server for DMs)
+        self._last_dm: dict[int, float] = {}
         self._recent_yaps: dict[int, list[str]] = {}
         self._last_ask: dict[int, float] = {}
         self._asks: dict[int, list[dict]] = {}
@@ -738,6 +741,8 @@ class Syke(commands.Bot):
                 await persona.observe(message)   # feelings, mood and promises, before SYKE replies
             except Exception:
                 log.exception("persona observe failed")
+        if message.guild is None and await self.dm_chat(message):
+            return
         if await self.maybe_answer(message) or not message.guild:
             return
         prompt = self.mention_yap_prompt(message)
@@ -754,6 +759,75 @@ class Syke(commands.Bot):
             await self.answer_yap_reply(message, said)
         else:
             await self.maybe_yap(message)
+
+    # DMs: SYKE talks to you like he does in your server, with the same bond, memory and mood
+
+    def home_guild(self, user):
+        """The server a person's DMs belong to: where SYKE's bond with them is freshest, else where they talk
+        most, else any server they share with SYKE. None if they share none (DMs then get Q&A answers)."""
+        hit = self._homes.get(user.id)
+        if hit and time.monotonic() - hit[0] < 600:
+            guild = self.get_guild(hit[1]) if hit[1] else None
+            if guild is not None or hit[1] is None:
+                return guild
+        guild = None
+        for guild_id in self.storage.home_guilds(user.id):
+            found = self.get_guild(guild_id)
+            if found is not None and (not self.intents.members or found.get_member(user.id) is not None):
+                guild = found
+                break
+        if guild is None:
+            guild = next((g for g in self.guilds if g.get_member(user.id) is not None), None)
+        self._homes[user.id] = (time.monotonic(), guild.id if guild else None)
+        return guild
+
+    async def dm_chat(self, message: discord.Message) -> bool:
+        """Chat in a DM as SYKE, carrying the bond from the person's home server. False: not handled here."""
+        if self.user is None or message.author.bot or not message.content:
+            return False
+        if message.content.strip().startswith(self.settings.default_prefix):
+            return False                                        # a command
+        if await self.ask_thread(message) is not None:
+            return False                                        # a follow-up to a Q&A answer stays Q&A
+        home = self.home_guild(message.author)
+        if home is None:
+            return False
+        now = time.monotonic()
+        if now - self._last_dm.get(message.author.id, -1e9) < DM_COOLDOWN:
+            return True
+        self._last_dm[message.author.id] = now
+        chat = await self.recent_chat(message, YAP_CONTEXT, home.id)
+        persona = self.get_cog("Persona")
+        if persona is not None:
+            context = [f"{t.author}: {t.text}" for t in chat[-8:]]
+            try:
+                await persona.observe_dm(message, home, context)
+            except Exception:
+                log.exception("persona DM observe failed")
+        async with message.channel.typing():
+            turn = await self.dm_turn(message, home, chat)
+        if not turn:
+            return False
+        await self.deliver_turn(message, turn, home)
+        self.remember_turn(home.id, message.author, message.content, turn)
+        return True
+
+    async def dm_turn(self, message: discord.Message, home, chat: list[Turn]) -> dict | None:
+        text = message.content
+        tone = detect_tone(text, chat)
+        weights = query_weights(text, None, chat)
+        used = {text} | {t.text for t in chat} | set(self.recent_yaps(message.channel.id))
+        ranked, remixed = await self.rank_yap(home.id, weights, tone, text, used)
+        log.info("DM from %s (home %s): tone %s, %d candidates", message.author.id, home.id, tone, len(ranked))
+        upset = " ".join([text] + [t.text for t in chat[-4:] if t.author_id == message.author.id])
+        turn = await compose_reply(self.settings, ranked, Turn(self.speaker_name(message.author), self.turn_text(message),
+                                                               "", message.author.id),
+                                   chat, None, tone, remixed, avoid=list(used),
+                                   voice=await self.server_voice(home.id), weights=weights,
+                                   state=self.persona_state(home, message.author, chat),
+                                   lore=self.lore_notes(home.id), edge=self.edge_text(home.id, upset),
+                                   memory=self.memory_text(home.id, message.author, chat), full=True, dm=True)
+        return {"reply": turn} if isinstance(turn, str) else turn
 
     async def replied_yap(self, message: discord.Message) -> str | None:
         """The text of SYKE's yap that `message` replies to, if it is one.
@@ -1064,8 +1138,10 @@ class Syke(commands.Bot):
                       labelled=set(labelled), remixed=set(remixed))
         return ranked, remixed
 
-    async def recent_chat(self, message: discord.Message, limit: int = YAP_CONTEXT) -> list[Turn]:
-        """The last few messages before `message`, oldest first, for context."""
+    async def recent_chat(self, message: discord.Message, limit: int = YAP_CONTEXT,
+                          guild_id: int | None = None) -> list[Turn]:
+        """The last few messages before `message`, oldest first, for context (`guild_id` for DMs)."""
+        guild_id = guild_id or message.guild.id
         history = getattr(message.channel, "history", None)
         if history is None:
             return []
@@ -1073,7 +1149,7 @@ class Syke(commands.Bot):
         try:
             async for m in history(limit=limit, before=message):
                 text = self.turn_text(m)
-                if not text or (m.content and self.is_command_text(message.guild.id, m.content)):
+                if not text or (m.content and self.is_command_text(guild_id, m.content)):
                     continue
                 turns.append(Turn(self.turn_name(m.author), text, self.replied_to(m),
                                   getattr(m.author, "id", 0) or 0))
@@ -1134,10 +1210,10 @@ class Syke(commands.Bot):
             await self.deliver_turn(message, turn)
             self.remember_turn(message.guild.id, message.author, prompt, turn)
 
-    async def deliver_turn(self, message: discord.Message, turn: dict) -> None:
+    async def deliver_turn(self, message: discord.Message, turn: dict, guild=None) -> None:
         """Answer like a person texting: maybe a reaction, the reply (now and then with a typo and a *fix),
-        maybe a second quick message; very rarely an edit or a 'nvm'."""
-        guild = message.guild
+        maybe a second quick message; very rarely an edit or a 'nvm'. `guild`: a DM's home server."""
+        guild = guild or message.guild
         react = self.usable_reaction(guild, turn.get("react"))
         reply, second = (turn.get("reply") or "").strip(), (turn.get("reply2") or "").strip()
         if react and (not reply or random.random() < REACT_WITH_REPLY):

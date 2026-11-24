@@ -383,3 +383,90 @@ async def test_syke_refuses_orders_based_on_who_someone_is(world, monkeypatch):
     await persona.observe(order)
     assert persona.bond(GID, ZARA) == 0 and order.reactions == ["🙅"]
     assert "you refuse" in persona.prompt_state(guild, guild.members[DAD])
+
+
+# DMs carry the bond from the person's server
+
+class DMChannel:
+    id = 77
+
+    def __init__(self, history=()):
+        self.sent, self._history = [], list(history)
+
+    def history(self, limit=None, before=None):
+        async def gen():
+            for m in reversed(self._history):
+                yield m
+        return gen()
+
+    def typing(self):
+        return Ctx.typing(None)
+
+    async def send(self, content=None, **kw):
+        self.sent.append(content)
+        return NS(content=content)
+
+
+class DM(Msg):
+    def __init__(self, author, text, channel=None):
+        super().__init__(None, author, text)
+        self.channel = channel or DMChannel()
+        self.attachments, self.stickers, self.reactions = [], [], []
+
+    async def reply(self, text=None, **kw):
+        self.replies.append(text)
+        return NS(content=text, edit=None, delete=None)
+
+    async def add_reaction(self, emoji):
+        self.reactions.append(emoji)
+
+
+def _dm_world(world, monkeypatch):
+    bot, persona, guild = world
+    guild.emojis, guild.stickers = [], []
+    monkeypatch.setattr(bot, "get_cog", lambda name: persona if name == "Persona" else None)
+    monkeypatch.setattr(bot, "get_guild", lambda gid: guild if gid == GID else None)
+    monkeypatch.setattr(type(bot), "guilds", property(lambda self: [guild]))
+    return bot, persona, guild
+
+
+def test_dm_home_is_where_the_bond_lives(world, monkeypatch):
+    bot, persona, guild = _dm_world(world, monkeypatch)
+    mo = guild.members[MO]
+    assert bot.home_guild(mo) is guild                      # shares the server: that's home
+    bot._homes.clear()
+    stranger = person(4242, "Nobody")
+    assert bot.home_guild(stranger) is None                  # shares nothing: DMs stay Q&A
+    persona.change_bond(GID, MO, 5, "kind", "said hi")
+    assert bot.storage.home_guilds(MO) == [GID]
+
+
+async def test_dm_rudeness_hits_the_server_bond_and_replies_in_character(world, monkeypatch):
+    bot, persona, guild = _dm_world(world, monkeypatch)
+    mo = guild.members[MO]
+    persona.change_bond(GID, MO, 30, "kind", "carried the server in ranked")
+    bot.storage.add_corpus(GID, [(1, 10, MO, "you useless bot fr"), (2, 10, ZARA, "nah syke is a menace honestly")])
+    bot.storage.add_memory(GID, MO, "fact", "mains Jett")
+    seen = {}
+
+    async def compose(settings, ranked, target, chat, said, tone, remixed, **kw):
+        seen.update(kw, target=target)
+        return {"reply": "says the jett main", "reply2": "", "react": "", "remember": None, "bit": ""}
+
+    monkeypatch.setattr("syke.bot.compose_reply", compose)
+    before = persona.bond(GID, MO)
+    dm = DM(mo, "syke you are useless and dumb")
+    assert await bot.dm_chat(dm)
+    assert persona.bond(GID, MO) < before                    # the DM counted in the server
+    assert dm.replies == ["says the jett main"]               # plain text, not a Q&A embed
+    assert seen["dm"] is True and "mains Jett" in seen["memory"]
+    assert "Mo" in seen["state"] and seen["state"]           # how SYKE feels about Mo comes along
+    assert "SYKE" not in seen["target"].author and seen["target"].text == "syke you are useless and dumb"
+    talks = bot.storage.memories(GID, MO, "talk")
+    assert talks and "syke you are useless and dumb" in talks[0][0]
+
+
+async def test_dm_commands_and_strangers_are_left_alone(world, monkeypatch):
+    bot, persona, guild = _dm_world(world, monkeypatch)
+    assert not await bot.dm_chat(DM(guild.members[MO], "$help"))
+    assert not await bot.dm_chat(DM(person(4242, "Nobody"), "hey who are you"))

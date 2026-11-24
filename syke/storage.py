@@ -1564,3 +1564,16 @@ class Storage:
 
     def release(self, guild_id: int, user_id: int) -> bool:
         return bool(self._write("DELETE FROM isolations WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)))
+
+    def home_guilds(self, user_id: int) -> list[int]:
+        """Servers where SYKE knows this person, best first: most recent bond, then most messages."""
+        order: list[int] = []
+        for (guild_id,) in self._read("SELECT guild_id FROM persona_bonds WHERE user_id = ? "
+                                      "ORDER BY updated DESC", (user_id,)):
+            if guild_id not in order:
+                order.append(guild_id)
+        for (guild_id,) in self._read("SELECT guild_id FROM corpus WHERE author_id = ? GROUP BY guild_id "
+                                      "ORDER BY COUNT(*) DESC", (user_id,)):
+            if guild_id not in order:
+                order.append(guild_id)
+        return order
