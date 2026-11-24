@@ -70,9 +70,12 @@ OWNER_CUT = 0.10               # store owners get 10% of what's sold in their st
 BAIL_CUT = 0.25                # the Bail Bonds owner keeps 25% of bail paid
 
 
+INCOME_MULT = 2.5   # 2026-11: storefronts were a poor investment (a Video 2000 took 5 days to pay back); now about two
+
+
 def shop_income(store: Store, level: int) -> int:
     """Cash per hour at a given level (+50% per level above 1)."""
-    return int(store.income * (1 + 0.5 * (max(1, level) - 1)))
+    return int(store.income * INCOME_MULT * (1 + 0.5 * (max(1, level) - 1)))
 
 
 def upgrade_cost(store: Store, level: int) -> int:

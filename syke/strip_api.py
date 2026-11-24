@@ -47,6 +47,11 @@ WORK_RANK = (1.0, 1.5)     # career rank in the game (Trainee x1.0 up to Manager
 # separate from $work (which keeps its own). Buffs, the career rank and the shift rating apply on top, as before.
 SHIFT_LOW, SHIFT_HIGH = 320, 620
 SHIFT_COOLDOWN = 20 * 60
+# Activity pay: the game pays a little for being out and about and doing things (cooking, racing, events, parties...).
+# The game decides what was earned; SYKE caps it so no amount of activity (or scripting) prints money.
+ACTIVITY_MAX = 400
+ACTIVITY_PER_HOUR = 1_500
+ACTIVITY_PER_DAY = 9_000
 SPEND_MAX = 100_000        # biggest single cosmetic purchase (motel furniture, makeovers...)
 GRANT_MAX = 100            # biggest single in-game find (a wallet in a dumpster)
 GRANT_PER_HOUR = 300       # total in-game finds per player per hour
@@ -70,6 +75,8 @@ class StripService:
         self._grants: dict[tuple[int, int], list[tuple[float, int]]] = {}
         with storage._lock:
             storage._conn.execute("CREATE TABLE IF NOT EXISTS strip_shift (guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, at REAL NOT NULL, PRIMARY KEY (guild_id, user_id))")
+            storage._conn.execute("CREATE TABLE IF NOT EXISTS strip_activity (guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, ts REAL NOT NULL, amount INTEGER NOT NULL)")
+            storage._conn.execute("CREATE INDEX IF NOT EXISTS strip_activity_user ON strip_activity (guild_id, user_id, ts)")
             storage._conn.commit()
 
     # -- shared gates (mirror Economy._guard / _free) --
@@ -280,6 +287,26 @@ class StripService:
             self.db.econ_adjust(gid, uid, cash=amount, bank=-amount)
         return {"action": action, "amount": amount}
 
+    def activity(self, gid: int, uid: int, amount: int, reason: str = "") -> dict:
+        """Pay for activity in the game, within an hourly and a daily cap. Pays what fits; 0 when the caps are full."""
+        self.guard(gid, uid)
+        try:
+            amount = int(amount)
+        except (TypeError, ValueError):
+            raise StripError("bad_amount", "That's not an amount.")
+        if amount <= 0 or amount > ACTIVITY_MAX:
+            raise StripError("bad_amount", "That's not an amount.")
+        now = self.now()
+        self.db._write("DELETE FROM strip_activity WHERE guild_id=? AND user_id=? AND ts < ?", (gid, uid, now - 86400))
+        hour = self.db._read("SELECT COALESCE(SUM(amount),0) FROM strip_activity WHERE guild_id=? AND user_id=? AND ts >= ?", (gid, uid, now - 3600))[0][0]
+        day = self.db._read("SELECT COALESCE(SUM(amount),0) FROM strip_activity WHERE guild_id=? AND user_id=?", (gid, uid))[0][0]
+        pay = max(0, min(amount, ACTIVITY_PER_HOUR - hour, ACTIVITY_PER_DAY - day))
+        if pay:
+            self.db.econ_adjust(gid, uid, cash=pay)
+            self.db._write("INSERT INTO strip_activity VALUES (?, ?, ?, ?)", (gid, uid, now, pay))
+        return {"amount": pay, "asked": amount, "reason": str(reason)[:60], "hour_left": max(0, ACTIVITY_PER_HOUR - hour - pay),
+                "day_left": max(0, ACTIVITY_PER_DAY - day - pay)}
+
     def grant(self, gid: int, uid: int, amount: int, reason: str = "") -> dict:
         self.guard(gid, uid)
         amount = int(amount)
@@ -365,6 +392,7 @@ class StripAPI:
             "pawn": lambda g, u, b: s.pawn(g, u, b.get("item"), b.get("qty", 1)),
             "spend": lambda g, u, b: s.spend(g, u, b.get("amount", 0), b.get("reason", "")),
             "grant": lambda g, u, b: s.grant(g, u, b.get("amount", 0), b.get("reason", "")),
+            "activity": lambda g, u, b: s.activity(g, u, b.get("amount", 0), b.get("reason", "")),
             "goal_reward": lambda g, u, b: s.goal_reward(g, u),
             "bank": lambda g, u, b: s.bank(g, u, b.get("action"), b.get("amount", 0)),
             # crime (the game decides what happened; these decide what it pays and costs)

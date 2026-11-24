@@ -57,7 +57,7 @@ def last(ctx):
 # ── pure rules ───────────────────────────────────────────────────────────────
 def test_storefront_economics():
     video = sw.STORE_BY_KEY["video"]
-    assert sw.shop_income(video, 1) == 60 and sw.shop_income(video, 3) == 120
+    assert sw.shop_income(video, 1) == 150 and sw.shop_income(video, 3) == 300
     assert sw.upgrade_cost(video, 1) == 4_800
     row = {"register": 50, "level": 1, "collected_at": 0.0}
     assert sw.pending(row, video, 10 * sw.HOUR) == 50 + 600

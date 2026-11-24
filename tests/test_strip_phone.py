@@ -34,11 +34,11 @@ def test_business_buy_upgrade_collect_sell(ph):
         P.biz_buy(G, V, "video")
     clock.t += 3600
     mine = next(s for s in P.biz_list(G, U)["stores"] if s["key"] == "video")
-    assert mine["mine"] and mine["register"] == 60 and mine["upgrade"] == 4800
+    assert mine["mine"] and mine["register"] == 150 and mine["upgrade"] == 4800
     up = P.biz_upgrade(G, U, "video")
     assert up["level"] == 2
     got = P.biz_collect(G, U)
-    assert got["total"] == 60
+    assert got["total"] == 150
     with pytest.raises(PhoneError):
         P.biz_sell(G, V, "video")
     sold = P.biz_sell(G, U, "video")

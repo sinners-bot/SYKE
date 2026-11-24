@@ -333,3 +333,22 @@ def test_game_shift_has_its_own_pay_and_timer(env):
     assert st["shift_ready_at"] > 0
     clock.t += sa.SHIFT_COOLDOWN + 1
     assert svc.work(G, U, 1.0, 1.0, shift=True)["amount"] > 0
+
+
+def test_activity_pay_is_capped_per_hour_and_day(env):
+    from syke import strip_api as sa
+    db, svc, clock = env
+    assert svc.activity(G, U, 300, "cooked")["amount"] == 300
+    start = db.econ_wallet(G, U)["cash"] - 300
+    with pytest.raises(StripError):
+        svc.activity(G, U, sa.ACTIVITY_MAX + 1)
+    got = sum(svc.activity(G, U, 400)["amount"] for _ in range(10))
+    assert got == sa.ACTIVITY_PER_HOUR - 300                # the hour fills up, then it pays nothing
+    assert db.econ_wallet(G, U)["cash"] == start + sa.ACTIVITY_PER_HOUR
+    total = sa.ACTIVITY_PER_HOUR
+    for _ in range(8):                                         # hour after hour, inside one day, until the day is full
+        clock.t += 3601
+        total += sum(svc.activity(G, U, 400)["amount"] for _ in range(5))
+    assert total == sa.ACTIVITY_PER_DAY                         # (a rolling 24 hours)
+    clock.t += 86401
+    assert svc.activity(G, U, 100)["amount"] == 100           # a new day
