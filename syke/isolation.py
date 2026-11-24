@@ -1,7 +1,7 @@
-"""Isolation: a role that hides every channel and every member from whoever has it.
+"""Contamination: a role that hides every channel and every member from whoever has it.
 
-`isolate @member [duration] [reason]` takes away their other roles (saved, given back on release), gives them
-the `SYKE · isolated` role, and that role is denied View Channel everywhere. The only thing they still see is a
+`contaminate @member [duration] [reason]` takes away their other roles (saved, given back on release), gives them
+the `SYKE · contaminated` role, and that role is denied View Channel everywhere. The only thing they still see is a
 holding channel where they can talk to the mods, and its member list shows just the mods.
 
 Giving the role by hand in Discord works the same way: SYKE notices, saves their roles and takes them off.
@@ -24,8 +24,10 @@ from .moderation import (DANGER, OK, action_embed, blocker, bot_lacks, embed, mo
 log = logging.getLogger("syke.isolation")
 
 CONFIG_KEY = "isolation"
-ROLE_NAME = "SYKE · isolated"
-CHANNEL_NAME = "isolation"
+ROLE_NAME = "SYKE · contaminated"
+CHANNEL_NAME = "contamination"
+# Names used before the rename: renamed to the new ones when found.
+OLD_NAMES = {"SYKE · isolated", "isolation"}
 # What the role is denied everywhere except the holding channel.
 HIDDEN = {"view_channel": False, "connect": False}
 # Mods: anyone whose roles can do one of these sees the holding channel.
@@ -87,10 +89,17 @@ class Isolation(commands.Cog, name="Isolation"):
         role = self.role(guild)
         if role is None:
             role = await guild.create_role(name=ROLE_NAME, permissions=discord.Permissions.none(), mentionable=False,
-                                           colour=discord.Colour.dark_grey(), reason="SYKE isolation role")
+                                           colour=discord.Colour.dark_grey(), reason="SYKE contamination role")
             self.storage.update_config(guild.id, CONFIG_KEY, role=role.id)
             created = True
+        if role.name in OLD_NAMES:
+            with contextlib.suppress(discord.HTTPException):
+                await role.edit(name=ROLE_NAME, reason="SYKE: isolation is now contamination")
         channel = self.holding(guild)
+        if channel is not None and channel.name in OLD_NAMES:
+            with contextlib.suppress(discord.HTTPException):
+                await channel.edit(name=CHANNEL_NAME, topic="Contaminated members can only see this channel. "
+                                   "Talk to the mods here.", reason="SYKE: isolation is now contamination")
         if channel is None:
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -103,8 +112,8 @@ class Isolation(commands.Cog, name="Isolation"):
                 overwrites[mod] = discord.PermissionOverwrite(view_channel=True, send_messages=True,
                                                               read_message_history=True)
             channel = await guild.create_text_channel(
-                CHANNEL_NAME, overwrites=overwrites, position=0, reason="SYKE isolation holding channel",
-                topic="Isolated members can only see this channel. Talk to the mods here.")
+                CHANNEL_NAME, overwrites=overwrites, position=0, reason="SYKE contamination holding channel",
+                topic="Contaminated members can only see this channel. Talk to the mods here.")
             self.storage.update_config(guild.id, CONFIG_KEY, channel=channel.id)
             created = True
         return role, channel, created
@@ -121,7 +130,7 @@ class Isolation(commands.Cog, name="Isolation"):
                 continue
             try:
                 await channel.set_permissions(role, overwrite=self.hidden_overwrite(channel, role),
-                                              reason="SYKE isolation")
+                                              reason="SYKE contamination")
                 changed += 1
             except discord.HTTPException:
                 refused += 1
@@ -169,7 +178,7 @@ class Isolation(commands.Cog, name="Isolation"):
         key = (guild.id, member.id)
         self._busy.add(key)
         try:
-            await member.edit(roles=[*stuck, role], reason=f"SYKE isolate by {by or 'role given'}: {reason or 'no reason'}")
+            await member.edit(roles=[*stuck, role], reason=f"SYKE contaminate by {by or 'role given'}: {reason or 'no reason'}")
         except discord.HTTPException:
             self.storage.release(guild.id, member.id)   # nothing changed on Discord: don't keep a record
             raise
@@ -177,7 +186,7 @@ class Isolation(commands.Cog, name="Isolation"):
             self._busy.discard(key)
         if getattr(member, "voice", None) and member.voice.channel is not None:
             with contextlib.suppress(discord.HTTPException):
-                await member.move_to(None, reason="SYKE isolation")
+                await member.move_to(None, reason="SYKE contamination")
         return taken, stuck
 
     async def release_member(self, member, *, reason: str = "", by=None) -> list:
@@ -204,7 +213,8 @@ class Isolation(commands.Cog, name="Isolation"):
 
     # Commands
 
-    @commands.command(name="isolate", aliases=["quarantine", "isolation_add"], usage="@member [duration] [reason]",
+    @commands.command(name="contaminate", aliases=["contimate", "isolate", "quarantine"],
+                      usage="@member [duration] [reason]",
                       help="Hide every channel and member from someone (their roles come back on release)")
     @commands.guild_only()
     @moderator("manage_roles")
@@ -215,7 +225,7 @@ class Isolation(commands.Cog, name="Isolation"):
             return
         why_not = blocker(guild, ctx.author, member, owner_ids=self.bot.settings.owner_ids)
         if why_not:
-            await ctx.reply(embed=problem("Can't isolate them", why_not))
+            await ctx.reply(embed=problem("Can't contaminate them", why_not))
             return
         missing = bot_lacks(guild, "manage_roles", "manage_channels")
         if missing:
@@ -236,10 +246,10 @@ class Isolation(commands.Cog, name="Isolation"):
                                               f"and its role must be above `{ROLE_NAME}` and their roles."))
                 return
             length = until(seconds)
-            case = self.storage.add_case(guild.id, member.id, ctx.author.id, "isolate", reason, seconds)
+            case = self.storage.add_case(guild.id, member.id, ctx.author.id, "contaminate", reason, seconds)
             mod = self.bot.get_cog("Moderation")
             if mod is not None:
-                await mod.tell(member, guild, "isolated: you can't see any channels or members for now",
+                await mod.tell(member, guild, "contaminated: you can't see any channels or members for now",
                                reason=reason, duration=length)
             await self.greet(member, reason, length)
         notes = [f"Took **{len(taken)}** role{'s' * (len(taken) != 1)}; they come back on release."]
@@ -250,38 +260,38 @@ class Isolation(commands.Cog, name="Isolation"):
         holding = self.holding(guild)
         if holding is not None:
             notes.append(f"They can only see {holding.mention}.")
-        result = action_embed(f"🚷 {member.display_name} is isolated", member, ctx.author, reason=reason,
+        result = action_embed(f"☣️ {member.display_name} is contaminated", member, ctx.author, reason=reason,
                               duration=length, case=case, colour=DANGER, extra="\n".join(notes))
         await ctx.reply(embed=result)
         if mod is not None:
             await mod.log(guild, result.copy())
 
-    @commands.command(name="unisolate", aliases=["unquarantine", "release"], usage="@member [reason]",
-                      help="End someone's isolation and give their roles back")
+    @commands.command(name="decontaminate", aliases=["uncontaminate", "unisolate", "unquarantine", "release"],
+                      usage="@member [reason]", help="End someone's contamination and give their roles back")
     @commands.guild_only()
     @moderator("manage_roles")
     async def unisolate(self, ctx: commands.Context, member: discord.Member, *, reason: str = "") -> None:
         guild = ctx.guild
         role = self.role(guild)
         if not self.storage.isolation(guild.id, member.id) and (role is None or role not in member.roles):
-            await ctx.reply(embed=problem("Not isolated", f"{member.mention} isn't isolated."))
+            await ctx.reply(embed=problem("Not contaminated", f"{member.mention} isn't contaminated."))
             return
         try:
             back = await self.release_member(member, reason=reason, by=ctx.author)
         except discord.Forbidden:
             await ctx.reply(embed=problem("Discord said no", "SYKE's role must be above their roles to give them back."))
             return
-        case = self.storage.add_case(guild.id, member.id, ctx.author.id, "unisolate", reason)
-        result = action_embed(f"✅ {member.display_name} is back", member, ctx.author, reason=reason, case=case,
+        case = self.storage.add_case(guild.id, member.id, ctx.author.id, "decontaminate", reason)
+        result = action_embed(f"🧼 {member.display_name} is decontaminated", member, ctx.author, reason=reason, case=case,
                               colour=OK, extra=f"Gave back **{len(back)}** role{'s' * (len(back) != 1)}.")
         await ctx.reply(embed=result)
         mod = self.bot.get_cog("Moderation")
         if mod is not None:
             await mod.log(guild, result.copy())
-            await mod.tell(member, guild, "released from isolation")
+            await mod.tell(member, guild, "decontaminated: you can see the server again")
 
-    @commands.command(name="isolated", aliases=["isolations", "quarantined"], usage="[sync]",
-                      help="Who's isolated; 'isolated sync' re-hides every channel from the role")
+    @commands.command(name="contaminated", aliases=["contaminations", "isolated", "quarantined"], usage="[sync]",
+                      help="Who's contaminated; 'contaminated sync' re-hides every channel from the role")
     @commands.guild_only()
     @moderator("manage_roles")
     async def isolated(self, ctx: commands.Context, action: str = "") -> None:
@@ -300,7 +310,7 @@ class Isolation(commands.Cog, name="Isolation"):
                     f"Updated {changed} channel{'s' * (changed != 1)}.")
             if refused:
                 body += f"\n⚠️ {refused} channel(s) refused: give SYKE **Manage Channels** there (or Administrator)."
-            await ctx.reply(embed=embed("🚷 Isolation is set up", body))
+            await ctx.reply(embed=embed("☣️ Contamination is set up", body))
             return
         rows = self.storage.isolations(guild.id)
         role, holding = self.role(guild), self.holding(guild)
@@ -308,18 +318,18 @@ class Isolation(commands.Cog, name="Isolation"):
         for _, user_id, expires_at in rows[:20]:
             ends = f"<t:{int(expires_at)}:R>" if expires_at else "until released"
             lines.append(f"• <@{user_id}> · {ends}")
-        body = "\n".join(lines) or "Nobody is isolated."
+        body = "\n".join(lines) or "Nobody is contaminated."
         setup = (f"\n\nRole: {role.mention if role else 'not made yet'} · Holding channel: "
                  f"{holding.mention if holding else 'not made yet'}\n"
-                 f"`{p}isolate @member [2h] [reason]` · `{p}unisolate @member` · `{p}isolated sync` "
+                 f"`{p}contaminate @member [2h] [reason]` · `{p}decontaminate @member` · `{p}contaminated sync` "
                  "re-hides every channel. Giving the role by hand works too.")
-        await ctx.reply(embed=embed(f"🚷 Isolated ({len(rows)})", body + setup))
+        await ctx.reply(embed=embed(f"☣️ Contaminated ({len(rows)})", body + setup))
 
     async def greet(self, member, reason: str, length: str | None) -> None:
         holding = self.holding(member.guild)
         if holding is None:
             return
-        text = (f"{member.mention} you've been isolated, so this is the only channel you can see. "
+        text = (f"{member.mention} you've been contaminated, so this is the only channel you can see. "
                 f"You can talk to the mods here.")
         if reason:
             text += f"\n**Reason:** {reason}"
@@ -360,7 +370,7 @@ class Isolation(commands.Cog, name="Isolation"):
         self._busy.add((member.guild.id, member.id))
         try:
             with contextlib.suppress(discord.HTTPException):
-                await member.add_roles(role, reason="SYKE: still isolated")
+                await member.add_roles(role, reason="SYKE: still contaminated")
         finally:
             self._busy.discard((member.guild.id, member.id))
 
@@ -372,7 +382,7 @@ class Isolation(commands.Cog, name="Isolation"):
             return
         with contextlib.suppress(discord.HTTPException):
             await channel.set_permissions(role, overwrite=self.hidden_overwrite(channel, role),
-                                          reason="SYKE isolation: new channel")
+                                          reason="SYKE contamination: new channel")
 
     @tasks.loop(seconds=30)
     async def expire(self) -> None:
@@ -394,7 +404,7 @@ class Isolation(commands.Cog, name="Isolation"):
                 continue
             mod = self.bot.get_cog("Moderation")
             if mod is not None:
-                await mod.log(guild, embed("✅ Isolation ended", f"{member.mention}'s isolation ran out; "
+                await mod.log(guild, embed("🧼 Contamination ended", f"{member.mention}'s contamination ran out; "
                                                                   "their roles are back.", OK))
 
     @expire.before_loop

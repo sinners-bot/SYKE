@@ -130,13 +130,14 @@ CATALOG: list[Category] = [
         "Hands-on moderation tools. Every action is logged as a numbered case.",
         ["timeout", "untimeout", "warn", "warnings", "history", "delwarn", "clearwarns",
          "purge", "slowmode", "lock", "unlock", "kick", "ban", "unban", "tempban", "softban",
-         "restrict", "unrestrict", "restrictions", "isolate", "unisolate", "isolated", "modlog"],
+         "restrict", "unrestrict", "restrictions", "contaminate", "decontaminate", "contaminated", "modlog"],
         {
-            "isolate": "Hide every channel and every member from someone: `isolate @member [2h] [reason]`. Their "
-                       "roles are saved and taken off, they get the `SYKE · isolated` role, and they can only "
-                       "see a holding channel with the mods. Giving that role by hand works too.",
-            "unisolate": "End an isolation and give their roles back.",
-            "isolated": "Who's isolated and until when. `isolated sync` re-hides every channel from the role.",
+            "contaminate": "Hide every channel and every member from someone: `contaminate @member [2h] [reason]`. "
+                           "Their roles are saved and taken off, they get the `SYKE · contaminated` role, and they "
+                           "can only see #contamination with the mods. Giving that role by hand works too.",
+            "decontaminate": "End a contamination and give their roles back.",
+            "contaminated": "Who's contaminated and until when. `contaminated sync` re-hides every channel from "
+                            "the role.",
             "timeout": "Temporarily mute a member for a duration like `10m`, `2h`, `1d` (Discord's max is 28 days).",
             "tempban": "Ban a member now and automatically unban them after the given duration.",
             "softban": "Ban then immediately unban — a quick way to kick someone *and* wipe their recent messages.",
@@ -501,7 +502,7 @@ LAYOUT: dict[str, tuple[str, str, list[tuple[str, list[str]]]]] = {
         ("Timeouts & bans", ["timeout", "untimeout", "kick", "ban", "unban", "tempban", "softban"]),
         ("Channels", ["purge", "slowmode", "lock", "unlock"]),
         ("Restrictions", ["restrict", "unrestrict", "restrictions", "modlog"]),
-        ("Isolation", ["isolate", "unisolate", "isolated"])]),
+        ("Contamination", ["contaminate", "decontaminate", "contaminated"])]),
     "automod": ("Automod", "Rules enforced on every message. Mods are never caught.", []),
     "security": ("Security", "Anti-nuke and anti-raid. Off until you turn it on.", []),
     "setup": ("Setup", "Verification, welcomes and what SYKE reads.", [
@@ -534,8 +535,8 @@ BRIEF = {
     "softban": "Ban + unban to wipe messages",
     "purge": "Bulk-delete messages", "slowmode": "Set slowmode", "lock": "Lock a channel",
     "unlock": "Unlock a channel",
-    "restrict": "Block images, links, reactions…", "isolate": "Hide all channels and members",
-    "unisolate": "End an isolation", "isolated": "Who's isolated", "unrestrict": "Lift restrictions",
+    "restrict": "Block images, links, reactions…", "contaminate": "Hide all channels and members",
+    "decontaminate": "End a contamination", "contaminated": "Who's contaminated", "unrestrict": "Lift restrictions",
     "restrictions": "Who's restricted", "modlog": "Set the mod-log channel",
     "automod": "Overview and settings", "filter": "Word and slur blacklist", "links": "Invite and link control",
     "antispam": "Floods, mentions and caps",

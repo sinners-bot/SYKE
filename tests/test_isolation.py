@@ -141,7 +141,7 @@ async def test_isolation_hides_everything_and_gives_roles_back(iso):
     taken, stuck = await iso.isolate_member(member, seconds=3600, reason="spam", by=None)
     role = iso.role(guild)
     holding = iso.holding(guild)
-    assert role.name == ROLE_NAME and holding.name == "isolation"
+    assert role.name == ROLE_NAME == "SYKE · contaminated" and holding.name == "contamination"
     assert taken == [guild.vip] and stuck == [guild.booster]               # Discord-managed roles can't be taken
     assert set(member.roles) == {guild.default_role, guild.booster, role}
     # Every channel hidden; the synced channel inherits its category's rule; holding channel visible to them + mods
@@ -167,7 +167,7 @@ async def test_role_given_or_removed_by_hand(iso):
     await iso.on_member_update(before, member)
     assert set(member.roles) == {guild.default_role, role} and iso.storage.isolation(GID, 8)["roles"] == [guild.vip.id]
     assert guild.secret.overwrites_for(role).view_channel is False         # and the channels got hidden
-    assert "isolated" in iso.holding(guild).sent[-1]
+    assert "contaminated" in iso.holding(guild).sent[-1]
     before = types.SimpleNamespace(roles=list(member.roles))
     member.roles.remove(role)                                                # ...and unticks it
     await iso.on_member_update(before, member)
@@ -224,12 +224,33 @@ async def test_isolate_command_checks_rank_and_admins(iso):
     ctx = types.SimpleNamespace(guild=guild, author=mod, reply=reply, typing=lambda: _T())
     boss = Member(guild, 3, [guild.boss])
     await Isolation.isolate.callback(iso, ctx, boss, details="")
-    assert said[-1] == "Can't isolate them"                                  # above the mod and above SYKE
+    assert said[-1] == "Can't contaminate them"                                  # above the mod and above SYKE
     target = Member(guild, 4, [guild.vip])
     await Isolation.isolate.callback(iso, ctx, target, details="30m spamming")
-    assert said[-1] == "🚷 user4 is isolated" and iso.storage.isolation(GID, 4)["reason"] == "spamming"
-    assert iso.storage.cases(GID, 4)[0][2:4] == ("isolate", "spamming")      # in their mod history
+    assert said[-1] == "☣️ user4 is contaminated" and iso.storage.isolation(GID, 4)["reason"] == "spamming"
+    assert iso.storage.cases(GID, 4)[0][2:4] == ("contaminate", "spamming")      # in their mod history
     await Isolation.unisolate.callback(iso, ctx, target, reason="")
-    assert said[-1] == "✅ user4 is back" and guild.vip in target.roles
+    assert said[-1] == "🧼 user4 is decontaminated" and guild.vip in target.roles
     await Isolation.unisolate.callback(iso, ctx, target, reason="")
-    assert said[-1] == "Not isolated"
+    assert said[-1] == "Not contaminated"
+
+
+async def test_old_isolation_names_are_renamed(iso):
+    guild = Guild()
+    role, channel, _ = await iso.ensure_setup(guild)
+    renamed = []
+
+    async def edit(name=None, **kwargs):
+        renamed.append(name)
+
+    role.name, channel.name = "SYKE · isolated", "isolation"
+    role.edit = channel.edit = edit
+    await iso.ensure_setup(guild)
+    assert renamed == ["SYKE · contaminated", "contamination"]
+
+
+def test_command_names(cog):
+    from syke.isolation import Isolation as Cog
+    names = {c.name: c.aliases for c in Cog(cog.bot).get_commands()}
+    assert "contimate" in names["contaminate"] and "isolate" in names["contaminate"]
+    assert "unisolate" in names["decontaminate"] and "isolated" in names["contaminated"]
