@@ -22,6 +22,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from .human import Human
+from .owners import bypass_checks, is_owner, set_owners
 from .edge import EDGE_KEY, edge_rules
 from .persona_core import ago
 from .edge import clamp as edge_clamp
@@ -366,6 +367,7 @@ class Syke(commands.Bot):
             allowed_mentions=discord.AllowedMentions.none(),
         )
         self.settings = settings
+        set_owners(settings.owner_ids)
         self.storage = Storage(settings.db_path)
         self.scanner = Scanner(settings.scan_limit, settings.cache_minutes)
         self._prefixes: dict[int, str] = {}
@@ -425,6 +427,7 @@ class Syke(commands.Bot):
         await self.add_cog(Achievements(self))
         await self.add_cog(Lore(self))
         await self.add_cog(Human(self))
+        log.info("Owners pass the permission checks of %d commands", bypass_checks(self))
         if self.settings.web_enabled:
             try:
                 from .web import WebDashboard

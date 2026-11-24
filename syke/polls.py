@@ -28,6 +28,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from .owners import is_owner
 from . import ai
 from .moderation import OK, WARN, embed, parse_duration, problem
 
@@ -382,6 +383,8 @@ class AnswersView(discord.ui.View):
 # The cog
 
 def can_manage(member) -> bool:
+    if is_owner(member):
+        return True
     perms = getattr(member, "guild_permissions", None)
     return bool(perms and (perms.administrator or perms.manage_guild or perms.manage_messages))
 

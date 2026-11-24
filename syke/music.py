@@ -34,6 +34,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from .owners import is_owner
 from . import lavalink as ll
 from . import music_lists as lists
 from . import ai
@@ -853,7 +854,7 @@ class Music(commands.Cog):
         if not dj:
             return None
         perms = getattr(member, "guild_permissions", None)
-        if perms is not None and (perms.manage_channels or perms.administrator):
+        if is_owner(member) or (perms is not None and (perms.manage_channels or perms.administrator)):
             return None
         if any(r.id == dj for r in getattr(member, "roles", [])):
             return None
@@ -1511,7 +1512,7 @@ class Music(commands.Cog):
 
     async def do_stay(self, ctx, enabled: bool | None) -> None:
         perms = getattr(ctx.author, "guild_permissions", None)
-        if not (perms and (perms.manage_guild or perms.manage_channels)):
+        if not (is_owner(ctx.author) or (perms and (perms.manage_guild or perms.manage_channels))):
             await self.say(ctx, "You need **Manage Channels** to change 24/7 mode.", ephemeral=True)
             return
         current = bool(self.config(ctx.guild.id).get("stay"))

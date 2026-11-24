@@ -26,6 +26,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from .owners import is_owner
 from .moderation import BRAND, DANGER, OK, WARN, embed, moderator, problem
 
 log = logging.getLogger("syke.tickets")
@@ -48,6 +49,8 @@ def staff_ids(config: dict) -> set[int]:
 
 
 def is_staff(member, config: dict) -> bool:
+    if is_owner(member):
+        return True
     perms = getattr(member, "guild_permissions", None)
     if perms is not None and (perms.administrator or perms.manage_guild or perms.manage_threads):
         return True

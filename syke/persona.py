@@ -27,6 +27,7 @@ from datetime import datetime, timedelta
 import discord
 from discord.ext import commands, tasks
 
+from .owners import is_owner
 from . import ai
 from . import persona_core as core
 from .moderation import embed, problem
@@ -952,7 +953,7 @@ class Persona(commands.Cog, name="Persona"):
     @commands.command(name="forgive", help="SYKE's father (or a server manager) makes SYKE drop a grudge")
     @commands.guild_only()
     async def forgive_cmd(self, ctx: commands.Context, member: discord.Member) -> None:
-        if not (self.is_father(ctx.author.id) or ctx.author.guild_permissions.manage_guild):
+        if not (self.is_father(ctx.author.id) or is_owner(ctx.author) or ctx.author.guild_permissions.manage_guild):
             await ctx.reply(embed=problem("Nice try", "Only my dad or a server manager can make me forgive someone."))
             return
         self.storage._write("UPDATE persona_bonds SET score = MAX(score, 0), updated = ? WHERE guild_id = ? "

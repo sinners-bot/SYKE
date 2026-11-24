@@ -23,6 +23,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from .owners import is_owner
 from .moderation import BRAND, OK, WARN, embed, moderator, problem
 
 log = logging.getLogger("syke.notices")
@@ -306,7 +307,8 @@ class Notices(commands.Cog):
         perms = getattr(author, "guild_permissions", None)
         items[str(number)] = {"channel": channel.id, "text": text.strip()[:TEXT_MAX], "at": when.timestamp(),
                               "repeat": repeat, "by": author.id,
-                              "everyone": bool(perms and (perms.mention_everyone or perms.administrator))}
+                              "everyone": bool(is_owner(author) or (perms and (perms.mention_everyone
+                                                                               or perms.administrator)))}
         self.bot.storage.set_config(guild.id, ANNOUNCE, {"next": number + 1, "items": items})
         stamp = int(when.timestamp())
         repeat_text = "" if repeat == "once" else f", then **{repeat}**"

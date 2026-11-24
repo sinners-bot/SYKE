@@ -28,6 +28,7 @@ from discord import app_commands
 from discord.ext import commands
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+from .owners import is_owner
 from .moderation import OK, WARN, embed, moderator, problem
 
 log = logging.getLogger("syke.quotes")
@@ -305,7 +306,8 @@ class QuoteView(discord.ui.View):
     @discord.ui.button(label="Delete", style=discord.ButtonStyle.danger, row=0)
     async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         perms = getattr(interaction.user, "guild_permissions", None)
-        if interaction.user.id not in (self.data.maker_id, self.data.quoted_id) and not (perms and perms.manage_messages):
+        if interaction.user.id not in (self.data.maker_id, self.data.quoted_id) and not is_owner(interaction.user) \
+                and not (perms and perms.manage_messages):
             await interaction.response.send_message("Only whoever made it, the person quoted, or a mod can delete it.",
                                                     ephemeral=True)
             return

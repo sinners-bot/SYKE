@@ -19,6 +19,7 @@ from datetime import datetime
 import discord
 from discord.ext import commands, tasks
 
+from .owners import is_owner
 from . import ai
 from .edge import EDGE_KEY, EDGE_LEVELS, clamp
 from .yap import Turn
@@ -94,7 +95,7 @@ class Human(commands.Cog, name="Human"):
                 colour=discord.Colour.dark_red()), mention_author=False)
             return
         perms = getattr(ctx.author, "guild_permissions", None)
-        if not (perms and (perms.manage_guild or perms.administrator)):
+        if not (is_owner(ctx.author) or (perms and (perms.manage_guild or perms.administrator))):
             await ctx.reply("Only managers can change SYKE's edge.", mention_author=False)
             return
         if not level.strip().isdigit() or not 0 <= int(level) <= 3:
