@@ -345,3 +345,88 @@ def test_reply_prompt_reads_the_moment_and_knows_in_jokes(monkeypatch):
     assert "TARGET was replying to Bo: my fit [image]" in seen["user"]
     assert "IN-JOKES" in seen["user"] and "crocs gang" in seen["user"]
     assert "READ the moment" in seen["system"]
+
+
+# Without AI, SYKE never answers someone with a line meant for somebody else
+
+def test_lines_naming_someone_else_are_spotted():
+    from syke.yap import name_words, talks_to_someone_else
+    known = {"ren", "ging", "zara"}
+    assert name_words("Ging™") == {"ging"} and name_words("xX_Zara_Xx") == {"zara"}
+    assert talks_to_someone_else("Ren stop smoking crack pls", known, {"ging"})
+    assert talks_to_someone_else("<@123> come vc", known, {"ging"})
+    assert not talks_to_someone_else("ging you're actually cooked", known, {"ging"})
+    assert not talks_to_someone_else("bro that's crazy work", known, {"ging"})
+
+
+def test_offline_reply_skips_lines_for_other_people():
+    import asyncio
+    from dataclasses import replace
+    from syke import ai
+    from syke.config import load_settings
+    from syke.yap import Turn
+    settings = replace(load_settings(), ai_provider="none")
+    ranked = [(9.0, "Ren stop smoking crack pls it's bad for server engagement"),
+              (5.0, "nah you're tweaking fr")]
+    for _ in range(10):
+        out = asyncio.run(ai.compose_reply(settings, ranked, Turn("Ging™", "did you know echo is an asswipe"),
+                                           names={"ren", "ging", "echo"}))
+        assert out == "nah you're tweaking fr"
+
+
+async def test_random_fallback_line_respects_who_is_talking(cog):
+    bot = cog.bot
+    bot.storage.add_corpus(42, [(1, 10, 100, "Ren stop smoking crack pls", 1.0, "Ren"),
+                                 (2, 10, 101, "this chat is cooked today", 2.0, "Ging")])
+    for _ in range(10):
+        assert bot.pick_yap(42, answering="Ging™") == "this chat is cooked today"
+
+
+def test_rate_limits_pause_ai_calls(monkeypatch):
+    import asyncio
+    import time as _time
+    from dataclasses import replace
+    from syke import ai
+    from syke.config import load_settings
+    settings = replace(load_settings(), ai_provider="openai", openai_api_key="k")
+    posts = []
+
+    class Resp:
+        def __init__(self, status):
+            self.status_code, self.headers = status, {"retry-after": "5"}
+
+        def json(self):
+            return ({"error": {"code": "insufficient_quota", "message": "You exceeded your current quota"}}
+                    if self.status_code == 429 else {"choices": [{"message": {"content": "{}"}}]})
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                import httpx
+                request = httpx.Request("POST", "https://api.openai.com")
+                raise httpx.HTTPStatusError("429", request=request, response=httpx.Response(429, request=request))
+
+    status = [429]
+
+    class Client:
+        def __init__(self, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def post(self, url, headers, json):
+            posts.append(url)
+            return Resp(status[0])
+
+    monkeypatch.setattr(ai.httpx, "AsyncClient", Client)
+    monkeypatch.setattr(ai, "_PAUSE", {"until": 0.0, "length": 0.0})
+    with pytest.raises(Exception):
+        asyncio.run(ai._call_openai(settings, "s", "u"))
+    assert ai._PAUSE["length"] == ai.PAUSE_FIRST and len(posts) == 1
+    with pytest.raises(ai.AIPaused):
+        asyncio.run(ai._call_openai(settings, "s", "u"))                    # not even sent
+    assert len(posts) == 1
+    ai._PAUSE["until"] = 0
+    with pytest.raises(Exception):
+        asyncio.run(ai._call_openai(settings, "s", "u"))
+    assert ai._PAUSE["length"] == ai.PAUSE_FIRST * 2                         # doubles when it keeps happening
+    ai._PAUSE["until"], status[0] = 0, 200
+    asyncio.run(ai._call_openai(settings, "s", "u"))
+    assert ai._PAUSE["length"] == 0                                          # a success clears it

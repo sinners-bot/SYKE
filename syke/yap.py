@@ -550,3 +550,20 @@ def talk_level(value) -> int | None:
     if text.isdigit() and int(text) in TALK_LEVELS:
         return int(text)
     return TALK_WORDS.get(text)
+
+
+NAME_WORD = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
+
+
+def name_words(name: str) -> set[str]:
+    """The parts of a display name people would call someone by: 'Ging™' -> {'ging'}."""
+    return {w.casefold() for w in NAME_WORD.findall(name or "")}
+
+
+def talks_to_someone_else(text: str, known: set[str], allowed: set[str] = frozenset()) -> bool:
+    """A real line that pings someone or names a member other than `allowed` (the person SYKE answers).
+    Repeating it as a reply would call them by someone else's name."""
+    if "<@" in (text or ""):
+        return True
+    words = {w.casefold() for w in NAME_WORD.findall(text or "")}
+    return bool((words & known) - allowed)

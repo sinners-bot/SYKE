@@ -172,6 +172,7 @@ class Persona(commands.Cog, name="Persona"):
         self.vibes: dict[int, core.Vibe] = {}
         self._vibe_new: dict[int, int] = defaultdict(int)
         self._vibe_busy: set[int] = set()
+        self._vibe_tried: dict[int, float] = {}
         self._just: dict[tuple[int, int], tuple[core.Judgement, float]] = {}   # (channel, user) -> latest verdict
 
     async def cog_load(self) -> None:
@@ -408,8 +409,10 @@ class Persona(commands.Cog, name="Persona"):
         if self.bot.settings.ai_provider == "none" or guild_id in self._vibe_busy:
             return
         last = self.vibes.get(guild_id)
-        since = time.time() - (last.at if last else 0)
+        # A failed read counts as a try: otherwise every new message would retry it straight away.
+        since = time.time() - max(last.at if last else 0, self._vibe_tried.get(guild_id, 0))
         if since >= VIBE_EVERY and self._vibe_new[guild_id] >= VIBE_MIN_NEW:
+            self._vibe_tried[guild_id] = time.time()
             self._vibe_busy.add(guild_id)
             asyncio.ensure_future(self._read_vibe(guild_id))
 

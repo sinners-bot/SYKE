@@ -1609,3 +1609,9 @@ class Storage:
         """Everyone SYKE has seen talk anywhere, most active first (for finding older DMs)."""
         return [r[0] for r in self._read("SELECT author_id FROM corpus GROUP BY author_id ORDER BY COUNT(*) DESC "
                                          "LIMIT ?", (limit,))]
+
+    def author_names(self, guild_id: int, limit: int = 2000) -> list[str]:
+        """Names people here have had (most recent per person), for spotting names in messages."""
+        return [r[0] for r in self._read(
+            "SELECT author_name FROM corpus WHERE guild_id = ? AND author_name != '' GROUP BY author_id "
+            "ORDER BY MAX(created_at) DESC LIMIT ?", (guild_id, limit))]

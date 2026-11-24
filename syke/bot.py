@@ -23,6 +23,7 @@ from discord.ext import commands
 
 from . import vision
 from .human import Human
+from .lexicon import CHAT_FILLER, STOPWORDS
 from .isolation import Isolation
 from .owners import bypass_checks, is_owner, set_owners
 from .edge import EDGE_KEY, edge_rules
@@ -124,6 +125,8 @@ from .yap import (
     folded,
     gif_name,
     make_typo,
+    name_words,
+    talks_to_someone_else,
     talk_level,
     offline_pick,
     query_weights,
@@ -168,6 +171,7 @@ YAP_SEARCH = 150
 YAP_RANDOM = 40
 YAP_CONTEXT = 20
 PICK_SHOWN = 30
+COMMON_WORDS = STOPWORDS | CHAT_FILLER   # never treated as someone's name
 DM_COOLDOWN = 2.0           # seconds between DM replies to one person
 TYPO_CHANCE = 0.04          # a reply goes out with a typo, fixed with "*word" a second later
 EDIT_INSTEAD = 0.15         # of two-part replies: edit the first message instead of sending a second
@@ -387,6 +391,7 @@ class Syke(commands.Bot):
         self.human_pace = 1.0   # scales the gaps between split messages (tests set 0)
         self._homes: dict[int, tuple[float, int | None]] = {}   # user -> (checked at, home server for DMs)
         self._last_dm: dict[int, float] = {}
+        self._name_words: dict[int, tuple[float, set[str]]] = {}
         self._recent_yaps: dict[int, list[str]] = {}
         self._last_ask: dict[int, float] = {}
         self._asks: dict[int, list[dict]] = {}
@@ -867,7 +872,7 @@ class Syke(commands.Bot):
                                    state=self.persona_state(home, message.author, chat),
                                    lore=self.lore_notes(home.id), edge=self.edge_text(home.id, upset),
                                    memory=self.memory_text(home.id, message.author, chat), full=True, dm=True,
-                                   pictures=await self.pictures_for(message))
+                                   pictures=await self.pictures_for(message), names=self.member_words(home.id))
         return {"reply": turn} if isinstance(turn, str) else turn
 
     async def replied_yap(self, message: discord.Message) -> str | None:
@@ -1106,7 +1111,7 @@ class Syke(commands.Bot):
                                    state=self.persona_state(message.guild, message.author, chat),
                                    lore=self.lore_notes(guild_id), edge=self.edge_text(guild_id, upset),
                                    memory=self.memory_text(guild_id, message.author, chat), full=True,
-                                   pictures=await self.pictures_for(message))
+                                   pictures=await self.pictures_for(message), names=self.member_words(guild_id))
 
     def talk_level_of(self, guild_id: int) -> int | None:
         """The server's talkativeness level, or None when it's never been set (the Railway defaults apply)."""
@@ -1262,7 +1267,8 @@ class Syke(commands.Bot):
             if isinstance(turn, str):
                 turn = {"reply": turn}
             if not turn:
-                fallback = self.pick_yap(message.guild.id, exclude_id=message.id, exclude=used)
+                fallback = self.pick_yap(message.guild.id, exclude_id=message.id, exclude=used,
+                                         answering=self.speaker_name(message.author))
                 turn = {"reply": fallback} if fallback else None
         if turn:
             await self.deliver_turn(message, turn)
@@ -1445,14 +1451,35 @@ class Syke(commands.Bot):
         mentions = (f"<@{self.user.id}>", f"<@!{self.user.id}>")
         return any(text.startswith(mention) for mention in mentions)
 
-    def pick_yap(self, guild_id: int, exclude_id: int = 0, exclude: set[str] = frozenset()) -> str | None:
+    def member_words(self, guild_id: int) -> set[str]:
+        """Every name-word of people in this server (cached for an hour), e.g. {'ren', 'ging', 'zara'}."""
+        hit = self._name_words.get(guild_id)
+        if hit and time.monotonic() - hit[0] < 3600:
+            return hit[1]
+        words: set[str] = set()
+        for name in self.storage.author_names(guild_id):
+            words |= name_words(name)
+        guild = self.get_guild(guild_id)
+        for m in getattr(guild, "members", None) or ():
+            words |= name_words(getattr(m, "display_name", "")) | name_words(getattr(m, "name", ""))
+        words -= COMMON_WORDS   # names that are also everyday words ("will", "may") don't count
+        self._name_words[guild_id] = (time.monotonic(), words)
+        return words
+
+    def pick_yap(self, guild_id: int, exclude_id: int = 0, exclude: set[str] = frozenset(),
+                 answering: str | None = None) -> str | None:
+        """A random real line. When `answering` someone, never one that names or pings somebody else."""
         seen = {folded(e) for e in exclude}
         fallback = None
+        known = self.member_words(guild_id) if answering is not None else set()
+        allowed = name_words(answering or "")
         for raw in self.storage.random_messages(guild_id, 40, exclude_id):
             if self.is_command_text(guild_id, raw):
                 continue
             text = strip_links(raw)
             if len(text.split()) < 3:
+                continue
+            if answering is not None and talks_to_someone_else(text, known, allowed):
                 continue
             if folded(text) in seen:
                 fallback = fallback or text

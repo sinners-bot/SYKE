@@ -470,3 +470,18 @@ async def test_dm_commands_and_strangers_are_left_alone(world, monkeypatch):
     bot, persona, guild = _dm_world(world, monkeypatch)
     assert not await bot.dm_chat(DM(guild.members[MO], "$help"))
     assert not await bot.dm_chat(DM(person(4242, "Nobody"), "hey who are you"))
+
+
+async def test_failed_vibe_reads_dont_retry_on_every_message(world, monkeypatch):
+    bot, persona, guild = world
+    bot.settings = replace(bot.settings, ai_provider="openai")
+    calls = []
+
+    async def failing(settings, system, user, temperature, timeout):
+        calls.append(1)
+        raise RuntimeError("429 Too Many Requests")
+    monkeypatch.setattr("syke.persona.ai._complete", failing)
+    for i in range(core_min_new() * 5):
+        await persona.observe(Msg(guild, guild.members[ZARA], f"chat line {i}"))
+        await asyncio.sleep(0)
+    assert len(calls) == 1                         # one try, then wait like after a success

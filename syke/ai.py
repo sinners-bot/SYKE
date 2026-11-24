@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import time
+import contextlib
 import logging
 import random
 import re
@@ -15,7 +17,7 @@ from .profile import Profile
 from .roast import fallback_summary
 from .stats import CUSTOM_EMOJI_RE
 from .traits import HIGHLIGHT_TRAITS, TRAITS
-from .yap import (DEFAULT_TONE, STYLE_SHOWN, reply_cap, Turn, Vocab, Voice, folded, offline_pick, query_weights, style_hint,
+from .yap import (DEFAULT_TONE, STYLE_SHOWN, name_words, reply_cap, talks_to_someone_else, Turn, Vocab, Voice, folded, offline_pick, query_weights, style_hint,
                   tidy_reply, vocabulary)
 
 log = logging.getLogger("syke.ai")
@@ -143,6 +145,42 @@ def _parse_json(text: str) -> dict:
     return json.loads(match.group(0))
 
 
+class AIPaused(Exception):
+    """The AI provider said 'too many requests': SYKE leaves it alone for a bit instead of hammering it."""
+
+
+_PAUSE = {"until": 0.0, "length": 0.0}
+PAUSE_FIRST = 30.0          # seconds to back off after the first 429…
+PAUSE_MAX = 15 * 60.0       # …doubling each time it happens again, up to this
+
+
+def _check_pause() -> None:
+    left = _PAUSE["until"] - time.time()
+    if left > 0:
+        raise AIPaused(f"AI paused for {int(left)}s after a rate limit")
+
+
+def _note_response(resp) -> None:
+    """Back off on 429 (logging OpenAI's/Anthropic's reason once); clear the back-off after a success."""
+    status = getattr(resp, "status_code", 200)
+    if status not in (429, 529):
+        if status < 400:
+            _PAUSE["length"] = 0.0
+        return
+    try:
+        error = resp.json().get("error") or {}
+    except Exception:
+        error = {}
+    code = error.get("code") or error.get("type") or "rate_limited"
+    retry = 0.0
+    with contextlib.suppress(Exception):
+        retry = float(resp.headers.get("retry-after") or 0)
+    length = min(PAUSE_MAX, max(retry, PAUSE_FIRST, _PAUSE["length"] * 2))
+    _PAUSE["length"], _PAUSE["until"] = length, time.time() + length
+    log.warning("AI provider said %s (%s: %s); pausing AI calls for %ds", status, code,
+                str(error.get("message") or "")[:200], int(length))
+
+
 def _reasoning_model(model: str) -> bool:
     """GPT-5 and o-series models take no custom temperature."""
     return model.startswith(("gpt-5", "o1", "o3", "o4"))
@@ -164,12 +202,14 @@ async def _call_openai(settings: Settings, system: str, user: str, temperature: 
     }
     if not _reasoning_model(model):
         body["temperature"] = temperature
+    _check_pause()
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {settings.openai_api_key}"},
             json=body,
         )
+        _note_response(resp)
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
 
@@ -179,6 +219,7 @@ async def _call_anthropic(settings: Settings, system: str, user: str, temperatur
                           images: list[str] | None = None) -> str:
     content = user if not images else [*[{"type": "image", "source": {"type": "url", "url": url}} for url in images],
                                        {"type": "text", "text": user}]
+    _check_pause()
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
@@ -194,6 +235,7 @@ async def _call_anthropic(settings: Settings, system: str, user: str, temperatur
                 "messages": [{"role": "user", "content": content}],
             },
         )
+        _note_response(resp)
         resp.raise_for_status()
         return "".join(b.get("text", "") for b in resp.json()["content"])
 
@@ -429,7 +471,8 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
                         remixed: list[str] = (), avoid: list[str] = (), voice: Voice | None = None,
                         rng: random.Random | None = None, weights: dict[str, float] | None = None,
                         state: str = "", lore: list[str] = (), edge: str = "", memory: str = "",
-                        full: bool = False, dm: bool = False, pictures: list = ()):
+                        full: bool = False, dm: bool = False, pictures: list = (),
+                        names: set[str] = frozenset()):
     """The best reply to `target` in the server's words and the chat's tone. Never raises.
 
     With AI, stored messages and Markov `remixed` lines are ammunition for a new message written
@@ -468,6 +511,8 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
         numbered = "\n".join(f"[{i}] {readable(' '.join(text.split()))[:160]}" for i, text in enumerate(shown))
         vocab = vocabulary(voice, tone, rng, weights or query_weights(target.text, said, chat), candidates)
         prompt = (f"RECENT CHAT:\n{_chat_block(chat)}\n\n{situation}{target.author[:24]}: {target.text[:300]}"
+                  f"\n\nYou're answering {target.author[:24]}. If you use a name, use theirs — never call them "
+                  "by someone else's name."
                   f"\n\nTONE: {tone}\n\nTYPING: {style_hint(voice)}{_style_block(voice, candidates, rng)}"
                   f"\n\nVOCABULARY:\n{_vocab_block(vocab)}"
                   f"{_lore_block(lore)}"
@@ -505,11 +550,17 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
                 log.warning("AI yap reply unusable (try %d): %r", attempt + 1, answer[:200])
                 prompt += (f"\n\nYour last reply was unusable: keep it under {cap} words, in your own words "
                            "(never copy AMMO), no links. Try again.")
+            except AIPaused as paused:
+                log.info("AI yap reply skipped (%s); matching keywords instead", paused)
+                break
             except Exception:
                 log.exception("AI yap reply failed; matching keywords instead")
                 break
-    usable = [(score, text) for score, text in ranked if folded(text) not in banned_keys]
-    return done(offline_pick(usable) or offline_pick(ranked))
+    # No AI: repeat a real line, but never one that names or pings someone other than who SYKE answers.
+    allowed = name_words(target.author)
+    safe = [(score, text) for score, text in ranked if not talks_to_someone_else(text, set(names), allowed)]
+    usable = [(score, text) for score, text in safe if folded(text) not in banned_keys]
+    return done(offline_pick(usable) or offline_pick(safe))
 
 
 PICK_PROMPT = """You are SYKE, a regular in this Discord server. You may jump into the chat by sending ONE \
