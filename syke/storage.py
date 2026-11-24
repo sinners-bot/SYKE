@@ -1577,3 +1577,9 @@ class Storage:
             if guild_id not in order:
                 order.append(guild_id)
         return order
+
+    def latest_name(self, guild_id: int, user_id: int) -> str:
+        """The name this person had in their latest stored message here ('' if none)."""
+        rows = self._read("SELECT author_name FROM corpus WHERE guild_id = ? AND author_id = ? AND author_name != '' "
+                          "ORDER BY created_at DESC LIMIT 1", (guild_id, user_id))
+        return rows[0][0] if rows else ""

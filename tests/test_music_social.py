@@ -144,3 +144,20 @@ async def test_syke_comments_only_in_yap_channels_and_not_too_often(world, monke
 def test_names_from_the_ai_match_speakers():
     speakers = {"Mo": 7, "Zara_x": 8}
     assert match_name("mo", speakers) == 7 and match_name("zara", speakers) == 8 and match_name("Kai", speakers) is None
+
+
+async def test_beef_board_names_people_missing_from_the_member_cache(world):
+    rival, bot = world.rival, world.bot
+    rival.note_round(1, 7, 8, 8, "olive preferences", 2, 10)
+    bot.storage.add_corpus(1, [(1, 10, 7, "olives are mid", time.time(), "Mo"),
+                               (2, 10, 8, "olives are elite", time.time(), "Zara")])
+    guild = NS(id=1, get_member=lambda uid: None)                  # members not cached (no Members intent)
+    assert rival.names(guild, 7, 8) == ["Mo", "Zara"]
+    assert rival.names(guild, 99) == ["someone"]                    # never seen anywhere
+    replies = []
+
+    async def reply(content=None, **kw):
+        replies.append(kw["embed"].description)
+
+    await Rivalry.beef.callback(rival, NS(guild=guild, reply=reply), None, None)
+    assert "**Mo** vs **Zara**" in replies[0] and "someone" not in replies[0]

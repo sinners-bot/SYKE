@@ -399,7 +399,7 @@ class MusicSocial(commands.Cog, name="MusicSocial"):
         await player.start_or_queue()
 
     def party_card(self, guild, party: Party) -> discord.Embed:
-        names = [getattr(guild.get_member(uid), "display_name", "someone") for uid in party.members]
+        names = [self.bot.member_name(guild, uid) for uid in party.members]
         card = discord.Embed(title="🎉 Listening party", colour=PARTY_COLOUR,
                              description="SYKE takes turns playing a song from everyone's Liked songs. Tap **❤️ Like** "
                                          "on songs you love; skips are counted too. There's a recap at the end.")
@@ -439,7 +439,7 @@ class MusicSocial(commands.Cog, name="MusicSocial"):
         stats = recap_stats(party)
 
         def name(uid):
-            return getattr(guild.get_member(uid), "display_name", "someone") if uid else "nobody"
+            return self.bot.member_name(guild, uid) if uid else "nobody"
 
         minutes = max(1, round((time.time() - party.started) / 60))
         lines = [f"**{stats['songs']}** songs · **{minutes}** min · {len(party.members)} in the rotation"]

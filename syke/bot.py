@@ -965,6 +965,21 @@ class Syke(commands.Bot):
             await self.answer_question(send, message.author, readable(message, question), history, where(message.channel))
         return True
 
+    def member_name(self, guild, user_id: int, fallback: str = "someone") -> str:
+        """A person's name even when they aren't in SYKE's member cache: the server's member list, then
+        Discord's user cache, then the name on their latest stored message."""
+        member = guild.get_member(user_id) if guild is not None else None
+        if member is not None:
+            return member.display_name
+        user = self.get_user(user_id)
+        if user is not None:
+            return getattr(user, "global_name", None) or user.name
+        if guild is not None:
+            stored = self.storage.latest_name(guild.id, user_id)
+            if stored:
+                return stored
+        return fallback
+
     def speaker_name(self, user) -> str:
         """How SYKE names someone to the AI: his creator is always Echo (SYKE_FATHER_NAME)."""
         if getattr(user, "id", None) in self.settings.owner_ids:

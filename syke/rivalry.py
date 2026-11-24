@@ -163,7 +163,7 @@ class Rivalry(commands.Cog, name="Rivalry"):
                 self.bot.remember_yap(channel_id, sent.content)
 
     def names(self, guild, *ids) -> list[str]:
-        return [getattr(guild.get_member(i), "display_name", "someone") for i in ids]
+        return [self.bot.member_name(guild, i) for i in ids]
 
     async def comment_line(self, guild, x, y, rounds, topic, winner) -> str:
         row = self.get(guild.id, x, y)
