@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS strip_home_item_log (
 );
 """
 PURCHASE_MAX = 1_000_000          # the most expensive thing on the Strip (a penthouse)
+RESELL_RATE = 0.5                 # selling furniture back pays half what you paid
+RESELLABLE = ("furniture",)
 STORE_MAX_QTY = 99
 RID = re.compile(r"^[A-Za-z0-9_:.\-]{6,80}$")
 HOME = re.compile(r"^[A-Za-z0-9_:\-]{1,60}$")
@@ -220,6 +222,50 @@ class HomeService:
                 self._bag_add(conn, gid, uid, item, qty)
                 return {"home": home, "box": self._box(conn, gid, uid, home)}
             return self._once(conn, gid, uid, rid, "take", inner)
+        return self._tx(do)
+
+    def resell(self, gid: int, uid: int, rid, part=None, parts=None) -> dict:
+        """Sell a piece back: pays RESELL_RATE of what this player paid in that purchase (found by its request id), once.
+        A purchase that bought several pieces at once (a furniture set) is sold a piece at a time: `part` of `parts`
+        (when `parts` is not given, the number of pieces recorded with the purchase).
+        Only things this player bought from a shop can be sold: gifts and rewards have no purchase to point to."""
+        self.guard(gid, uid)
+        rid = str(rid or "")
+        if not RID.match(rid):
+            raise HomeError("bad_rid", "Which purchase?")
+        try:
+            parts = None if parts is None else max(1, min(50, int(parts)))
+            part = None if part is None else int(part)
+        except (TypeError, ValueError):
+            raise HomeError("bad_args", "Which piece?")
+        key = ("resell:" + rid + ("" if part is None else ":%d" % part))[:80]
+
+        def do(conn):
+            def inner():
+                row = conn.execute("SELECT amount, kind, detail FROM strip_home_ledger WHERE guild_id=? AND user_id=? AND rid=? AND kind IN (%s) ORDER BY id LIMIT 1"
+                                   % ",".join("?" * len(RESELLABLE)), (gid, uid, rid, *RESELLABLE)).fetchone()
+                if not row:
+                    raise HomeError("not_bought", "Only things you bought can be sold back.")
+                n = parts
+                if part is None:
+                    n = 1
+                elif n is None:
+                    try:
+                        n = len(json.loads(row[2] or "{}").get("pieces") or [])
+                    except (ValueError, AttributeError):
+                        n = 0
+                if not n or (part is not None and not 0 <= part < n):
+                    raise HomeError("bad_args", "Which piece?")
+                amount = int(row[0] / n * RESELL_RATE)
+                if amount < 1:
+                    raise HomeError("worthless", "Nobody will pay for that.")
+                w = self.db._wallet_row(conn, gid, uid)
+                w["cash"] += amount
+                self.db._write_wallet(conn, gid, uid, w)
+                conn.execute("INSERT INTO strip_home_ledger (guild_id, user_id, rid, kind, amount, cash_after, detail, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                             (gid, uid, key, "resell", -amount, w["cash"], json.dumps({"of": rid, "part": part, "parts": n, "paid": row[0]}), self.now()))
+                return {"amount": amount, "paid": int(row[0] // n), "cash": w["cash"]}
+            return self._once(conn, gid, uid, key, "resell", inner)
         return self._tx(do)
 
     def release(self, gid: int, uid: int, home) -> dict:

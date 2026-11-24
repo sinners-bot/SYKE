@@ -118,3 +118,34 @@ def _try(fn):
         return fn()
     except HomeError:
         return None
+
+
+def test_resell_pays_half_once_and_only_for_purchases(homes):
+    db, h = homes
+    start = db.econ_wallet(G, U)["cash"]
+    h.purchase(G, U, 900, "furniture", "rid-furn-1", {"type": "sofa"})
+    h.purchase(G, U, 4000, "property", "rid-prop-1")
+    r = h.resell(G, U, "rid-furn-1")
+    assert r["amount"] == 450 and r["paid"] == 900 and db.econ_wallet(G, U)["cash"] == start - 900 - 4000 + 450
+    again = h.resell(G, U, "rid-furn-1")
+    assert again["replayed"] and db.econ_wallet(G, U)["cash"] == start - 900 - 4000 + 450
+    for rid, code in [("rid-prop-1", "not_bought"), ("rid-never", "not_bought")]:
+        with pytest.raises(HomeError) as e:
+            h.resell(G, U, rid)
+        assert e.value.code == code
+    with pytest.raises(HomeError) as e:          # someone else's purchase is not yours to sell
+        h.resell(G, U2, "rid-furn-1")
+    assert e.value.code == "not_bought"
+
+
+def test_resell_a_set_piece_by_piece(homes):
+    db, h = homes
+    start = db.econ_wallet(G, U)["cash"]
+    h.purchase(G, U, 3000, "furniture", "rid-set-1", {"collection": "x", "pieces": ["a", "b", "c"]})
+    assert h.resell(G, U, "rid-set-1", 0, 3)["amount"] == 500
+    assert h.resell(G, U, "rid-set-1", 0, 3)["replayed"]
+    assert h.resell(G, U, "rid-set-1", 2, 3)["amount"] == 500
+    assert db.econ_wallet(G, U)["cash"] == start - 3000 + 1000
+    with pytest.raises(HomeError):
+        h.resell(G, U, "rid-set-1", 3, 3)
+    assert h.resell(G, U, "rid-set-1", 1)["amount"] == 500          # piece count read from the purchase
