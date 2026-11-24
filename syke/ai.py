@@ -149,14 +149,17 @@ def _reasoning_model(model: str) -> bool:
 
 
 async def _call_openai(settings: Settings, system: str, user: str, temperature: float = 1.0,
-                       timeout: float = AI_TIMEOUT_SECONDS, model: str | None = None) -> str:
+                       timeout: float = AI_TIMEOUT_SECONDS, model: str | None = None,
+                       images: list[str] | None = None) -> str:
     model = model or settings.openai_model
+    content = user if not images else [{"type": "text", "text": user}, *[
+        {"type": "image_url", "image_url": {"url": url, "detail": "low"}} for url in images]]
     body = {
         "model": model,
         "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": system},
-            {"role": "user", "content": user},
+            {"role": "user", "content": content},
         ],
     }
     if not _reasoning_model(model):
@@ -172,7 +175,10 @@ async def _call_openai(settings: Settings, system: str, user: str, temperature: 
 
 
 async def _call_anthropic(settings: Settings, system: str, user: str, temperature: float = 1.0,
-                          timeout: float = AI_TIMEOUT_SECONDS, model: str | None = None) -> str:
+                          timeout: float = AI_TIMEOUT_SECONDS, model: str | None = None,
+                          images: list[str] | None = None) -> str:
+    content = user if not images else [*[{"type": "image", "source": {"type": "url", "url": url}} for url in images],
+                                       {"type": "text", "text": user}]
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
@@ -185,7 +191,7 @@ async def _call_anthropic(settings: Settings, system: str, user: str, temperatur
                 "max_tokens": 1500,
                 "temperature": temperature,
                 "system": system,
-                "messages": [{"role": "user", "content": user}],
+                "messages": [{"role": "user", "content": content}],
             },
         )
         resp.raise_for_status()
@@ -193,22 +199,38 @@ async def _call_anthropic(settings: Settings, system: str, user: str, temperatur
 
 
 async def _call_chat(settings: Settings, system: str, user: str, temperature: float = 1.0,
-                     timeout: float = AI_TIMEOUT_SECONDS) -> str:
-    """Yaps and replies: the stronger chat model when one is set, the main model if that one is refused."""
+                     timeout: float = AI_TIMEOUT_SECONDS, images: list[str] | None = None) -> str:
+    """Yaps and replies: the stronger chat model when one is set, the main model if that one is refused.
+    With `images`, the pictures go along; if the AI can't open them, it's asked again without."""
+    if images:
+        try:
+            return await _call_chat_once(settings, system, user, temperature, timeout, images)
+        except httpx.HTTPStatusError as err:
+            if err.response is None or err.response.status_code != 400:
+                raise
+            log.info("AI couldn't open the pictures (%s); answering without them", err.response.status_code)
+            user += "\n\n(The pictures couldn't be loaded: you can't see them, so don't pretend you can.)"
+    return await _call_chat_once(settings, system, user, temperature, timeout)
+
+
+async def _call_chat_once(settings: Settings, system: str, user: str, temperature: float, timeout: float,
+                          images: list[str] | None = None) -> str:
+    extra = {"images": images} if images else {}
     openai = settings.ai_provider == "openai"
     call = _call_openai if openai else _call_anthropic
     chosen = settings.openai_chat_model if openai else settings.anthropic_chat_model
     base = settings.openai_model if openai else settings.anthropic_model
     if chosen and chosen != base:
         try:
-            return await call(settings, system, user, temperature, model=chosen)
+            return await call(settings, system, user, temperature, model=chosen, **extra)
         except httpx.HTTPStatusError as err:
-            if err.response is None or err.response.status_code not in (400, 403, 404):
+            refused = (403, 404) if images else (400, 403, 404)   # with pictures a 400 is about the pictures
+            if err.response is None or err.response.status_code not in refused:
                 raise
             log.warning("chat model %s refused (%s); using %s", chosen, err.response.status_code, base)
     if timeout == AI_TIMEOUT_SECONDS:
-        return await call(settings, system, user, temperature)
-    return await call(settings, system, user, temperature, timeout)
+        return await call(settings, system, user, temperature, **extra)
+    return await call(settings, system, user, temperature, timeout, **extra)
 
 
 def with_server_emojis(text: str, emojis: dict[str, str]) -> str:
@@ -343,6 +365,10 @@ to hurt themselves, never anything sexual about minors, and never @mention anyon
 ("nah" … "that's actually crazy") — put the second in "reply2". You may also put ONE emoji reaction on \
 their message ("react"), the way people react 👀 or 😂 to a text. If their message needs no answer (just \
 "lol", "ok", "gn", a laugh at your joke), you can only react and leave "reply" empty.
+- PICTURES, when attached, are what [image], [gif] and [sticker] in the chat really show. Look at them and \
+react to what's actually in them: rate the fit, clown the setup, get the meme, answer the GIF with the \
+energy it has. Roast choices (the pose, the angle, the outfit, the room, the mirror), never someone's face, \
+body, weight or looks. If a picture is unclear, say so in character instead of guessing.
 - MEMORY is what you know about the people here: facts they told the server, running bits you have with \
 them, and your past conversations. Use it like a friend would — bring something up when it fits, call back \
 to yesterday — but never recite it, and never mention having a memory.
@@ -403,7 +429,7 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
                         remixed: list[str] = (), avoid: list[str] = (), voice: Voice | None = None,
                         rng: random.Random | None = None, weights: dict[str, float] | None = None,
                         state: str = "", lore: list[str] = (), edge: str = "", memory: str = "",
-                        full: bool = False, dm: bool = False):
+                        full: bool = False, dm: bool = False, pictures: list = ()):
     """The best reply to `target` in the server's words and the chat's tone. Never raises.
 
     With AI, stored messages and Markov `remixed` lines are ammunition for a new message written
@@ -455,13 +481,17 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
             prompt += f"\n\nMEMORY:\n{memory}"
         if edge:
             prompt += f"\n\n{edge}"
+        if pictures:
+            prompt += "\n\nPICTURES (attached, in this order): " + "; ".join(
+                f"{i + 1}. {p.label}" for i, p in enumerate(pictures))
         emojis = {m.group(1): m.group(0) for text in [*candidates, *vocab.emojis]
                   for m in CUSTOM_EMOJI_RE.finditer(text)}
         cap = reply_cap(voice)
         prompt += f"\n\nLENGTH: at most {cap} words, one or two short sentences. No links."
         for attempt in range(2):
             try:
-                answer = await _call_chat(settings, COMPOSE_PROMPT, prompt, temperature=0.9)
+                answer = await _call_chat(settings, COMPOSE_PROMPT, prompt, temperature=0.9,
+                                          images=[p.url for p in pictures] or None)
                 data = _parse_json(answer)
                 reply = tidy_reply(data.get("reply"), candidates, banned, voice)
                 if reply:

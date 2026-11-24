@@ -199,6 +199,16 @@ _GIF_SLUG = re.compile(r"/(?:view|gifs|clip)/([a-z0-9-]+)", re.IGNORECASE)
 _GIF_STOP = {"gif", "gifs", "the", "a", "an", "of", "to", "and", "with", "mp4"}
 
 
+def gif_name(url: str, limit: int = 4) -> str:
+    """What a GIF link calls itself, in order: tenor .../view/crying-cat-sad-gif-123 -> 'crying cat sad'."""
+    m = _GIF_SLUG.search(url or "")
+    slug = m.group(1) if m else (url.rsplit("/", 1)[-1] if url else "")
+    slug = re.sub(r"\.(gif|mp4|webp|png|jpe?g)$", "", slug, flags=re.IGNORECASE)
+    words = [w for w in re.split(r"[-_]", slug.lower())
+             if len(w) >= 3 and not any(ch.isdigit() for ch in w) and w not in _GIF_STOP]   # no ids like abc123
+    return " ".join(list(dict.fromkeys(words))[:limit])
+
+
 def gif_keywords(url: str) -> set[str]:
     """Descriptive words from a GIF link's slug, e.g. tenor .../view/happy-dance-gif-123 -> {happy, dance}."""
     m = _GIF_SLUG.search(url or "")

@@ -21,6 +21,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from . import vision
 from .human import Human
 from .isolation import Isolation
 from .owners import bypass_checks, is_owner, set_owners
@@ -121,6 +122,7 @@ from .yap import (
     TALK_KEY,
     TALK_LEVELS,
     folded,
+    gif_name,
     make_typo,
     talk_level,
     offline_pick,
@@ -733,7 +735,17 @@ class Syke(commands.Bot):
                 await self.process_commands(message)
             except Exception:
                 log.exception("Failed to handle a message as a command")
-        if message.author.bot or not message.content:
+        if message.author.bot:
+            return
+        if not message.content:
+            # A picture with no words still gets an answer when it's a DM or a reply to SYKE's yap.
+            if getattr(message, "attachments", None) or getattr(message, "stickers", None):
+                if message.guild is None:
+                    await self.dm_chat(message)
+                else:
+                    said = await self.replied_yap(message)
+                    if said is not None:
+                        await self.answer_yap_reply(message, said)
             return
         persona = self.get_cog("Persona")
         if persona is not None and message.guild is not None:
@@ -783,9 +795,10 @@ class Syke(commands.Bot):
 
     async def dm_chat(self, message: discord.Message) -> bool:
         """Chat in a DM as SYKE, carrying the bond from the person's home server. False: not handled here."""
-        if self.user is None or message.author.bot or not message.content:
+        has_picture = bool(getattr(message, "attachments", None) or getattr(message, "stickers", None))
+        if self.user is None or message.author.bot or not (message.content or has_picture):
             return False
-        if message.content.strip().startswith(self.settings.default_prefix):
+        if (message.content or "").strip().startswith(self.settings.default_prefix):
             return False                                        # a command
         if await self.ask_thread(message) is not None:
             return False                                        # a follow-up to a Q&A answer stays Q&A
@@ -812,6 +825,19 @@ class Syke(commands.Bot):
         self.remember_turn(home.id, message.author, message.content, turn)
         return True
 
+    async def pictures_for(self, message) -> list:
+        """What SYKE looks at when answering `message` (needs an AI that can see)."""
+        if self.settings.ai_provider == "none":
+            return []
+        try:
+            found = await vision.gather(self, message)
+        except Exception:
+            log.exception("couldn't collect pictures")
+            return []
+        if found:
+            log.info("Looking at %d picture(s) for %s", len(found), message.id)
+        return found
+
     async def dm_turn(self, message: discord.Message, home, chat: list[Turn]) -> dict | None:
         text = message.content
         tone = detect_tone(text, chat)
@@ -826,7 +852,8 @@ class Syke(commands.Bot):
                                    voice=await self.server_voice(home.id), weights=weights,
                                    state=self.persona_state(home, message.author, chat),
                                    lore=self.lore_notes(home.id), edge=self.edge_text(home.id, upset),
-                                   memory=self.memory_text(home.id, message.author, chat), full=True, dm=True)
+                                   memory=self.memory_text(home.id, message.author, chat), full=True, dm=True,
+                                   pictures=await self.pictures_for(message))
         return {"reply": turn} if isinstance(turn, str) else turn
 
     async def replied_yap(self, message: discord.Message) -> str | None:
@@ -1049,7 +1076,8 @@ class Syke(commands.Bot):
                                    voice=await self.server_voice(guild_id), weights=weights,
                                    state=self.persona_state(message.guild, message.author, chat),
                                    lore=self.lore_notes(guild_id), edge=self.edge_text(guild_id, upset),
-                                   memory=self.memory_text(guild_id, message.author, chat), full=True)
+                                   memory=self.memory_text(guild_id, message.author, chat), full=True,
+                                   pictures=await self.pictures_for(message))
 
     def talk_level_of(self, guild_id: int) -> int | None:
         """The server's talkativeness level, or None when it's never been set (the Railway defaults apply)."""
@@ -1170,7 +1198,8 @@ class Syke(commands.Bot):
         for st in getattr(m, "stickers", None) or []:
             parts.append(f"[sticker: {getattr(st, 'name', '')}]")
         if m.content and URL_GIF.search(m.content):
-            parts.append("[gif]")
+            name = next((gif_name(u) for u in re.findall(r"https?://\S+", m.content) if URL_GIF.search(u)), "")
+            parts.append(f"[gif: {name}]" if name else "[gif]")
         return " ".join(p for p in parts if p).strip()
 
     def replied_to(self, m) -> str:
