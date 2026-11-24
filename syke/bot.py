@@ -22,6 +22,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from .human import Human
+from .isolation import Isolation
 from .owners import bypass_checks, is_owner, set_owners
 from .edge import EDGE_KEY, edge_rules
 from .persona_core import ago
@@ -402,6 +403,7 @@ class Syke(commands.Bot):
     async def setup_hook(self) -> None:
         await self.add_cog(SykeCommands(self))
         await self.add_cog(Moderation(self))
+        await self.add_cog(Isolation(self))
         await self.add_cog(AutoMod(self))
         await self.add_cog(Security(self))
         await self.add_cog(TextFun(self))

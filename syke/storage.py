@@ -351,6 +351,16 @@ CREATE TABLE IF NOT EXISTS achievement_counts (
     value    REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (guild_id, user_id, counter)
 );
+CREATE TABLE IF NOT EXISTS isolations (
+    guild_id     INTEGER NOT NULL,
+    user_id      INTEGER NOT NULL,
+    roles        TEXT NOT NULL DEFAULT '[]',   -- role ids taken away, given back on release
+    expires_at   REAL,
+    reason       TEXT NOT NULL DEFAULT '',
+    moderator_id INTEGER NOT NULL DEFAULT 0,
+    created_at   REAL NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS syke_memory (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id   INTEGER NOT NULL,
@@ -1521,3 +1531,36 @@ class Storage:
         rows = self._read("SELECT MAX(created_at) FROM corpus WHERE guild_id = ? AND author_id = ? "
                           "AND message_id != ?", (guild_id, user_id, before_id))
         return rows[0][0] if rows and rows[0][0] else None
+
+    # Isolation: members who see no channels and no members, with the roles SYKE took off them
+
+    def isolate(self, guild_id: int, user_id: int, roles: list[int], expires_at: float | None,
+                reason: str = "", moderator_id: int = 0) -> None:
+        """Record an isolation. Re-isolating keeps the roles saved the first time."""
+        old = self.isolation(guild_id, user_id)
+        keep = old["roles"] if old else roles
+        self._write("INSERT OR REPLACE INTO isolations (guild_id, user_id, roles, expires_at, reason, moderator_id, "
+                    "created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (guild_id, user_id, json.dumps(keep), expires_at, reason, moderator_id,
+                     old["created_at"] if old else time.time()))
+
+    def isolation(self, guild_id: int, user_id: int) -> dict | None:
+        rows = self._read("SELECT roles, expires_at, reason, moderator_id, created_at FROM isolations "
+                          "WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
+        if not rows:
+            return None
+        roles, expires_at, reason, moderator_id, created_at = rows[0]
+        return {"roles": json.loads(roles or "[]"), "expires_at": expires_at, "reason": reason,
+                "moderator_id": moderator_id, "created_at": created_at}
+
+    def isolations(self, guild_id: int | None = None) -> list[tuple[int, int, float | None]]:
+        """(guild_id, user_id, expires_at), soonest expiry first."""
+        sql = "SELECT guild_id, user_id, expires_at FROM isolations"
+        args: tuple = ()
+        if guild_id is not None:
+            sql += " WHERE guild_id = ?"
+            args = (guild_id,)
+        return [tuple(r) for r in self._read(sql + " ORDER BY expires_at IS NULL, expires_at", args)]
+
+    def release(self, guild_id: int, user_id: int) -> bool:
+        return bool(self._write("DELETE FROM isolations WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)))
