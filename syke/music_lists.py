@@ -192,6 +192,44 @@ RADIO_SEARCHES: dict[str, list[str]] = {
     "italian": ["canzone italiana", "rap italiano hit", "italian pop song", "musica italiana"],
     "brazilian": ["funk brasileiro", "brazilian funk song", "sertanejo hit", "mpb song"],
     "persian": ["persian pop song", "آهنگ ایرانی", "iranian song", "persian rap song"],
+    # Rap
+    "trap": ["trap rap song", "atlanta trap hit", "rage rap song", "trap banger"],
+    "oldschool": ["90s hip hop classic", "boom bap rap song", "golden era hip hop", "east coast rap classic"],
+    "emorap": ["emo rap song", "sad emo rap", "soundcloud rap song", "emo trap song"],
+    # Pop
+    "hyperpop": ["hyperpop song", "digicore song", "glitchcore song", "hyperpop hit"],
+    "jpop": ["j-pop song", "japanese pop hit", "city pop song", "j-pop hit"],
+    "cpop": ["c-pop song", "mandopop hit", "chinese pop song", "华语流行歌曲"],
+    "tiktok": ["tiktok viral song", "viral tiktok hit", "trending tiktok song", "tiktok dance song"],
+    # Rock
+    "punk": ["punk rock song", "pop punk song", "skate punk song", "classic punk song"],
+    "emo": ["emo song", "pop punk emo anthem", "2000s emo song", "midwest emo song"],
+    "grunge": ["grunge song", "90s grunge classic", "post grunge song", "alternative rock 90s"],
+    # Dance
+    "hardstyle": ["hardstyle track", "rawstyle track", "euphoric hardstyle", "hardstyle anthem"],
+    "dubstep": ["dubstep track", "riddim dubstep", "melodic dubstep", "brostep track"],
+    "trance": ["trance anthem", "uplifting trance track", "psytrance track", "progressive trance"],
+    "ukgarage": ["uk garage track", "2 step garage song", "speed garage track", "uk garage classic"],
+    # Soul & more
+    "soul": ["soul classic song", "motown hit", "neo soul song", "classic soul song"],
+    "funk": ["funk classic song", "70s funk song", "p-funk song", "funk groove song"],
+    "blues": ["blues song", "electric blues classic", "delta blues song", "blues rock song"],
+    # Around the world
+    "spanish": ["rap español canción", "spanish pop song", "música urbana española", "pop español hit"],
+    "polish": ["polski rap", "polish pop song", "polska piosenka hit", "polski hip hop"],
+    "greek": ["greek song", "ελληνικά τραγούδια", "greek pop hit", "greek rap song"],
+    "dutch": ["nederlandse rap", "dutch pop song", "nederlandstalige hit", "dutch rap song"],
+    # Decades
+    "70s": ["70s hit song", "1970s classic song", "70s pop hit", "70s rock classic"],
+    "80s": ["80s hit song", "1980s classic song", "80s pop hit", "80s synth pop song"],
+    "90s": ["90s hit song", "1990s classic song", "90s pop hit", "90s dance hit"],
+    "2000s": ["2000s hit song", "2000s pop hit", "2000s rap hit", "2000s rnb hit"],
+    "2010s": ["2010s hit song", "2010s pop hit", "2010s rap hit", "2010s dance hit"],
+    # Moods
+    "love": ["love song", "romantic song", "love rnb song", "romantic pop ballad"],
+    "summer": ["summer hit song", "summer vibes song", "beach party song", "summer pop song"],
+    "roadtrip": ["road trip song", "driving song", "sing along road trip song", "night drive song"],
+    "halloween": ["halloween song", "spooky song", "halloween party song", "horror theme music"],
 }
 
 # What belongs on each station, for the AI that picks songs (and keeps the wrong genre out).
@@ -216,15 +254,29 @@ STATION_BRIEFS: dict[str, str] = {
     "gym": "hype workout songs: hard rap, phonk, rock anthems", "party": "party and club bangers",
     "gaming": "video game soundtracks and gaming anthems", "sleep": "calm ambient and piano music for sleeping",
     "christmas": "Christmas songs, classic and modern",
+    "trap": "trap: Atlanta trap, rage, modern trap bangers", "oldschool": "90s and early 2000s hip-hop: boom bap, "
+    "golden era, East and West Coast classics", "emorap": "emo rap and SoundCloud rap (Lil Peep, Juice WRLD style)",
+    "hyperpop": "hyperpop and digicore", "jpop": "Japanese pop (J-pop) and city pop, not only anime songs",
+    "cpop": "Chinese-language pop (Mandopop, Cantopop, C-pop)", "tiktok": "songs that went viral on TikTok",
+    "punk": "punk rock and pop punk", "emo": "emo and pop-punk anthems (2000s emo, midwest emo)",
+    "grunge": "grunge and 90s alternative rock", "hardstyle": "hardstyle and rawstyle",
+    "dubstep": "dubstep (brostep, riddim, melodic dubstep)", "trance": "trance (uplifting, progressive, psytrance)",
+    "ukgarage": "UK garage and 2-step", "soul": "soul, Motown and neo-soul", "funk": "funk classics and grooves",
+    "blues": "blues and blues rock", "spanish": "music from Spain: Spanish rap, pop and urbano (not Latin American)",
+    "polish": "Polish rap and pop", "greek": "Greek pop, laïko and Greek rap", "dutch": "Dutch-language rap and pop",
+    "70s": "hits from the 1970s", "80s": "hits from the 1980s", "90s": "hits from the 1990s",
+    "2000s": "hits from the 2000s", "2010s": "hits from the 2010s", "love": "love songs: romantic pop, R&B and ballads",
+    "summer": "summer hits and feel-good beach songs", "roadtrip": "road trip and driving sing-alongs",
+    "halloween": "Halloween and spooky songs",
 }
 GENRE_ALIASES = {"uk drill": "drill", "ukdrill": "drill", "german": "deutschrap", "german rap": "deutschrap",
                  "deutsch": "deutschrap", "hiphop": "rap", "hip-hop": "rap", "hip hop": "rap", "r&b": "rnb",
-                 "randb": "rnb", "old": "throwback", "oldies": "throwback", "classics": "throwback", "90s": "throwback",
-                 "00s": "throwback", "afrobeats": "afro", "dance": "edm", "electronic": "edm", "lo-fi": "lofi",
-                 "study": "lofi", "reggaeton": "latin", "spanish": "latin", "k-pop": "kpop", "korean": "kpop",
+                 "randb": "rnb", "old": "throwback", "oldies": "throwback", "classics": "throwback", "90s": "90s",
+                 "00s": "2000s", "afrobeats": "afro", "dance": "edm", "electronic": "edm", "lo-fi": "lofi",
+                 "study": "lofi", "reggaeton": "latin", "espanol": "spanish", "k-pop": "kpop", "korean": "kpop",
                  "grime": "uk", "uk rap": "uk", "ukrap": "uk", "british": "uk", "alternative": "indie", "alt": "indie",
-                 "heavy metal": "metal", "rockmetal": "metal", "dancehall": "reggae", "funk": "disco", "70s": "disco",
-                 "80s": "disco", "blues": "jazz", "japanese": "anime", "jpop": "anime", "j-pop": "anime",
+                 "heavy metal": "metal", "rockmetal": "metal", "dancehall": "reggae", "70s funk": "funk", "seventies": "70s",
+                 "eighties": "80s", "bluesrock": "blues", "japanese": "jpop", "j pop": "jpop", "j-pop": "jpop",
                  "orchestra": "classical", "piano": "classical", "workout": "gym", "training": "gym",
                  "sad songs": "sad", "heartbreak": "sad", "club": "party", "drum and bass": "dnb",
                  "drum & bass": "dnb", "d&b": "dnb", "jersey": "jerseyclub", "jersey club": "jerseyclub",
@@ -236,7 +288,19 @@ GENRE_ALIASES = {"uk drill": "drill", "ukdrill": "drill", "german": "deutschrap"
                  "russian rap": "russian", "france": "french", "francais": "french", "français": "french",
                  "rap fr": "french", "fr": "french", "italy": "italian", "italiano": "italian", "brazil": "brazilian",
                  "brasil": "brazilian", "funk brasileiro": "brazilian", "baile funk": "brazilian",
-                 "iranian": "persian", "farsi": "persian", "iran": "persian"}
+                 "iranian": "persian", "farsi": "persian", "iran": "persian",
+                 "atl": "trap", "rage": "trap", "boom bap": "oldschool", "old school": "oldschool",
+                 "90s rap": "oldschool", "90s hip hop": "oldschool", "emo rap": "emorap", "soundcloud": "emorap",
+                 "digicore": "hyperpop", "city pop": "jpop", "chinese": "cpop", "c-pop": "cpop", "mandopop": "cpop",
+                 "viral": "tiktok", "trending": "tiktok", "pop punk": "punk", "pop-punk": "punk", "midwest emo": "emo",
+                 "rawstyle": "hardstyle", "riddim": "dubstep", "brostep": "dubstep", "psytrance": "trance",
+                 "garage": "ukgarage", "uk garage": "ukgarage", "2step": "ukgarage", "2-step": "ukgarage",
+                 "motown": "soul", "neo soul": "soul", "español": "spanish", "spain": "spanish",
+                 "poland": "polish", "polski": "polish", "greece": "greek", "ελληνικά": "greek",
+                 "netherlands": "dutch", "nederlands": "dutch", "holland": "dutch", "1970s": "70s",
+                 "1980s": "80s", "1990s": "90s", "nineties": "90s", "2000": "2000s", "noughties": "2000s",
+                 "2010": "2010s", "10s": "2010s", "romantic": "love", "love songs": "love", "beach": "summer",
+                 "road trip": "roadtrip", "driving": "roadtrip", "drive": "roadtrip", "spooky": "halloween"}
 
 
 def resolve_genre(text: str) -> str | None:
@@ -251,12 +315,15 @@ def all_genres() -> list[str]:
 
 # How the station list is shown: (heading, stations).
 STATION_GROUPS: list[tuple[str, list[str]]] = [
-    ("🎤 Rap", ["rap", "drill", "uk", "deutschrap", "phonk"]),
-    ("🎧 Pop & R&B", ["pop", "rnb", "kpop", "latin", "afro", "anime"]),
-    ("🎸 Rock & more", ["rock", "metal", "indie", "country", "reggae"]),
-    ("🪩 Dance", ["edm", "house", "techno", "dnb", "amapiano", "jerseyclub", "disco", "synthwave", "nightcore"]),
+    ("🎤 Rap", ["rap", "trap", "drill", "uk", "deutschrap", "phonk", "oldschool", "emorap"]),
+    ("🎧 Pop & R&B", ["pop", "rnb", "kpop", "jpop", "cpop", "latin", "afro", "anime", "hyperpop", "tiktok"]),
+    ("🎸 Rock & more", ["rock", "metal", "punk", "emo", "grunge", "indie", "country", "reggae"]),
+    ("🪩 Dance", ["edm", "house", "techno", "dnb", "hardstyle", "dubstep", "trance", "ukgarage", "amapiano",
+                 "jerseyclub", "disco", "synthwave", "nightcore"]),
+    ("🎷 Soul & classics", ["soul", "funk", "blues", "jazz", "classical", "throwback"]),
+    ("📅 Decades", ["70s", "80s", "90s", "2000s", "2010s"]),
     ("🌍 Around the world", ["russian", "balkan", "turkish", "arabic", "persian", "bollywood", "french", "italian",
-                            "brazilian"]),
-    ("🕰️ Classics", ["throwback", "jazz", "classical"]),
-    ("✨ Moods", ["chill", "lofi", "sad", "gym", "party", "gaming", "sleep", "christmas"]),
+                            "spanish", "brazilian", "polish", "greek", "dutch"]),
+    ("✨ Moods", ["chill", "lofi", "sad", "love", "gym", "party", "summer", "roadtrip", "gaming", "sleep",
+                 "halloween", "christmas"]),
 ]
