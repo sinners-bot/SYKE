@@ -40,7 +40,6 @@ OPENER_HOURS = range(11, 24)    # local hours SYKE starts conversations in
 OPENER_MIN_ACTIVITY = 15        # messages in the channel over the last day: dead channels stay dead
 OPENER_GAP = 5 * 3600           # between openers in one channel
 OPENER_IGNORED_GAP = 12 * 3600  # after an opener nobody answered
-OPENER_DAILY = 2                # per server per day
 OPENER_CHANCE = 0.3             # per check once everything else allows it
 
 # A cheap first pass: first-person messages that mention something about their life.
@@ -255,7 +254,8 @@ class Human(commands.Cog, name="Human"):
         day = datetime.now(self.bot.tz_for(guild.id)).date().isoformat()
         if datetime.now(self.bot.tz_for(guild.id)).hour not in OPENER_HOURS:
             return None
-        if moments.get("opener_day") == day and int(moments.get("opener_count") or 0) >= OPENER_DAILY:
+        daily = self.bot.yap_pace(guild.id)[2]
+        if daily <= 0 or (moments.get("opener_day") == day and int(moments.get("opener_count") or 0) >= daily):
             return None
         for channel_id in self.storage.yap_channels(guild.id):
             seen = self._activity.get(channel_id)

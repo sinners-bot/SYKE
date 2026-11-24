@@ -392,3 +392,76 @@ async def test_conversation_starter_when_quiet(cog, monkeypatch):
     assert not await human.maybe_open(guild, now + 3600, chance=1.0)      # not again so soon
     data = bot.storage.get_config(GID, "human_moments")
     assert data["opener_count"] == 1
+
+
+# How talkative SYKE is
+
+def test_talk_levels_parse_numbers_and_names():
+    from syke.yap import talk_level
+    assert talk_level("0") == 0 and talk_level("7") == 7 and talk_level("chill") == 3
+    assert talk_level("MAX") == 7 and talk_level("off") == 0 and talk_level("default") == 4
+    assert talk_level("9") is None and talk_level("loud") is None and talk_level(None) is None
+
+
+async def test_talkative_command_sets_the_pace(cog):
+    bot = cog.bot
+    said = []
+
+    async def reply(content=None, **kwargs):
+        said.append(kwargs["embed"].title + " " + (kwargs["embed"].description or ""))
+
+    perms = types.SimpleNamespace(manage_guild=False, administrator=False)
+    ctx = types.SimpleNamespace(guild=types.SimpleNamespace(id=GID), reply=reply, prefix="$", clean_prefix="$",
+                                author=types.SimpleNamespace(id=5, guild_permissions=perms), interaction=None)
+    assert bot.yap_pace(GID) == (bot.settings.yap_chance, bot.settings.yap_cooldown, 2)   # Railway defaults
+    await cog.talkative.callback(cog, ctx, "7")
+    assert "Managers only" in said[-1] and bot.talk_level_of(GID) is None
+    perms.manage_guild = True
+    await cog.talkative.callback(cog, ctx, "quiet")
+    assert bot.talk_level_of(GID) == 2 and bot.yap_pace(GID) == (0.07, 300, 1) and "2 · Quiet" in said[-1]
+    await cog.talkative.callback(cog, ctx, "11")
+    assert "Pick a level" in said[-1]
+    await cog.talkative.callback(cog, ctx, None)
+    assert "➜ **2 · Quiet**" in said[-1] and "7 · Nonstop" in said[-1]
+    await cog.talkative.callback(cog, ctx, "0")
+    assert bot.yap_pace(GID) == (0.0, 0, 0)
+
+
+async def test_silent_never_yaps_and_nonstop_does(cog, monkeypatch):
+    bot = cog.bot
+    bot.storage.set_yap(GID, 10, True)
+    bot.storage.add_corpus(GID, [(1, 10, 100, "pizza is elite honestly"), (2, 10, 101, "who wants pizza fr")])
+    _voice(bot)
+    calls = []
+
+    async def fake_yap(message, reactions=None):
+        calls.append(message.id)
+        return None
+
+    monkeypatch.setattr(bot, "contextual_yap", fake_yap)
+    bot.storage.update_config(GID, "yap", level=0)
+    for i in range(30):
+        bot._last_yap.clear()
+        await bot.maybe_yap(_message(_channel(), "pizza?", mid=i))
+    assert not calls
+    bot.storage.update_config(GID, "yap", level=7)
+    monkeypatch.setattr("syke.bot.random.random", lambda: 0.5)          # under Nonstop's 80%
+    await bot.maybe_yap(_message(_channel(), "pizza?", mid=100))
+    assert calls == [100]
+    await bot.maybe_yap(_message(_channel(), "pizza?", mid=101))       # 12s gap between yaps
+    assert calls == [100]
+
+
+async def test_starters_follow_the_talk_level(cog, monkeypatch):
+    bot = cog.bot
+    human = Human(bot)
+    bot.storage.set_yap(GID, 10, True)
+    monkeypatch.setattr("syke.human.OPENER_HOURS", range(0, 24))
+    ch = _channel()
+    guild = types.SimpleNamespace(id=GID, get_channel=lambda cid: ch)
+    now = time.time()
+    human._activity[10].extend([now - 2 * 3600 + i for i in range(20)])
+    bot.storage.update_config(GID, "yap", level=0)
+    assert human.opener_channel(guild, now) is None
+    bot.storage.update_config(GID, "yap", level=7)
+    assert human.opener_channel(guild, now) is ch

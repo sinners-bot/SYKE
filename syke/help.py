@@ -67,11 +67,13 @@ CATALOG: list[Category] = [
     Category(
         "ai", "🤖", "AI & Chat", EVERYONE,
         "Talk to SYKE. @mention it anywhere and it yaps back in the server's own voice.",
-        ["ask", "yap"],
+        ["ask", "yap", "talkative"],
         {
             "ask": "Ask SYKE anything, like ChatGPT — works in DMs too. You can also just @mention it.",
             "yap": "Admin toggle: let SYKE chime into conversations on its own, in the server's voice. "
                    "@mention it or reply to it and it always answers.",
+            "talkative": "How often SYKE yaps here: `talkative` shows the levels, managers set `talkative 0-7` "
+                         "(0 silent … 4 normal … 7 nonstop) or a name like `talkative chill`. Also on `/yap talk:`.",
         },
     ),
     Category(
@@ -514,7 +516,7 @@ BRIEF = {
     "profile": "Full personality report", "iq": "IQ estimate", "aura": "Aura reading",
     "ship": "How well two people match", "top": "Trait leaderboard", "tldr": "Catch up on the chat",
     "mimic": "Talk like someone", "dexify": "Dramatic… pedro… pauses",
-    "ask": "Ask SYKE anything", "yap": "Let SYKE chime into chats",
+    "ask": "Ask SYKE anything", "yap": "Let SYKE chime into chats", "talkative": "How often SYKE yaps",
     "guess": "Who said it?", "afflict": "Stick an effect on someone", "puppet": "Script a puppet", "cure": "Remove an effect",
     "afflicted": "Who's afflicted",
     "emoji": "Add, steal or manage emojis", "sticker": "Add, steal or manage stickers",

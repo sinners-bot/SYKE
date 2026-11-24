@@ -516,3 +516,27 @@ def make_typo(text: str, rng: random.Random | None = None) -> tuple[str, str] | 
         return None
     words[i] = wrong
     return " ".join(words), word
+
+
+# How talkative SYKE is in a server: (name, chance per message, seconds between yaps, conversation starters a day)
+TALK_KEY = "yap"
+TALK_LEVELS = {
+    0: ("Silent", 0.0, 0, 0),
+    1: ("Rare", 0.03, 600, 1),
+    2: ("Quiet", 0.07, 300, 1),
+    3: ("Chill", 0.12, 150, 2),
+    4: ("Normal", 0.20, 75, 2),
+    5: ("Chatty", 0.35, 45, 3),
+    6: ("Yapper", 0.55, 25, 4),
+    7: ("Nonstop", 0.80, 12, 5),
+}
+TALK_WORDS = {name.lower(): level for level, (name, *_rest) in TALK_LEVELS.items()} | {
+    "off": 0, "none": 0, "low": 2, "default": 4, "medium": 4, "high": 6, "max": 7}
+
+
+def talk_level(value) -> int | None:
+    """A talkativeness level from "0"-"7" or a name ("chill", "max"); None if it isn't one."""
+    text = str(value or "").strip().lower()
+    if text.isdigit() and int(text) in TALK_LEVELS:
+        return int(text)
+    return TALK_WORDS.get(text)

@@ -117,8 +117,11 @@ from .yap import (
     detect_tone,
     emoji_id,
     pick_gif,
+    TALK_KEY,
+    TALK_LEVELS,
     folded,
     make_typo,
+    talk_level,
     offline_pick,
     query_weights,
     rank,
@@ -972,6 +975,19 @@ class Syke(commands.Bot):
                                    lore=self.lore_notes(guild_id), edge=self.edge_text(guild_id, upset),
                                    memory=self.memory_text(guild_id, message.author, chat), full=True)
 
+    def talk_level_of(self, guild_id: int) -> int | None:
+        """The server's talkativeness level, or None when it's never been set (the Railway defaults apply)."""
+        level = self.storage.get_config(guild_id, TALK_KEY).get("level")
+        return level if isinstance(level, int) and level in TALK_LEVELS else None
+
+    def yap_pace(self, guild_id: int) -> tuple[float, float, int]:
+        """(chance per message, seconds between yaps, conversation starters a day) for this server."""
+        level = self.talk_level_of(guild_id)
+        if level is None:
+            return self.settings.yap_chance, self.settings.yap_cooldown, TALK_LEVELS[4][3]
+        _, chance, cooldown, openers = TALK_LEVELS[level]
+        return chance, cooldown, openers
+
     # How dark SYKE is here, and what he remembers about people
 
     def edge_level(self, guild_id: int) -> int:
@@ -1334,9 +1350,10 @@ class Syke(commands.Bot):
         if message.channel.id not in self.storage.yap_channels(message.guild.id):
             return
         now = time.monotonic()
-        if now - self._last_yap.get(message.channel.id, -1e9) < self.settings.yap_cooldown:
+        chance, cooldown, _ = self.yap_pace(message.guild.id)
+        if now - self._last_yap.get(message.channel.id, -1e9) < cooldown:
             return
-        if random.random() >= self.settings.yap_chance:
+        if random.random() >= chance:
             return
         self._last_yap[message.channel.id] = now
         reactions: list = []
@@ -2787,19 +2804,74 @@ class SykeCommands(commands.Cog, name="SYKE"):
             body += f"\n⚠️ Couldn't read {', '.join(ch.mention for ch in unreadable)}."
         await ctx.reply(embed=notice("Collection complete 🧫", body, BRAND))
 
+    def talk_summary(self, guild_id: int) -> str:
+        level = self.bot.talk_level_of(guild_id)
+        chance, cooldown, _ = self.bot.yap_pace(guild_id)
+        if level is None:
+            return f"Normal (default: {chance:.0%} of messages, at most every {int(cooldown)}s)"
+        name = TALK_LEVELS[level][0]
+        if level == 0:
+            return "0 · Silent (only answers when pinged or replied to)"
+        return f"{level} · {name} ({chance:.0%} of messages, at most every {int(cooldown)}s)"
+
+    async def set_talk(self, ctx: commands.Context, value: str | None) -> None:
+        p = self.p(ctx)
+        if value is None:
+            lines = []
+            current = self.bot.talk_level_of(ctx.guild.id)
+            current = 4 if current is None else current
+            for n, (name, chance, cooldown, openers) in TALK_LEVELS.items():
+                how = ("never jumps in on his own" if n == 0 else
+                       f"{chance:.0%} of messages, at most every {cooldown}s, {openers} chat starter{'s' * (openers != 1)}/day")
+                lines.append(f"{'➜' if n == current else '•'} **{n} · {name}**: {how}")
+            await ctx.reply(embed=notice(f"🗣️ How talkative SYKE is: {self.talk_summary(ctx.guild.id)}",
+                                         "\n".join(lines) + "\n\nHe always answers when someone pings him or "
+                                         f"replies to him. Managers: `{p}talkative 0-7` (or a name, like "
+                                         f"`{p}talkative chill`).", BRAND), ephemeral=True)
+            return
+        if not is_admin(self.bot, ctx.author):
+            await ctx.reply(embed=notice("Managers only", "Only server managers can change how talkative SYKE is."),
+                            ephemeral=True)
+            return
+        level = talk_level(value)
+        if level is None:
+            await ctx.reply(embed=notice("Pick a level", f"Use 0-7 or a name: "
+                                         f"{', '.join(name.lower() for name, *_ in TALK_LEVELS.values())}."),
+                            ephemeral=True)
+            return
+        self.bot.storage.update_config(ctx.guild.id, TALK_KEY, level=level)
+        tip = "" if self.bot.storage.yap_channels(ctx.guild.id) or level == 0 else \
+            f"\nYap isn't on in any channel yet: use `{p}yap on` in one."
+        await ctx.reply(embed=notice("🗣️ Talkativeness set", f"SYKE is now **{self.talk_summary(ctx.guild.id)}**.{tip}",
+                                     BRAND))
+
+    @commands.command(name="talkative", aliases=["chatty", "yaplevel", "talkativeness"],
+                      help="How often SYKE yaps here: talkative 0-7 (managers change it)")
+    @commands.guild_only()
+    async def talkative(self, ctx: commands.Context, level: str | None = None) -> None:
+        await self.set_talk(ctx, level)
+
     @commands.hybrid_command(name="yap", description="Let SYKE chime in in the server's own words")
     @app_commands.describe(enabled="On: SYKE yaps in this channel now and then. Off: it stops.",
-                           channel="Channel to change. Leave empty for this one.")
+                           channel="Channel to change. Leave empty for this one.",
+                           talk="How talkative SYKE is in this server, from Silent to Nonstop")
+    @app_commands.choices(talk=[app_commands.Choice(name=f"{n} · {name}", value=n)
+                                for n, (name, *_r) in TALK_LEVELS.items()])
     @admin()
     async def yap(self, ctx: commands.Context, enabled: bool | None = None,
-                  channel: discord.TextChannel | None = None) -> None:
+                  channel: discord.TextChannel | None = None, talk: int | None = None) -> None:
         channel = channel or ctx.channel
         p = self.p(ctx)
+        if talk is not None:
+            await self.set_talk(ctx, str(talk))
+            if enabled is None:
+                return
         if enabled is None:
             active = [ch.mention for cid in self.bot.storage.yap_channels(ctx.guild.id)
                       if (ch := ctx.guild.get_channel(cid))]
             body = (f"SYKE is yapping in {', '.join(active)}." if active else "SYKE isn't yapping anywhere.")
             body += f"\nUse `{p}yap on` or `{p}yap off` in a channel to change it."
+            body += f"\nHow talkative: **{self.talk_summary(ctx.guild.id)}** (`{p}talkative` to change it)."
             await ctx.reply(embed=notice("Yap settings 🗣️", body, BRAND), ephemeral=True)
             return
 
