@@ -728,7 +728,21 @@ class Syke(commands.Bot):
         except Exception:
             log.exception("Pre-scan of %r failed", guild.name)
 
+    def note_dm(self, message) -> None:
+        """Keep SYKE's own list of DM conversations, for the dashboard (both directions)."""
+        mine = self.user is not None and getattr(message.author, "id", None) == self.user.id
+        person = getattr(message.channel, "recipient", None) if mine else message.author
+        if person is None or getattr(person, "id", None) is None or (not mine and getattr(person, "bot", False)):
+            return
+        created = getattr(message, "created_at", None)
+        at = created.timestamp() if created else time.time()
+        with contextlib.suppress(Exception):
+            self.storage.note_dm(person.id, getattr(person, "global_name", None) or getattr(person, "name", "") or "",
+                                 at)
+
     async def on_message(self, message: discord.Message) -> None:
+        if message.guild is None:
+            self.note_dm(message)
         # A prefix bug must not swallow every command. Slash commands don't come through here.
         if message.content is not None:
             try:

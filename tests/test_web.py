@@ -1091,3 +1091,70 @@ def test_html_escaping_blocks_injection():
 
 async def _noop():
     return None
+
+
+# Every DM, not just the ones Discord has open this session
+
+def test_dm_messages_are_recorded_both_ways(dash):
+    web, bot, guild = dash
+    bot._connection.user = types.SimpleNamespace(id=999, name="SYKE")
+    ada = types.SimpleNamespace(id=7, name="ada", global_name="Ada", bot=False)
+    when = types.SimpleNamespace(timestamp=lambda: 1_700_000_000)
+    bot.note_dm(types.SimpleNamespace(author=ada, channel=types.SimpleNamespace(recipient=ada), created_at=when))
+    syke = types.SimpleNamespace(id=999, name="SYKE", bot=True)
+    later = types.SimpleNamespace(timestamp=lambda: 1_700_000_500)
+    bot.note_dm(types.SimpleNamespace(author=syke, channel=types.SimpleNamespace(recipient=ada), created_at=later))
+    other_bot = types.SimpleNamespace(id=5, name="otherbot", bot=True)
+    bot.note_dm(types.SimpleNamespace(author=other_bot, channel=types.SimpleNamespace(recipient=other_bot),
+                                      created_at=when))
+    assert bot.storage.dm_contacts() == [(7, "Ada", 1_700_000_000, 1_700_000_500, 2)]
+
+
+async def test_dm_list_survives_restarts_and_opens_any_dm(dash, monkeypatch):
+    async with serving(dash) as (cl, web, bot, guild):
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        bot.storage.note_dm(7, "Ada", 1_700_000_000)                  # recorded before a restart
+        bob = _dm_channel(8, "bob", [])
+        monkeypatch.setattr(web, "_dm_channels", lambda: [bob])      # open this session
+        body = await (await cl.get("/dms")).text()
+        assert "Ada" in body and "Bob" in body and "href='/dm/7'" in body and "Find older DMs" in body
+        ada_dm = _dm_channel(7, "ada", [_fake_message(1, 7, "Ada", "hey SYKE", 1_700_000_000)])
+
+        async def fetch_user(uid):
+            return types.SimpleNamespace(id=uid, dm_channel=ada_dm, bot=False)
+
+        monkeypatch.setattr(bot, "fetch_user", fetch_user)
+        monkeypatch.setattr(bot, "get_user", lambda uid: None)        # not cached after the restart
+        resp = await cl.get("/dm/7")
+        assert resp.status == 200 and "hey SYKE" in await resp.text()
+
+
+async def test_finding_older_dms(dash, monkeypatch):
+    web, bot, guild = dash
+    monkeypatch.setattr("syke.web.DM_SCAN_GAP", 0)
+    bot.storage.add_corpus(1, [(1, 10, 7, "hi", 1.0, "Ada"), (2, 10, 8, "yo", 1.0, "Bob"), (3, 10, 9, "sup", 1.0, "Cy")])
+    talks = {7: [_fake_message(2, 999, "SYKE", "later", 1_700_000_500), _fake_message(1, 7, "Ada", "first", 1_700_000_000)],
+             8: []}
+
+    async def fetch_user(uid):
+        if uid == 9:
+            raise discord.NotFound(types.SimpleNamespace(status=404, reason="gone"), "unknown user")
+        async def hist(limit=None):
+            for m in talks[uid]:
+                yield m
+        return types.SimpleNamespace(id=uid, name=f"u{uid}", global_name=None, bot=False,
+                                     dm_channel=types.SimpleNamespace(history=hist))
+
+    monkeypatch.setattr(bot, "fetch_user", fetch_user)
+    monkeypatch.setattr(bot, "get_user", lambda uid: None)
+    web._dm_scan_state = {"running": True, "checked": 0, "found": 0, "total": 0}
+    await web._scan_dms()
+    assert web._dm_scan_state == {"running": False, "done": True, "checked": 3, "found": 1, "total": 3}
+    assert bot.storage.dm_contacts() == [(7, "u7", 1_700_000_000, 1_700_000_500, 2)]
+
+
+async def test_dm_search_needs_csrf(dash):
+    async with serving(dash) as (cl, web, bot, guild):
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        resp = await cl.post("/dms/scan", data={}, allow_redirects=False)
+        assert resp.status == 403

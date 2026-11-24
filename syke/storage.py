@@ -351,6 +351,13 @@ CREATE TABLE IF NOT EXISTS achievement_counts (
     value    REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (guild_id, user_id, counter)
 );
+CREATE TABLE IF NOT EXISTS dm_contacts (
+    user_id   INTEGER PRIMARY KEY,
+    name      TEXT NOT NULL DEFAULT '',
+    first_at  REAL NOT NULL,
+    last_at   REAL NOT NULL,
+    messages  INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS isolations (
     guild_id     INTEGER NOT NULL,
     user_id      INTEGER NOT NULL,
@@ -1583,3 +1590,22 @@ class Storage:
         rows = self._read("SELECT author_name FROM corpus WHERE guild_id = ? AND author_id = ? AND author_name != '' "
                           "ORDER BY created_at DESC LIMIT 1", (guild_id, user_id))
         return rows[0][0] if rows else ""
+
+    # Everyone SYKE has a DM conversation with (Discord can't list a bot's DMs, so SYKE keeps its own list)
+
+    def note_dm(self, user_id: int, name: str, at: float, count: int = 1) -> None:
+        self._write("INSERT INTO dm_contacts (user_id, name, first_at, last_at, messages) VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(user_id) DO UPDATE SET name = CASE WHEN excluded.name != '' THEN excluded.name "
+                    "ELSE name END, first_at = MIN(first_at, excluded.first_at), "
+                    "last_at = MAX(last_at, excluded.last_at), messages = messages + excluded.messages",
+                    (user_id, name or "", at, at, count))
+
+    def dm_contacts(self) -> list[tuple[int, str, float, float, int]]:
+        """(user_id, name, first_at, last_at, messages), most recent first."""
+        return [tuple(r) for r in self._read(
+            "SELECT user_id, name, first_at, last_at, messages FROM dm_contacts ORDER BY last_at DESC", ())]
+
+    def known_people(self, limit: int = 5000) -> list[int]:
+        """Everyone SYKE has seen talk anywhere, most active first (for finding older DMs)."""
+        return [r[0] for r in self._read("SELECT author_id FROM corpus GROUP BY author_id ORDER BY COUNT(*) DESC "
+                                         "LIMIT ?", (limit,))]
