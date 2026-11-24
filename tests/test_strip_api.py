@@ -317,3 +317,19 @@ def test_midtown_shop_items_are_buyable_without_a_storefront(env):
     before = db.econ_wallet(G, U)["cash"]
     svc.buy(G, U, "latte")
     assert db.econ_items(G, U)["latte"] == 1 and db.econ_wallet(G, U)["cash"] == before - sw.ITEM_BY_KEY["latte"].price
+
+
+def test_game_shift_has_its_own_pay_and_timer(env):
+    from syke import strip_api as sa
+    db, svc, clock = env
+    r = svc.work(G, U, 1.0, 1.0, shift=True)
+    assert sa.SHIFT_LOW <= r["amount"] <= sa.SHIFT_HIGH * 1.25 * 1.15 + 1
+    assert not db.econ_wallet(G, U)["work_at"]           # $work's own timer is untouched
+    svc.work(G, U)                                        # so $work still works
+    with pytest.raises(StripError) as e:
+        svc.work(G, U, 1.0, 1.0, shift=True)
+    assert e.value.code == "cooldown"
+    st = svc.state(G, U)
+    assert st["shift_ready_at"] > 0
+    clock.t += sa.SHIFT_COOLDOWN + 1
+    assert svc.work(G, U, 1.0, 1.0, shift=True)["amount"] > 0

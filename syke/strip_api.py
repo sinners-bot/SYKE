@@ -43,6 +43,10 @@ log = logging.getLogger("syke.strip_api")
 
 WORK_BONUS = (0.8, 1.2)    # how much a good or bad shift in the game can nudge SYKE's pay
 WORK_RANK = (1.0, 1.5)     # career rank in the game (Trainee x1.0 up to Manager x1.5)
+# A shift worked in the game is a few minutes of real play, not one command: it has its own pay and its own timer,
+# separate from $work (which keeps its own). Buffs, the career rank and the shift rating apply on top, as before.
+SHIFT_LOW, SHIFT_HIGH = 320, 620
+SHIFT_COOLDOWN = 20 * 60
 SPEND_MAX = 100_000        # biggest single cosmetic purchase (motel furniture, makeovers...)
 GRANT_MAX = 100            # biggest single in-game find (a wallet in a dumpster)
 GRANT_PER_HOUR = 300       # total in-game finds per player per hour
@@ -64,6 +68,9 @@ class StripService:
         self.rng = rng or random.Random()
         self.now = clock
         self._grants: dict[tuple[int, int], list[tuple[float, int]]] = {}
+        with storage._lock:
+            storage._conn.execute("CREATE TABLE IF NOT EXISTS strip_shift (guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, at REAL NOT NULL, PRIMARY KEY (guild_id, user_id))")
+            storage._conn.commit()
 
     # -- shared gates (mirror Economy._guard / _free) --
     def cfg(self, gid: int) -> dict:
@@ -108,6 +115,7 @@ class StripService:
             "jail_until": jail if jail > now else 0,
             "daily_ready_at": w["daily_at"] + eco.DAILY_COOLDOWN if w["daily_at"] else 0,
             "work_ready_at": w["work_at"] + eco.WORK_COOLDOWN if w["work_at"] else 0,
+            "shift_ready_at": (lambda t: t + SHIFT_COOLDOWN if t else 0)(self._shift_at(gid, uid)),
             "happy": self.happy(gid),
             "rewarded": bool(self.db.get_config(gid, "strip_game").get(f"goal_{uid}")),
             "now": now,
@@ -120,6 +128,7 @@ class StripService:
                               "pawn": sw.pawn_value(i.key)} for i in sw.ITEMS},
             "stores": {s.key: {"name": s.name, "price": s.price, "blurb": s.blurb} for s in sw.STORES},
             "work": {"low": eco.WORK_LOW, "high": eco.WORK_HIGH, "cooldown": eco.WORK_COOLDOWN},
+            "shift": {"low": SHIFT_LOW, "high": SHIFT_HIGH, "cooldown": SHIFT_COOLDOWN},
         }
 
     # -- earning (mirror Economy.daily / Economy.work) --
@@ -133,13 +142,23 @@ class StripService:
         self.db.econ_adjust(gid, uid, cash=amount, daily_at=now, streak=streak)
         return {"amount": amount, "streak": streak}
 
-    def work(self, gid: int, uid: int, bonus: float = 1.0, rank: float = 1.0) -> dict:
+    def _shift_at(self, gid: int, uid: int) -> float:
+        row = self.db._read("SELECT at FROM strip_shift WHERE guild_id=? AND user_id=?", (gid, uid))
+        return float(row[0][0]) if row else 0.0
+
+    def work(self, gid: int, uid: int, bonus: float = 1.0, rank: float = 1.0, shift: bool = False) -> dict:
         w = self.guard(gid, uid)
         self.free(w)
         now = self.now()
-        if w["work_at"] and now - w["work_at"] < eco.WORK_COOLDOWN:
-            raise StripError("cooldown", "You're beat. Next shift soon.", until=w["work_at"] + eco.WORK_COOLDOWN)
-        did, base = eco.work_shift(self.rng)
+        if shift:   # a shift played in the game: its own timer and scale
+            at = self._shift_at(gid, uid)
+            if at and now - at < SHIFT_COOLDOWN:
+                raise StripError("cooldown", "You're beat. Next shift soon.", until=at + SHIFT_COOLDOWN)
+            did, base = eco.work_shift(self.rng)[0], self.rng.randint(SHIFT_LOW, SHIFT_HIGH)
+        else:
+            if w["work_at"] and now - w["work_at"] < eco.WORK_COOLDOWN:
+                raise StripError("cooldown", "You're beat. Next shift soon.", until=w["work_at"] + eco.WORK_COOLDOWN)
+            did, base = eco.work_shift(self.rng)
         boost = self.happy(gid)
         perks = []
         for buff in self.db.econ_buffs(gid, uid, now):
@@ -149,7 +168,11 @@ class StripService:
         bonus = min(max(float(bonus), WORK_BONUS[0]), WORK_BONUS[1])
         rank = min(max(float(rank), WORK_RANK[0]), WORK_RANK[1])   # the game's career rank: a promotion raises the rate
         amount = int(base * boost * bonus * rank)
-        self.db.econ_adjust(gid, uid, cash=amount, work_at=now)
+        if shift:
+            self.db.econ_adjust(gid, uid, cash=amount)
+            self.db._write("INSERT INTO strip_shift VALUES (?, ?, ?) ON CONFLICT(guild_id, user_id) DO UPDATE SET at=excluded.at", (gid, uid, now))
+        else:
+            self.db.econ_adjust(gid, uid, cash=amount, work_at=now)
         return {"amount": amount, "did": did.replace("**", ""), "boost": round(boost, 2), "bonus": round(bonus, 2), "rank": round(rank, 2),
                 "perks": perks}
 
@@ -197,6 +220,7 @@ class StripService:
             return {"result": "scratch", "prize": prize}
         if key == "energy":
             self.db.econ_adjust(gid, uid, work_at=0)
+            self.db._write("DELETE FROM strip_shift WHERE guild_id=? AND user_id=?", (gid, uid))
             return {"result": "energy"}
         if key == "bag":
             got = sw.open_bag(self.rng)
@@ -335,7 +359,7 @@ class StripAPI:
         return {
             "state": lambda g, u, b: {},
             "daily": lambda g, u, b: s.daily(g, u),
-            "work": lambda g, u, b: s.work(g, u, b.get("bonus", 1.0), b.get("rank", 1.0)),
+            "work": lambda g, u, b: s.work(g, u, b.get("bonus", 1.0), b.get("rank", 1.0), bool(b.get("shift"))),
             "buy": lambda g, u, b: s.buy(g, u, b.get("item"), b.get("qty", 1)),
             "use": lambda g, u, b: s.use(g, u, b.get("item")),
             "pawn": lambda g, u, b: s.pawn(g, u, b.get("item"), b.get("qty", 1)),
