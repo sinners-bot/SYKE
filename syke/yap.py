@@ -67,6 +67,7 @@ class Turn:
     author: str
     text: str
     reply_to: str = ""   # "Name: what they said" when this message answers someone
+    author_id: int = 0
 
 
 def folded(text: str) -> str:
@@ -492,3 +493,26 @@ def remixes(chain: MarkovChain | None, weights: dict[str, float], tone: str, cou
         if topical or vibe >= 0.5:
             scored[line] = topical + min(vibe, 2.0) * 0.5
     return sorted(scored, key=scored.get, reverse=True)[:count]
+
+
+def make_typo(text: str, rng: random.Random | None = None) -> tuple[str, str] | None:
+    """`text` with one word mistyped the way thumbs do (swap, drop or double a letter), plus the right word."""
+    rng = rng or random
+    words = text.split(" ")
+    spots = [i for i, w in enumerate(words) if re.fullmatch(r"[A-Za-z]{5,}", w)]
+    if not spots:
+        return None
+    i = rng.choice(spots)
+    word = words[i]
+    j = rng.randrange(1, len(word) - 2)
+    kind = rng.choice(("swap", "drop", "double"))
+    if kind == "swap" and word[j] != word[j + 1]:
+        wrong = word[:j] + word[j + 1] + word[j] + word[j + 2:]
+    elif kind == "drop":
+        wrong = word[:j] + word[j + 1:]
+    else:
+        wrong = word[:j] + word[j] + word[j:]
+    if wrong == word:
+        return None
+    words[i] = wrong
+    return " ".join(words), word

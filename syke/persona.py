@@ -628,7 +628,8 @@ class Persona(commands.Cog, name="Persona"):
                 core.bond_label(self.bond(guild.id, author.id))[0]
             with contextlib.suppress(Exception):
                 data = await ai._complete(self.bot.settings, CALLOUT_PROMPT.format(
-                    name=name, promise=text, when=when, mood=mood, bond=label), "Write it.", 1.0, 12)
+                    name=name, promise=text, when=when, mood=mood, bond=label) + "\n\n" +
+                    self.bot.edge_text(guild.id), "Write it.", 1.0, 12)
                 line = ai.public_text(data.get("reply"), 300)
                 if line:
                     return line

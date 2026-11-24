@@ -8,6 +8,8 @@ import logging
 import os
 import random
 import re
+
+import emoji as emoji_lib
 import sys
 import time
 from dataclasses import replace
@@ -19,6 +21,10 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from .human import Human
+from .edge import EDGE_KEY, edge_rules
+from .persona_core import ago
+from .edge import clamp as edge_clamp
 from .ai import NO_PICK, compose_reply, pick_line, write_roast, write_ship_blurb, write_tldr
 from .ask import AskUnavailable, ask
 from .cards import MESSAGE_VIEW_TIMEOUT, ProfileView, aura_page, build_pages, iq_page, leaderboard_page
@@ -111,6 +117,7 @@ from .yap import (
     emoji_id,
     pick_gif,
     folded,
+    make_typo,
     offline_pick,
     query_weights,
     rank,
@@ -153,7 +160,13 @@ YAP_REPLY_COOLDOWN = 4
 YAP_SEARCH = 150
 YAP_RANDOM = 40
 YAP_CONTEXT = 20
-PICK_SHOWN = 30           # best-matching real lines the AI chooses a random yap from
+PICK_SHOWN = 30
+TYPO_CHANCE = 0.04          # a reply goes out with a typo, fixed with "*word" a second later
+EDIT_INSTEAD = 0.15         # of two-part replies: edit the first message instead of sending a second
+NVM_CHANCE = 0.006          # very rarely: delete the reply and send "nvm"
+REACT_WITH_REPLY = 0.35     # when the AI suggests a reaction and also replies, react too this often
+YAP_REACT_ONLY = 0.3        # jumping in: just react to the message instead of saying something
+YAP_REACT_LATER = 0.3       # ...and sometimes still say something a bit later           # best-matching real lines the AI chooses a random yap from
 YAP_TONED = 40
 YAP_CHAIN_SIZE = 15000
 YAP_CHAIN_TTL = 600
@@ -362,6 +375,7 @@ class Syke(commands.Bot):
         self._warmed = False
         self._last_yap: dict[int, float] = {}
         self._last_comeback: dict[tuple[int, int], float] = {}
+        self.human_pace = 1.0   # scales the gaps between split messages (tests set 0)
         self._recent_yaps: dict[int, list[str]] = {}
         self._last_ask: dict[int, float] = {}
         self._asks: dict[int, list[dict]] = {}
@@ -410,6 +424,7 @@ class Syke(commands.Bot):
         await self.add_cog(Rivalry(self))
         await self.add_cog(Achievements(self))
         await self.add_cog(Lore(self))
+        await self.add_cog(Human(self))
         if self.settings.web_enabled:
             try:
                 from .web import WebDashboard
@@ -946,11 +961,69 @@ class Syke(commands.Bot):
         log.info("Yap in %s: tone %s, %d candidates (%d remixes)", guild_id, tone, len(ranked), len(remixed))
         target_turn = Turn(self.speaker_name(message.author), self.turn_text(message) if target is None else text,
                            "" if said else self.replied_to(message))
+        upset = " ".join([text] + [t.text for t in chat[-4:] if t.author_id == message.author.id])
         return await compose_reply(self.settings, ranked, target_turn,
                                    chat, said, tone, remixed, avoid=list(used),
                                    voice=await self.server_voice(guild_id), weights=weights,
                                    state=self.persona_state(message.guild, message.author, chat),
-                                   lore=self.lore_notes(guild_id))
+                                   lore=self.lore_notes(guild_id), edge=self.edge_text(guild_id, upset),
+                                   memory=self.memory_text(guild_id, message.author, chat), full=True)
+
+    # How dark SYKE is here, and what he remembers about people
+
+    def edge_level(self, guild_id: int) -> int:
+        return edge_clamp(self.storage.get_config(guild_id, EDGE_KEY).get("level", 0))
+
+    def edge_text(self, guild_id: int, upset_text: str = "") -> str:
+        return edge_rules(self.edge_level(guild_id), upset_text)
+
+    def memory_text(self, guild_id: int, author, chat: list[Turn] = ()) -> str:
+        """What SYKE knows about the person he's answering and the others in the chat, for the prompt."""
+        now = time.time()
+        optouts = self.storage.optouts(guild_id)
+        people = [(getattr(author, "id", 0), self.speaker_name(author))]
+        for t in reversed(list(chat)):
+            if t.author_id and t.author_id not in {p for p, _ in people} and t.author != "SYKE":
+                people.append((t.author_id, t.author))
+        lines = []
+        for i, (uid, name) in enumerate(people[:4]):
+            if not uid or uid in optouts:
+                continue
+            main = i == 0
+            facts = self.storage.memories(guild_id, uid, "fact", 6 if main else 3)
+            bits = self.storage.memories(guild_id, uid, "bit", 4 if main else 2)
+            if facts:
+                lines.append(f"About {name}: " + "; ".join(f"{t} ({ago(now - c)})" for t, c in facts))
+            if bits:
+                lines.append(f"Running bits with {name}: " + "; ".join(t for t, _ in bits))
+            if main:
+                talks = [(t, c) for t, c in self.storage.memories(guild_id, uid, "talk", 8) if now - c > 1800][:4]
+                if talks:
+                    lines.append(f"Your earlier talks with {name}: " +
+                                 " | ".join(f"({ago(now - c)}) {t}" for t, c in reversed(talks)))
+        return "\n".join(lines)
+
+    def remember_turn(self, guild_id: int, author, their_text: str, turn: dict) -> None:
+        """Keep what was said, plus any fact or running bit the AI noticed about them."""
+        uid = getattr(author, "id", 0)
+        if not uid or uid in self.storage.optouts(guild_id):
+            return
+        mine = turn.get("reply") or turn.get("react") or ""
+        if turn.get("reply2"):
+            mine += f" / {turn['reply2']}"
+        self.storage.add_memory(guild_id, uid, "talk",
+                                f"{self.speaker_name(author)}: {' '.join(their_text.split())[:140]} → you: {mine[:140]}")
+        fact = turn.get("remember")
+        if isinstance(fact, dict) and str(fact.get("fact") or "").strip():
+            try:
+                days = max(1, min(14, int(fact.get("days") or 3)))
+            except (TypeError, ValueError):
+                days = 3
+            follow = str(fact.get("followup") or "").strip()
+            self.storage.add_memory(guild_id, uid, "fact", str(fact["fact"]), follow,
+                                    time.time() + days * 86400 if follow else 0)
+        if str(turn.get("bit") or "").strip():
+            self.storage.add_memory(guild_id, uid, "bit", str(turn["bit"]))
 
     def lore_notes(self, guild_id: int) -> list[str]:
         """The server's in-jokes SYKE already worked out (from `lore`), so replies can get the references."""
@@ -981,7 +1054,8 @@ class Syke(commands.Bot):
                 text = self.turn_text(m)
                 if not text or (m.content and self.is_command_text(message.guild.id, m.content)):
                     continue
-                turns.append(Turn(self.turn_name(m.author), text, self.replied_to(m)))
+                turns.append(Turn(self.turn_name(m.author), text, self.replied_to(m),
+                                  getattr(m.author, "id", 0) or 0))
         except discord.HTTPException:
             return []
         return turns[::-1]
@@ -1029,10 +1103,76 @@ class Syke(commands.Bot):
         prompt = target if target is not None else message.content
         async with message.channel.typing():
             used = set(self.recent_yaps(message.channel.id)) | {prompt, message.content}
-            reply = await self.build_yap(message, said, target) or self.pick_yap(
-                message.guild.id, exclude_id=message.id, exclude=used)
-        if reply:
-            await self._send_yap(message, reply, reply_to=True)
+            turn = await self.build_yap(message, said, target)
+            if isinstance(turn, str):
+                turn = {"reply": turn}
+            if not turn:
+                fallback = self.pick_yap(message.guild.id, exclude_id=message.id, exclude=used)
+                turn = {"reply": fallback} if fallback else None
+        if turn:
+            await self.deliver_turn(message, turn)
+            self.remember_turn(message.guild.id, message.author, prompt, turn)
+
+    async def deliver_turn(self, message: discord.Message, turn: dict) -> None:
+        """Answer like a person texting: maybe a reaction, the reply (now and then with a typo and a *fix),
+        maybe a second quick message; very rarely an edit or a 'nvm'."""
+        guild = message.guild
+        react = self.usable_reaction(guild, turn.get("react"))
+        reply, second = (turn.get("reply") or "").strip(), (turn.get("reply2") or "").strip()
+        if react and (not reply or random.random() < REACT_WITH_REPLY):
+            with contextlib.suppress(discord.HTTPException):
+                await message.add_reaction(react)
+        if not reply:
+            return
+        voice = await self.server_voice(guild.id)
+        text = self._text_with_emoji(guild, voice, reply)
+        typo = make_typo(text) if random.random() < TYPO_CHANCE else None
+        am = discord.AllowedMentions.none()
+        try:
+            sent = await message.reply(typo[0] if typo else text, mention_author=False, allowed_mentions=am)
+        except discord.HTTPException:
+            return
+        self.remember_yap(message.channel.id, reply)
+        send = getattr(message.channel, "send", None)
+        if typo and send is not None:
+            await self.pause(1.0, 2.5)
+            with contextlib.suppress(discord.HTTPException):
+                await send(f"*{typo[1]}", allowed_mentions=am)
+        if second and send is not None:
+            await self.pause(1.5, 4.0, message.channel)
+            with contextlib.suppress(discord.HTTPException):
+                if random.random() < EDIT_INSTEAD and not typo:
+                    await sent.edit(content=f"{text}\n{second}", allowed_mentions=am)   # "(edited)": added a thought
+                else:
+                    await send(second, allowed_mentions=am)
+                self.remember_yap(message.channel.id, second)
+        elif not typo and send is not None and random.random() < NVM_CHANCE:
+            await self.pause(4.0, 9.0)
+            with contextlib.suppress(discord.HTTPException):
+                await sent.delete()
+                await send("nvm", allowed_mentions=am)
+
+    async def pause(self, low: float, high: float, channel=None) -> None:
+        """A human-sized gap between messages, typing if `channel` is given."""
+        wait = random.uniform(low, high) * self.human_pace
+        if channel is not None and hasattr(channel, "typing"):
+            with contextlib.suppress(discord.HTTPException):
+                async with channel.typing():
+                    await asyncio.sleep(wait)
+                return
+        await asyncio.sleep(wait)
+
+    def usable_reaction(self, guild, value) -> str | None:
+        """A reaction SYKE can actually add: one unicode emoji, or a custom emoji of this server."""
+        value = str(value or "").strip()
+        if not value:
+            return None
+        custom = re.fullmatch(r"<a?:\w+:(\d+)>", value)
+        if custom:
+            ids = {e.id for e in getattr(guild, "emojis", ()) or ()}
+            return value if int(custom.group(1)) in ids else None
+        found = emoji_lib.emoji_list(value)
+        return found[0]["emoji"] if len(found) == 1 and found[0]["emoji"] == value.replace(" ", "") else None
 
     async def recent_stickers(self, message: discord.Message, limit: int = YAP_STICKER_SCAN) -> list:
         """Guild stickers members have posted in this channel lately (so SYKE can send them back)."""
@@ -1165,7 +1305,7 @@ class Syke(commands.Bot):
             return text
         return fallback
 
-    async def contextual_yap(self, message: discord.Message) -> str | None:
+    async def contextual_yap(self, message: discord.Message, reactions: list | None = None) -> str | None:
         """Something a member really said, word for word, picked to fit what's being talked about
         (random if nothing fits). Jumping in unprompted, SYKE only ever repeats the server."""
         guild_id = message.guild.id
@@ -1178,7 +1318,7 @@ class Syke(commands.Bot):
         lines = [text for _, text in ranked[:PICK_SHOWN]]
         choice = await pick_line(self.settings, chat + [Turn(self.turn_name(message.author),
                                                              self.turn_text(message), self.replied_to(message))],
-                                 lines, tone)
+                                 lines, tone, reactions)
         if choice == NO_PICK:
             log.info("Yap in %s: nothing fits, staying quiet", guild_id)
             return None
@@ -1196,7 +1336,15 @@ class Syke(commands.Bot):
         if random.random() >= self.settings.yap_chance:
             return
         self._last_yap[message.channel.id] = now
-        line = await self.contextual_yap(message)
+        reactions: list = []
+        line = await self.contextual_yap(message, reactions)
+        react = self.usable_reaction(message.guild, reactions[0]) if reactions else None
+        if react and random.random() < YAP_REACT_ONLY:
+            with contextlib.suppress(discord.HTTPException):
+                await message.add_reaction(react)   # sometimes a reaction says it all
+            if line is None or random.random() >= YAP_REACT_LATER:
+                return
+            await self.pause(15.0, 45.0)            # ...and a bit later, something to say after all
         if line is None:
             return
         await self._send_yap(message, line, reply_to=False)
@@ -1315,7 +1463,9 @@ class Syke(commands.Bot):
         server: ServerAnalysis | None = None,
     ) -> None:
         key = (ctx.guild.id, profile.user_id)
-        await write_roast(profile, self.settings, server_emojis(ctx.guild), avoid=self._last_summary.get(key))
+        darker = {"edge": self.edge_text(ctx.guild.id)} if self.edge_level(ctx.guild.id) else {}
+        await write_roast(profile, self.settings, server_emojis(ctx.guild), avoid=self._last_summary.get(key),
+                          **darker)
         if profile.ai_used:
             self._last_summary[key] = profile.summary
         if profile.ai_labels:

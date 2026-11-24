@@ -7,6 +7,7 @@ mimic and yap, and, for rows with timestamps, profiles too. Opted-out members' r
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -350,6 +351,18 @@ CREATE TABLE IF NOT EXISTS achievement_counts (
     value    REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (guild_id, user_id, counter)
 );
+CREATE TABLE IF NOT EXISTS syke_memory (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id   INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL,
+    kind       TEXT NOT NULL,              -- fact | bit | talk
+    text       TEXT NOT NULL,
+    followup   TEXT NOT NULL DEFAULT '',   -- for facts: what to ask later ("how'd the exam go")
+    due        REAL NOT NULL DEFAULT 0,    -- when to ask it (0 = never)
+    asked      INTEGER NOT NULL DEFAULT 0,
+    created    REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS syke_memory_user ON syke_memory (guild_id, user_id, kind, created);
 CREATE TABLE IF NOT EXISTS persona_diary (
     guild_id   INTEGER NOT NULL,
     day        TEXT NOT NULL,
@@ -443,6 +456,7 @@ class Storage:
     def set_optout(self, guild_id: int, user_id: int, opted_out: bool) -> bool:
         if opted_out:
             self.forget(guild_id, user_id)
+            self.forget_person(guild_id, user_id)
             return self._write("INSERT OR IGNORE INTO optouts VALUES (?, ?)", (guild_id, user_id)) > 0
         return self._write(
             "DELETE FROM optouts WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)
@@ -1455,3 +1469,55 @@ class Storage:
             "ON CONFLICT(guild_id) DO UPDATE SET demo_mode = excluded.demo_mode",
             (guild_id, int(enabled)),
         )
+
+    # SYKE's memory of people: facts they mentioned, running bits, past conversations
+
+    MEMORY_KEEP = {"fact": 40, "bit": 8, "talk": 12}
+
+    def add_memory(self, guild_id: int, user_id: int, kind: str, text: str, followup: str = "",
+                   due: float = 0, now: float | None = None) -> int:
+        """Remember something about a person; near-duplicates of a recent memory are skipped."""
+        now = time.time() if now is None else now
+        text = " ".join(text.split())[:300]
+        if not text:
+            return 0
+        key = re.sub(r"\W+", " ", text.casefold()).strip()
+        for (old,) in self._read("SELECT text FROM syke_memory WHERE guild_id = ? AND user_id = ? AND kind = ? "
+                                 "ORDER BY created DESC LIMIT 30", (guild_id, user_id, kind)):
+            if re.sub(r"\W+", " ", old.casefold()).strip() == key:
+                return 0
+        new_id = self._insert("INSERT INTO syke_memory (guild_id, user_id, kind, text, followup, due, created) "
+                              "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                              (guild_id, user_id, kind, text, followup[:200], due, now))
+        keep = self.MEMORY_KEEP.get(kind, 20)
+        self._write("DELETE FROM syke_memory WHERE guild_id = ? AND user_id = ? AND kind = ? AND id NOT IN "
+                    "(SELECT id FROM syke_memory WHERE guild_id = ? AND user_id = ? AND kind = ? "
+                    "ORDER BY created DESC LIMIT ?)", (guild_id, user_id, kind, guild_id, user_id, kind, keep))
+        return new_id
+
+    def memories(self, guild_id: int, user_id: int, kind: str, limit: int = 8) -> list[tuple[str, float]]:
+        """(text, created) newest first."""
+        return [(t, c) for t, c in self._read(
+            "SELECT text, created FROM syke_memory WHERE guild_id = ? AND user_id = ? AND kind = ? "
+            "ORDER BY created DESC LIMIT ?", (guild_id, user_id, kind, limit))]
+
+    def due_followup(self, guild_id: int, user_id: int, now: float | None = None,
+                     max_age: float = 21 * 86400) -> tuple[int, str, str] | None:
+        """(id, fact, followup) of the oldest follow-up that's due and still fresh enough to ask."""
+        now = time.time() if now is None else now
+        rows = self._read("SELECT id, text, followup FROM syke_memory WHERE guild_id = ? AND user_id = ? "
+                          "AND kind = 'fact' AND followup != '' AND asked = 0 AND due > 0 AND due <= ? "
+                          "AND due >= ? ORDER BY due LIMIT 1", (guild_id, user_id, now, now - max_age))
+        return tuple(rows[0]) if rows else None
+
+    def mark_asked(self, memory_id: int) -> None:
+        self._write("UPDATE syke_memory SET asked = 1 WHERE id = ?", (memory_id,))
+
+    def forget_person(self, guild_id: int, user_id: int) -> int:
+        return self._write("DELETE FROM syke_memory WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
+
+    def last_seen(self, guild_id: int, user_id: int, before_id: int = 0) -> float | None:
+        """When this person last said something SYKE stored (excluding message `before_id`)."""
+        rows = self._read("SELECT MAX(created_at) FROM corpus WHERE guild_id = ? AND author_id = ? "
+                          "AND message_id != ?", (guild_id, user_id, before_id))
+        return rows[0][0] if rows and rows[0][0] else None

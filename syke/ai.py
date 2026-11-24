@@ -259,6 +259,7 @@ async def write_roast(
     server_emojis: dict[str, str] | None = None,
     avoid: str | None = None,
     rng: random.Random | None = None,
+    edge: str = "",
 ) -> Profile:
     """Fill in `profile.summary`, and with AI also highlights, message labels and trait scores. Never raises.
 
@@ -273,6 +274,8 @@ async def write_roast(
     sample = _sample_messages(profile)
     emojis = server_emojis or {}
     user_prompt = _user_prompt(profile, sample, rng.choice(STYLES), list(emojis), avoid)
+    if edge:
+        user_prompt += f"\n\n{edge}"
     try:
         if settings.ai_provider == "openai":
             reply = await _call_openai(settings, SYSTEM_PROMPT, user_prompt)
@@ -336,8 +339,20 @@ do something you do it (with attitude). Never recite the state like a report.
 - Never attack identity (race, religion, gender, sexuality, disability), no slurs, never tell anyone \
 to hurt themselves, never anything sexual about minors, and never @mention anyone.
 
+- Text like a person: about one time in four, when it's natural, send the thought as two quick messages \
+("nah" … "that's actually crazy") — put the second in "reply2". You may also put ONE emoji reaction on \
+their message ("react"), the way people react 👀 or 😂 to a text. If their message needs no answer (just \
+"lol", "ok", "gn", a laugh at your joke), you can only react and leave "reply" empty.
+- MEMORY is what you know about the people here: facts they told the server, running bits you have with \
+them, and your past conversations. Use it like a friend would — bring something up when it fits, call back \
+to yesterday — but never recite it, and never mention having a memory.
+- If the TARGET tells you something about their own life worth remembering for days (an exam on Friday, a \
+new dog, the game they main, a trip, a breakup), put it in "remember" — what it is, what a friend would \
+ask later (or ""), and in how many days to ask. If a new running joke with them comes up, put it in "bit".
+
 Reply with JSON only: {"read": "<one short line: what's going on and what they want>", \
-"reply": "<your message>"}"""
+"reply": "<your message>", "reply2": "<optional second message or \"\">", "react": "<optional emoji or \"\">", \
+"remember": {"fact": "...", "followup": "...", "days": 3} or null, "bit": "<optional or \"\">"}"""
 
 
 def _style_block(voice: Voice | None, skip: list[str] = (), rng: random.Random | None = None) -> str:
@@ -387,13 +402,26 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
                         chat: list[Turn] = (), said: str | None = None, tone: str = DEFAULT_TONE,
                         remixed: list[str] = (), avoid: list[str] = (), voice: Voice | None = None,
                         rng: random.Random | None = None, weights: dict[str, float] | None = None,
-                        state: str = "", lore: list[str] = ()) -> str | None:
+                        state: str = "", lore: list[str] = (), edge: str = "", memory: str = "",
+                        full: bool = False):
     """The best reply to `target` in the server's words and the chat's tone. Never raises.
 
     With AI, stored messages and Markov `remixed` lines are ammunition for a new message written
     from the server's `voice` (vocabulary + lexicon words); offline, the best-ranked line is used.
-    `avoid` is recent SYKE lines that must not be reused.
+    `avoid` is recent SYKE lines that must not be reused. `edge` is the server's edge rules and `memory`
+    what SYKE knows about the people talking. With `full`, returns the whole turn as a dict (reply, reply2,
+    react, remember, bit) instead of just the reply.
     """
+    def done(reply, data=None):
+        if not full:
+            return reply
+        if not reply and not (data or {}).get("react"):
+            return None
+        out = {"reply": reply or "", "reply2": "", "react": "", "remember": None, "bit": ""}
+        if data:
+            out.update({k: data.get(k) for k in ("reply2", "react", "remember", "bit") if data.get(k)})
+        return out
+
     banned = {target.text} | ({said} if said else set()) | set(avoid)
     banned_keys = {folded(t) for t in banned if t}
     remix_set = set(remixed)
@@ -401,7 +429,7 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
     raw = real[:COMPOSE_CANDIDATES - len(remix_set)] + list(remixed)
     fresh = [text for text in raw if folded(text) not in banned_keys]
     candidates = fresh or raw
-    if not candidates:
+    if not candidates and not (full and settings.ai_provider != "none"):
         return None
     if settings.ai_provider != "none":
         situation = (f"SYKE SAID: {said[:300]}\nTHEY REPLIED (TARGET): " if said
@@ -421,6 +449,10 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
             prompt += f"\n\nSYKE ALREADY SAID (do not repeat or lightly rephrase):\n{already}"
         if state:
             prompt += f"\n\n{state}"
+        if memory:
+            prompt += f"\n\nMEMORY:\n{memory}"
+        if edge:
+            prompt += f"\n\n{edge}"
         emojis = {m.group(1): m.group(0) for text in [*candidates, *vocab.emojis]
                   for m in CUSTOM_EMOJI_RE.finditer(text)}
         cap = reply_cap(voice)
@@ -428,9 +460,16 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
         for attempt in range(2):
             try:
                 answer = await _call_chat(settings, COMPOSE_PROMPT, prompt, temperature=0.9)
-                reply = tidy_reply(_parse_json(answer).get("reply"), candidates, banned, voice)
+                data = _parse_json(answer)
+                reply = tidy_reply(data.get("reply"), candidates, banned, voice)
                 if reply:
-                    return with_server_emojis(reply, emojis)
+                    reply = with_server_emojis(reply, emojis)
+                    second = tidy_reply(data.get("reply2"), candidates, banned | {reply}, voice) \
+                        if data.get("reply2") else None
+                    data["reply2"] = with_server_emojis(second, emojis) if second else ""
+                    return done(reply, data)
+                if full and data.get("react") and not str(data.get("reply") or "").strip():
+                    return done("", data)   # a reaction is the whole answer
                 log.warning("AI yap reply unusable (try %d): %r", attempt + 1, answer[:200])
                 prompt += (f"\n\nYour last reply was unusable: keep it under {cap} words, in your own words "
                            "(never copy AMMO), no links. Try again.")
@@ -438,7 +477,7 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
                 log.exception("AI yap reply failed; matching keywords instead")
                 break
     usable = [(score, text) for score, text in ranked if folded(text) not in banned_keys]
-    return offline_pick(usable) or offline_pick(ranked)
+    return done(offline_pick(usable) or offline_pick(ranked))
 
 
 PICK_PROMPT = """You are SYKE, a regular in this Discord server. You may jump into the chat by sending ONE \
@@ -453,13 +492,17 @@ answers to questions nobody asked, plans for a specific day), commands, and line
 - Funny, sharp or relatable beats bland. A short line that fits beats a long one that half-fits.
 - If no line truly fits, pick none: staying quiet is better than a random line.
 
-Reply with JSON only: {"why": "<few words>", "pick": <line number or null>}"""
+Also say which ONE emoji you'd react to the latest message with, if a person would ("react", or "").
+
+Reply with JSON only: {"why": "<few words>", "pick": <line number or null>, "react": "<emoji or \"\">"}"""
 
 NO_PICK = -1
 
 
-async def pick_line(settings: Settings, chat: list[Turn], lines: list[str], tone: str = DEFAULT_TONE) -> int | None:
-    """Which stored line SYKE should repeat now: its index, NO_PICK when none fits, None without AI."""
+async def pick_line(settings: Settings, chat: list[Turn], lines: list[str], tone: str = DEFAULT_TONE,
+                    reactions: list | None = None) -> int | None:
+    """Which stored line SYKE should repeat now: its index, NO_PICK when none fits, None without AI.
+    The emoji the AI would react with is appended to `reactions` when given."""
     if settings.ai_provider == "none" or not lines:
         return None
     numbered = "\n".join(f"[{i}] {readable(' '.join(t.split()))[:200]}" for i, t in enumerate(lines))
@@ -469,6 +512,8 @@ async def pick_line(settings: Settings, chat: list[Turn], lines: list[str], tone
     except Exception:
         log.exception("AI yap pick failed; matching keywords instead")
         return None
+    if reactions is not None and data.get("react"):
+        reactions.append(str(data["react"]).strip()[:64])
     pick = data.get("pick")
     if pick is None or str(pick).strip().lower() in ("", "null", "none"):
         return NO_PICK
@@ -517,6 +562,76 @@ async def pick_top_words(settings: Settings, pool: list[tuple[str, int]], exampl
         if word in allowed and word not in picked:
             picked.append(word)
     return picked[:5]
+
+
+FACTS_PROMPT = """You read Discord messages and pick out things people said about THEIR OWN life that a \
+friend would remember for days: plans with a date (exam friday, interview tomorrow, trip next week), news \
+(new dog, new job, moved, broke up, got a car), what they're into (the game they main, their rank, their \
+team, their music), health and big moments. Skip jokes, sarcasm, hypotheticals, song lyrics, things about \
+other people, opinions and small talk ("im tired", "im hungry").
+
+For each fact: who said it (their number), the fact in a few plain words written about them ("has an exam on \
+Friday", "got a new dog called Milo", "mains Jett"), what a friend would ask about it later ("how'd the exam \
+go", "how's Milo") or "" if nothing, and in how many days to ask (1-14). TODAY is given so dates work out.
+
+Reply with JSON only: {"facts": [{"who": 0, "fact": "...", "followup": "...", "days": 2}]}"""
+
+
+async def extract_facts(settings: Settings, items: list[tuple[str, str]], today: str = "") -> list[dict]:
+    """Facts people mentioned about themselves, from (name, text) messages. [] without AI or on failure."""
+    if settings.ai_provider == "none" or not items:
+        return []
+    numbered = "\n".join(f"[{i}] {name[:24]}: {readable(' '.join(text.split()))[:220]}"
+                         for i, (name, text) in enumerate(items))
+    try:
+        data = await _complete(settings, FACTS_PROMPT, f"TODAY: {today}\n\nMESSAGES:\n{numbered}", 0.2, 25)
+    except Exception:
+        log.exception("fact extraction failed")
+        return []
+    out = []
+    for item in data.get("facts") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            who = int(item.get("who"))
+            days = max(1, min(14, int(item.get("days") or 3)))
+        except (TypeError, ValueError):
+            continue
+        fact = " ".join(str(item.get("fact") or "").split())[:200]
+        if 0 <= who < len(items) and fact:
+            out.append({"who": who, "fact": fact, "followup": " ".join(str(item.get("followup") or "").split())[:160],
+                        "days": days})
+    return out
+
+
+MOMENT_PROMPT = """You are SYKE, a long-time regular in this Discord server, never an assistant. Write ONE short \
+chat message for the MOMENT described, the way a member would type it here: copy HOW THEY TYPE exactly \
+(spelling, slang, caps, language, length). Use RECENT CHAT, MEMORY and IN-JOKES when they help; never \
+mention having a memory, never use quotation marks, never sound like an announcement or a greeting card. \
+At most one emoji, only if it fits. Don't @ anyone.
+
+Reply with JSON only: {"message": "..."}"""
+
+
+async def write_moment(settings: Settings, moment: str, chat: list[Turn] = (), voice: Voice | None = None,
+                       memory: str = "", lore: list[str] = (), edge: str = "",
+                       rng: random.Random | None = None) -> str | None:
+    """A one-off line for a moment (a follow-up, welcome back, birthday, a conversation starter). None on failure."""
+    if settings.ai_provider == "none":
+        return None
+    prompt = (f"MOMENT: {moment}\n\nRECENT CHAT:\n{_chat_block(list(chat))}\n\nTYPING: {style_hint(voice)}"
+              f"{_style_block(voice, (), rng)}{_lore_block(list(lore))}")
+    if memory:
+        prompt += f"\n\nMEMORY:\n{memory}"
+    if edge:
+        prompt += f"\n\n{edge}"
+    prompt += f"\n\nLENGTH: at most {reply_cap(voice)} words."
+    try:
+        data = await _call_chat(settings, MOMENT_PROMPT, prompt, temperature=0.9)
+    except Exception:
+        log.exception("moment line failed")
+        return None
+    return tidy_reply(_parse_json(data).get("message"), (), (), voice)
 
 
 _PING = re.compile(r"<@[!&]?\d+>|@(everyone|here)\b", re.IGNORECASE)
