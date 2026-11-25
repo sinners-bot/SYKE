@@ -1172,16 +1172,23 @@ class Syke(commands.Bot):
         return freaky_clamp(self.storage.get_config(guild_id, FREAKY_KEY).get("level", 0))
 
     def freaky_text(self, guild_id: int, channel, user_id: int) -> str:
-        """The freaky rules for this server, this channel (18+ or not) and this person (minor or not)."""
+        """The freaky rules for this server, this channel (18+ or not) and this person (minor or not).
+        `channel` None means a DM: full freaky only for people who passed Discord's 18+ check."""
         adult = bool(getattr(channel, "is_nsfw", lambda: False)()) if channel is not None else False
-        return freaky_rules(self.freaky_level(guild_id), adult, self.storage.is_minor(user_id))
+        adult_dm = channel is None and self.storage.is_adult(user_id)
+        return freaky_rules(self.freaky_level(guild_id), adult, self.storage.is_minor(user_id), adult_dm)
 
     def reply_rules(self, guild_id: int, upset_text: str, channel, user_id: int) -> str:
         return "\n\n".join(r for r in (self.edge_text(guild_id, upset_text),
                                         self.freaky_text(guild_id, channel, user_id)) if r)
 
     def note_age(self, message) -> None:
-        """Someone saying they're under 18 is remembered everywhere: nothing freaky with them, ever."""
+        """Someone saying they're under 18 is remembered everywhere: nothing freaky with them, ever. Someone
+        chatting in an age-restricted channel passed Discord's 18+ check: they can get full freaky in DMs."""
+        channel = getattr(message, "channel", None)
+        if (getattr(message, "guild", None) is not None and getattr(channel, "is_nsfw", lambda: False)()
+                and not self.storage.is_adult(message.author.id)):
+            self.storage.mark_adult(message.author.id, f"{message.guild.id}/{channel.id}")
         text = message.content or ""
         if text and says_under_18(text) and not self.storage.is_minor(message.author.id):
             self.storage.mark_minor(message.author.id, text[:200])

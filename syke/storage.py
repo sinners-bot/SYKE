@@ -1489,7 +1489,7 @@ class Storage:
 
     # SYKE's memory of people: facts they mentioned, running bits, past conversations
 
-    MEMORY_KEEP = {"fact": 40, "bit": 8, "talk": 12, "nick": 2, "minor": 1}
+    MEMORY_KEEP = {"fact": 40, "bit": 8, "talk": 12, "nick": 2, "minor": 1, "adult": 1}
 
     def add_memory(self, guild_id: int, user_id: int, kind: str, text: str, followup: str = "",
                    due: float = 0, now: float | None = None) -> int:
@@ -1634,3 +1634,11 @@ class Storage:
         return [tuple(r) for r in self._read(
             "SELECT content, author_id, created_at FROM corpus WHERE guild_id = ? AND created_at >= ? "
             "ORDER BY created_at DESC LIMIT ?", (guild_id, since, limit))]
+
+    def mark_adult(self, user_id: int, where: str) -> None:
+        """They chatted in an age-restricted channel, so Discord had them confirm they're 18+."""
+        self.add_memory(0, user_id, "adult", where[:200])
+
+    def is_adult(self, user_id: int) -> bool:
+        return bool(self._read("SELECT 1 FROM syke_memory WHERE guild_id = 0 AND user_id = ? AND kind = 'adult' "
+                               "LIMIT 1", (user_id,)))

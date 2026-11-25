@@ -16,7 +16,8 @@ FREAKY_KEY = "freaky"
 FREAKY_LEVELS = {
     0: ("Off", "Only PG-13 innuendo when the chat is already freaky."),
     1: ("Freaky", "More innuendo everywhere, flirts back with people who flirt with him, freaky roasts."),
-    2: ("Down bad", "Full freaky mode in age-restricted (18+) channels; level 1 everywhere else."),
+    2: ("Down bad", "Full freaky mode in age-restricted (18+) channels, and in DMs when someone who's chatted "
+                    "in one flirts with him; level 1 everywhere else."),
 }
 
 _TEXT = {
@@ -24,6 +25,9 @@ _TEXT = {
        "freaky roasts (\"the way you said that was concerning\") and spicy takes on dating. If the TARGET "
        "flirts with you, flirt back — cheeky if you like them, chaotic if it's neutral, and if you dislike "
        "them, roast the attempt instead. Suggestive and funny, never graphic.",
+    "dm": "FREAKY 2/2 (a private DM with someone who passed Discord's 18+ check): if they're flirting with you, "
+          "go properly freaky — down bad, thirsty, bold flirting back, unhinged innuendo, freaky roasts. If "
+          "they're not flirting, don't start it: just be yourself. Still suggestive, never explicit.",
     2: "FREAKY 2/2 (this is an 18+ age-restricted channel): go properly freaky — down bad, thirsty, unhinged "
        "innuendo, bold flirting back with people who flirt with you, freaky roasts, spicy takes on dating, "
        "bodies counts and situationships. Still suggestive, never explicit.",
@@ -60,12 +64,14 @@ def clamp(level) -> int:
         return 0
 
 
-def freaky_rules(level: int, adult_channel: bool, minor: bool) -> str:
-    """The prompt section for this server's freaky level in this place, for this person."""
+def freaky_rules(level: int, adult_channel: bool, minor: bool, adult_dm: bool = False) -> str:
+    """The prompt section for this server's freaky level in this place, for this person. `adult_dm`: a DM with
+    someone who has chatted in an age-restricted channel (passed Discord's 18+ check)."""
     if minor:
         return MINOR_TEXT
     level = clamp(level)
+    key = level
     if level == 2 and not adult_channel:
-        level = 1
-    text = _TEXT.get(level)
+        key = "dm" if adult_dm else 1
+    text = _TEXT.get(key)
     return f"{text} {RULES}" if text else ""
