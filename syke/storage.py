@@ -1615,3 +1615,7 @@ class Storage:
         return [r[0] for r in self._read(
             "SELECT author_name FROM corpus WHERE guild_id = ? AND author_name != '' GROUP BY author_id "
             "ORDER BY MAX(created_at) DESC LIMIT ?", (guild_id, limit))]
+
+    def corpus_count(self, guild_id: int) -> int:
+        rows = self._read("SELECT COUNT(*) FROM corpus WHERE guild_id = ?", (guild_id,))
+        return rows[0][0] if rows else 0

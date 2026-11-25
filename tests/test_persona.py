@@ -436,9 +436,12 @@ def test_dm_home_is_where_the_bond_lives(world, monkeypatch):
     assert bot.home_guild(mo) is guild                      # shares the server: that's home
     bot._homes.clear()
     stranger = person(4242, "Nobody")
-    assert bot.home_guild(stranger) is None                  # shares nothing: DMs stay Q&A
+    assert bot.home_guild(stranger) is guild                 # unknown: SYKE's main server, never Q&A
     persona.change_bond(GID, MO, 5, "kind", "said hi")
     assert bot.storage.home_guilds(MO) == [GID]
+    bot._homes.clear()
+    monkeypatch.setattr(guild, "get_member", lambda uid: None, raising=False)
+    assert bot.home_guild(mo) is guild                        # not in the member cache: SYKE's records count
 
 
 async def test_dm_rudeness_hits_the_server_bond_and_replies_in_character(world, monkeypatch):
@@ -466,10 +469,19 @@ async def test_dm_rudeness_hits_the_server_bond_and_replies_in_character(world, 
     assert talks and "syke you are useless and dumb" in talks[0][0]
 
 
-async def test_dm_commands_and_strangers_are_left_alone(world, monkeypatch):
+async def test_dm_commands_are_left_alone_and_strangers_get_syke(world, monkeypatch):
     bot, persona, guild = _dm_world(world, monkeypatch)
-    assert not await bot.dm_chat(DM(guild.members[MO], "$help"))
-    assert not await bot.dm_chat(DM(person(4242, "Nobody"), "hey who are you"))
+    monkeypatch.setattr(bot, "get_command", lambda name: object() if name == "help" else None)
+    assert not await bot.dm_chat(DM(guild.members[MO], f"{bot.settings.default_prefix}help"))   # a command
+    bot.storage.add_corpus(GID, [(1, 10, ZARA, "this chat is cooked today", 1.0, "Zara")])
+
+    async def compose(*a, **kw):
+        return None                                           # no AI and nothing ranked
+
+    monkeypatch.setattr("syke.bot.compose_reply", compose)
+    dm = DM(person(4242, "Nobody"), "hey who are you")
+    assert await bot.dm_chat(dm)
+    assert dm.replies == ["this chat is cooked today"]        # a real server line, not a Q&A card
 
 
 async def test_failed_vibe_reads_dont_retry_on_every_message(world, monkeypatch):

@@ -772,9 +772,10 @@ class Syke(commands.Bot):
                 await persona.observe(message)   # feelings, mood and promises, before SYKE replies
             except Exception:
                 log.exception("persona observe failed")
-        if message.guild is None and await self.dm_chat(message):
+        if message.guild is None:
+            await self.dm_chat(message)   # DMs: SYKE talks like he does in the server, never as Q&A
             return
-        if await self.maybe_answer(message) or not message.guild:
+        if await self.maybe_answer(message):
             return
         prompt = self.mention_yap_prompt(message)
         if prompt is None and self.is_command_text(message.guild.id, message.content):
@@ -795,32 +796,47 @@ class Syke(commands.Bot):
 
     def home_guild(self, user):
         """The server a person's DMs belong to: where SYKE's bond with them is freshest, else where they talk
-        most, else any server they share with SYKE. None if they share none (DMs then get Q&A answers)."""
+        most, else a server SYKE can see them in, else SYKE's main server (so DMs always sound like him).
+        SYKE's own records count even when the person isn't in his member cache."""
         hit = self._homes.get(user.id)
         if hit and time.monotonic() - hit[0] < 600:
             guild = self.get_guild(hit[1]) if hit[1] else None
-            if guild is not None or hit[1] is None:
+            if guild is not None:
                 return guild
-        guild = None
-        for guild_id in self.storage.home_guilds(user.id):
-            found = self.get_guild(guild_id)
-            if found is not None and (not self.intents.members or found.get_member(user.id) is not None):
-                guild = found
-                break
+        guild = next((g for g in map(self.get_guild, self.storage.home_guilds(user.id)) if g is not None), None)
         if guild is None:
             guild = next((g for g in self.guilds if g.get_member(user.id) is not None), None)
+        if guild is None:
+            guild = self.main_guild()
         self._homes[user.id] = (time.monotonic(), guild.id if guild else None)
         return guild
+
+    async def is_dm_command(self, message) -> bool:
+        """A DM that starts with one of SYKE's prefixes followed by a real command name."""
+        text = (message.content or "").strip()
+        try:
+            prefixes = await self.get_prefix(message)
+        except Exception:
+            prefixes = [self.settings.default_prefix]
+        for prefix in [prefixes] if isinstance(prefixes, str) else prefixes:
+            if prefix and text.startswith(prefix):
+                rest = text[len(prefix):].split()
+                if rest and self.get_command(rest[0].lower()) is not None:
+                    return True
+        return False
+
+    def main_guild(self):
+        """The server SYKE knows best (most stored messages): his voice for DMs from strangers."""
+        ranked = sorted(self.guilds, key=lambda g: -self.storage.corpus_count(g.id)) if self.guilds else []
+        return ranked[0] if ranked else None
 
     async def dm_chat(self, message: discord.Message) -> bool:
         """Chat in a DM as SYKE, carrying the bond from the person's home server. False: not handled here."""
         has_picture = bool(getattr(message, "attachments", None) or getattr(message, "stickers", None))
         if self.user is None or message.author.bot or not (message.content or has_picture):
             return False
-        if (message.content or "").strip().startswith(self.settings.default_prefix):
+        if await self.is_dm_command(message):
             return False                                        # a command
-        if await self.ask_thread(message) is not None:
-            return False                                        # a follow-up to a Q&A answer stays Q&A
         home = self.home_guild(message.author)
         if home is None:
             return False
@@ -838,8 +854,12 @@ class Syke(commands.Bot):
                 log.exception("persona DM observe failed")
         async with message.channel.typing():
             turn = await self.dm_turn(message, home, chat)
+            if not turn:   # still SYKE, never a Q&A card: a real line from his server
+                line = self.pick_yap(home.id, exclude={message.content},
+                                     answering=self.speaker_name(message.author))
+                turn = {"reply": line} if line else None
         if not turn:
-            return False
+            return True
         await self.deliver_turn(message, turn, home)
         self.remember_turn(home.id, message.author, message.content, turn)
         return True
