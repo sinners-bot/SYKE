@@ -254,7 +254,8 @@ CATALOG: list[Category] = [
             "stripfeed": "Admins: `stripfeed #channel` posts highlights from this server's players (arcade records, big "
                          "casino wins, weddings, cup champions, promotions, new arrivals) with a Play button. "
                          "`stripfeed off` stops it. Also `/strip feed`.",
-            "economy": "Admins: `economy on`/`off` opens or closes the Strip, plus `give`/`take`/`reset` wallets.",
+            "economy": "SYKE's owners only: `economy on`/`off` opens or closes the Strip, plus `give`/`take`/`reset` "
+                       "wallets.",
             "house": "SYKE owners: run the economy in any server — `give`/`take`/`set`/`peek`/`reset` wallets, "
                      "`open`/`close`/`wipe` servers, `ban` (86) players, `jail`/`free`, `happyhour <x> [hours]` "
                      "and `maintenance on/off` for the casino.",
@@ -266,8 +267,8 @@ CATALOG: list[Category] = [
                   ("Crime", ["rob", "crime", "heist", "jail", "bail"]),
                   ("Property", ["property", "cashup"]),
                   ("The game", ["thestrip", "stripfeed"]),
-                  ("Admin", ["economy", "house"])],
-        access_of={"economy": ADMIN, "house": OWNER, "stripfeed": ADMIN},
+                  ("SYKE owners", ["economy", "house"])],
+        access_of={"economy": OWNER, "house": OWNER, "stripfeed": ADMIN},
     ),
     Category(
         "love", "💞", "Love", EVERYONE,

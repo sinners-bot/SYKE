@@ -34,7 +34,7 @@ from discord.ext import commands
 
 from . import casino_art as art
 from .cardgames import Blackjack, HiLo, Shoe
-from .moderation import BRAND, OK, WARN, embed, moderator
+from .moderation import BRAND, OK, WARN, embed
 
 log = logging.getLogger("syke.economy")
 
@@ -807,8 +807,9 @@ class Economy(commands.Cog, name="Economy"):
 
     # -- admin --
     @commands.hybrid_group(name="economy", fallback="status", case_insensitive=True,
-                           description="Admin: open/close the Strip and manage wallets")
-    @moderator("manage_guild")
+                           description="SYKE owners: open/close the Strip and manage wallets")
+    @app_commands.default_permissions(administrator=True)
+    @house_only()
     async def economy(self, ctx: commands.Context) -> None:
         state = "**open** 🟢" if self._open(ctx.guild.id) else "**closed** 🔴"
         circ = self.bot.storage.econ_circulation(ctx.guild.id)
@@ -820,7 +821,7 @@ class Economy(commands.Cog, name="Economy"):
                         ephemeral=True)
 
     @economy.command(name="on", aliases=["open"], description="Open the Strip in this server")
-    @moderator("manage_guild")
+    @house_only()
     async def economy_on(self, ctx: commands.Context) -> None:
         self.bot.storage.update_config(ctx.guild.id, CONFIG_KEY, open=True)
         p = self.p(ctx)
@@ -831,7 +832,7 @@ class Economy(commands.Cog, name="Economy"):
                                     f"`{p}crime` `{p}heist` · **Property** `{p}property` — own a storefront.", OK))
 
     @economy.command(name="off", aliases=["close"], description="Close the Strip (balances are kept)")
-    @moderator("manage_guild")
+    @house_only()
     async def economy_off(self, ctx: commands.Context) -> None:
         self.bot.storage.update_config(ctx.guild.id, CONFIG_KEY, open=False)
         await ctx.reply(embed=embed("The Strip is closed",
@@ -840,7 +841,7 @@ class Economy(commands.Cog, name="Economy"):
 
     @economy.command(name="give", description="Add funds to a member's wallet")
     @app_commands.describe(member="Who", amount="How much", currency="cash (default), chips or bank")
-    @moderator("manage_guild")
+    @house_only()
     async def economy_give(self, ctx: commands.Context, member: discord.Member, amount: int,
                            currency: str = "cash") -> None:
         cur = currency.strip().lower()
@@ -856,14 +857,14 @@ class Economy(commands.Cog, name="Economy"):
 
     @economy.command(name="take", description="Remove funds from a member's wallet")
     @app_commands.describe(member="Who", amount="How much", currency="cash (default), chips or bank")
-    @moderator("manage_guild")
+    @house_only()
     async def economy_take(self, ctx: commands.Context, member: discord.Member, amount: int,
                            currency: str = "cash") -> None:
         await self.economy_give(ctx, member, -abs(amount), currency)
 
     @economy.command(name="reset", description="Wipe a member's wallet (or 'all' for the whole server)")
     @app_commands.describe(member="Who to reset — omit and pass target 'all' to wipe everyone")
-    @moderator("manage_guild")
+    @house_only()
     async def economy_reset(self, ctx: commands.Context, member: discord.Member | None = None,
                             target: str = "") -> None:
         if member is None and target.strip().lower() == "all":

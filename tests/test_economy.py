@@ -535,3 +535,21 @@ async def test_emoji_sync_failure_keeps_standard_emoji(eco):
     eco.bot.fetch_application_emojis = fetch
     await eco.sync_emojis()
     assert eco.e("chip") == econ.EMOJI_FALLBACK["chip"]
+
+
+async def test_economy_admin_commands_are_owner_only(eco):
+    from discord.ext import commands as dcommands
+    eco.bot.settings = replace(eco.bot.settings, owner_ids=frozenset({777}))
+    admin_perms = types.SimpleNamespace(manage_guild=True, administrator=True)
+    names = {"economy", "economy on", "economy off", "economy give", "economy take", "economy reset"}
+    gated = [c for c in eco.walk_commands() if c.qualified_name in names]
+    assert len(gated) == len(names)
+    for command in gated:
+        server_admin = types.SimpleNamespace(author=types.SimpleNamespace(id=1, guild_permissions=admin_perms),
+                                             bot=eco.bot, guild=types.SimpleNamespace(id=1))
+        with pytest.raises(dcommands.CheckFailure):
+            for check in command.checks:
+                await check(server_admin)                     # a server admin is not enough any more
+        owner = types.SimpleNamespace(author=types.SimpleNamespace(id=777), bot=eco.bot,
+                                      guild=types.SimpleNamespace(id=1))
+        assert all([await check(owner) for check in command.checks])
