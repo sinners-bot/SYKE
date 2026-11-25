@@ -417,7 +417,7 @@ CATALOG: list[Category] = [
         "syke", "🫀", "SYKE himself", EVERYONE,
         "SYKE has a life of its own: moods, favourites, grudges, a memory for promises, a nightly diary, and a "
         "father, Echo (whom only SYKE is allowed to roast). Be nice to him.",
-        ["mood", "bond", "favourites", "diary", "promises", "kept", "forgive", "persona", "edge", "achievements"],
+        ["mood", "bond", "favourites", "diary", "promises", "kept", "forgive", "persona", "edge", "freaky", "achievements"],
         {
             "mood": "How SYKE feels right now and why. His mood moves with how people treat him and how busy the "
                     "chat is, fades back to calm over a few hours, and colours every reply he writes.",
@@ -440,13 +440,16 @@ CATALOG: list[Category] = [
             "forgive": "`forgive @user`: SYKE drops his grudge. Only his father or a server manager can ask.",
             "persona": "Managers: `persona callouts on|off` (broken-promise callouts) and `persona reactions on|off` "
                        "(the emoji SYKE adds when someone's rude 😒 or nice 🥹 to him).",
+            "freaky": "How freaky SYKE gets here: `freaky` shows the level, managers set `freaky 0-2` (0 off, "
+                      "1 more innuendo and flirting back, 2 full freaky in age-restricted channels only). Never "
+                      "explicit, and never with anyone who said they're under 18.",
             "edge": "How dark SYKE's humour runs here: `edge` shows the level, managers set `edge 0-3` "
                     "(0 normal, 1 spicy, 2 dark, 3 unhinged). No slurs at any level, and he drops the jokes "
                     "when someone is genuinely hurting.",
         },
         sections=[("How he feels", ["mood", "bond", "favourites"]), ("His life", ["diary"]),
                   ("Badges", ["achievements"]),
-                  ("Promises", ["promises", "kept"]), ("Managers", ["forgive", "persona", "edge"])],
+                  ("Promises", ["promises", "kept"]), ("Managers", ["forgive", "persona", "edge", "freaky"])],
     ),
     Category(
         "casino", "🎰", "Casino", EVERYONE,
@@ -551,7 +554,7 @@ BRIEF = {
     "job": "Work a mini-game shift", "stocks": "Server stock market", "radio": "Endless music by genre",
     "songquiz": "Name that song", "topsongs": "Most played and top DJs", "like": "Like the current song", "liked": "Your Liked songs", "blend": "Blend with a friend", "party": "Listening party", "beef": "Rivalry scoreboard", "afk": "Go away politely",
     "birthday": "Birthdays", "wrapped": "Your year in review", "vibe": "Channel mood check",
-    "catchup": "What you missed", "timemachine": "A year ago today", "quotebook": "Best quotes book", "lore": "Inside jokes", "mood": "How SYKE feels", "bond": "How SYKE feels about you", "favourites": "SYKE's favourites and grudges", "diary": "SYKE's nightly diary", "promises": "Promises SYKE remembers", "kept": "Keep a promise", "forgive": "Make SYKE drop a grudge", "achievements": "Your badges", "persona": "Persona settings", "edge": "How dark SYKE gets", "racist": "Slur counter", "work": "Clock a shift", "hustle": "Risky quick cash", "pay": "Send cash",
+    "catchup": "What you missed", "timemachine": "A year ago today", "quotebook": "Best quotes book", "lore": "Inside jokes", "mood": "How SYKE feels", "bond": "How SYKE feels about you", "favourites": "SYKE's favourites and grudges", "diary": "SYKE's nightly diary", "promises": "Promises SYKE remembers", "kept": "Keep a promise", "forgive": "Make SYKE drop a grudge", "achievements": "Your badges", "persona": "Persona settings", "edge": "How dark SYKE gets", "freaky": "How freaky SYKE gets", "racist": "Slur counter", "work": "Clock a shift", "hustle": "Risky quick cash", "pay": "Send cash",
     "balance": "Players Club card", "deposit": "Bank it (robber-proof)", "withdraw": "Take cash out",
     "rich": "Richest on the Strip",
     "shop": "Browse the storefronts", "buy": "Buy an item", "use": "Use an item", "inventory": "Items and buffs",

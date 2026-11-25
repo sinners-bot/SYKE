@@ -22,6 +22,8 @@ from discord.ext import commands, tasks
 from .owners import is_owner
 from . import ai
 from .edge import EDGE_KEY, EDGE_LEVELS, clamp
+from .freaky import FREAKY_KEY, FREAKY_LEVELS
+from .freaky import clamp as freaky_clamp
 from .yap import Turn
 
 log = logging.getLogger("syke")
@@ -104,6 +106,35 @@ class Human(commands.Cog, name="Human"):
         self.storage.update_config(ctx.guild.id, EDGE_KEY, level=new)
         name, about = EDGE_LEVELS[new]
         await ctx.reply(f"😈 SYKE's edge is now **{new} · {name}**: {about}", mention_author=False)
+
+    @commands.command(name="freaky", help="How freaky SYKE gets here: freaky 0-2 (managers change it)")
+    @commands.guild_only()
+    async def freaky(self, ctx: commands.Context, level: str | None = None) -> None:
+        current = self.bot.freaky_level(ctx.guild.id)
+        if level is None:
+            lines = [f"{'➜' if n == current else '•'} **{n} · {name}**: {about}"
+                     for n, (name, about) in FREAKY_LEVELS.items()]
+            await ctx.reply(embed=discord.Embed(
+                title=f"😏 SYKE's freaky level here: {current} · {FREAKY_LEVELS[current][0]}",
+                description="\n".join(lines) + "\n\nNever explicit, never aimed at someone who didn't start it, "
+                            "and never with anyone who said they're under 18. Level 2 only kicks in inside "
+                            "age-restricted channels.\n"
+                            f"Managers: `{ctx.clean_prefix}freaky 0-2`",
+                colour=discord.Colour.magenta()), mention_author=False)
+            return
+        perms = getattr(ctx.author, "guild_permissions", None)
+        if not (is_owner(ctx.author) or (perms and (perms.manage_guild or perms.administrator))):
+            await ctx.reply("Only managers can change how freaky SYKE gets.", mention_author=False)
+            return
+        if not level.strip().isdigit() or not 0 <= int(level) <= 2:
+            await ctx.reply("Pick a level from 0 to 2.", mention_author=False)
+            return
+        new = freaky_clamp(level)
+        self.storage.update_config(ctx.guild.id, FREAKY_KEY, level=new)
+        name, about = FREAKY_LEVELS[new]
+        tip = ("\nMark a channel **age-restricted** in its settings for level 2 to apply there."
+               if new == 2 else "")
+        await ctx.reply(f"😏 SYKE's freaky level is now **{new} · {name}**: {about}{tip}", mention_author=False)
 
     # Watching chat
 

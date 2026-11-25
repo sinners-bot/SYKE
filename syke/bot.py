@@ -23,10 +23,14 @@ from discord.ext import commands
 
 from . import vision
 from .human import Human
+from .regular import Regular
 from .lexicon import CHAT_FILLER, STOPWORDS
+from .lexicon import CHAT_SLANG as CHAT_SLANG_WORDS
 from .isolation import Isolation
 from .owners import bypass_checks, is_owner, set_owners
 from .edge import EDGE_KEY, edge_rules
+from .freaky import FREAKY_KEY, freaky_rules, says_under_18
+from .freaky import clamp as freaky_clamp
 from .persona_core import ago
 from .edge import clamp as edge_clamp
 from .ai import NO_PICK, compose_reply, pick_line, write_roast, write_ship_blurb, write_tldr
@@ -127,6 +131,7 @@ from .yap import (
     make_typo,
     name_words,
     talks_to_someone_else,
+    trending_words,
     talk_level,
     offline_pick,
     query_weights,
@@ -175,7 +180,8 @@ COMMON_WORDS = STOPWORDS | CHAT_FILLER   # never treated as someone's name
 DM_COOLDOWN = 2.0           # seconds between DM replies to one person
 TYPO_CHANCE = 0.04          # a reply goes out with a typo, fixed with "*word" a second later
 EDIT_INSTEAD = 0.15         # of two-part replies: edit the first message instead of sending a second
-NVM_CHANCE = 0.006          # very rarely: delete the reply and send "nvm"
+NVM_CHANCE = 0.006
+WRONG_REPLY = 0.005         # once in a long while: reply to the wrong message, then "mb wrong reply"          # very rarely: delete the reply and send "nvm"
 REACT_WITH_REPLY = 0.35     # when the AI suggests a reaction and also replies, react too this often
 YAP_REACT_ONLY = 0.3        # jumping in: just react to the message instead of saying something
 YAP_REACT_LATER = 0.3       # ...and sometimes still say something a bit later           # best-matching real lines the AI chooses a random yap from
@@ -392,6 +398,7 @@ class Syke(commands.Bot):
         self._homes: dict[int, tuple[float, int | None]] = {}   # user -> (checked at, home server for DMs)
         self._last_dm: dict[int, float] = {}
         self._name_words: dict[int, tuple[float, set[str]]] = {}
+        self._slang: dict[int, tuple[float, list[str]]] = {}
         self._recent_yaps: dict[int, list[str]] = {}
         self._last_ask: dict[int, float] = {}
         self._asks: dict[int, list[dict]] = {}
@@ -442,6 +449,7 @@ class Syke(commands.Bot):
         await self.add_cog(Achievements(self))
         await self.add_cog(Lore(self))
         await self.add_cog(Human(self))
+        await self.add_cog(Regular(self))
         log.info("Owners pass the permission checks of %d commands", bypass_checks(self))
         if self.settings.web_enabled:
             try:
@@ -756,6 +764,8 @@ class Syke(commands.Bot):
                 log.exception("Failed to handle a message as a command")
         if message.author.bot:
             return
+        with contextlib.suppress(Exception):
+            self.note_age(message)
         if not message.content:
             # A picture with no words still gets an answer when it's a DM or a reply to SYKE's yap.
             if getattr(message, "attachments", None) or getattr(message, "stickers", None):
@@ -890,9 +900,11 @@ class Syke(commands.Bot):
                                    chat, None, tone, remixed, avoid=list(used),
                                    voice=await self.server_voice(home.id), weights=weights,
                                    state=self.persona_state(home, message.author, chat),
-                                   lore=self.lore_notes(home.id), edge=self.edge_text(home.id, upset),
+                                   lore=self.lore_notes(home.id),
+                                   edge=self.reply_rules(home.id, upset, None, message.author.id),
                                    memory=self.memory_text(home.id, message.author, chat), full=True, dm=True,
-                                   pictures=await self.pictures_for(message), names=self.member_words(home.id))
+                                   pictures=await self.pictures_for(message), names=self.member_words(home.id),
+                                   slang=await self.new_slang(home.id))
         return {"reply": turn} if isinstance(turn, str) else turn
 
     async def replied_yap(self, message: discord.Message) -> str | None:
@@ -1129,9 +1141,11 @@ class Syke(commands.Bot):
                                    chat, said, tone, remixed, avoid=list(used),
                                    voice=await self.server_voice(guild_id), weights=weights,
                                    state=self.persona_state(message.guild, message.author, chat),
-                                   lore=self.lore_notes(guild_id), edge=self.edge_text(guild_id, upset),
+                                   lore=self.lore_notes(guild_id),
+                                   edge=self.reply_rules(guild_id, upset, message.channel, message.author.id),
                                    memory=self.memory_text(guild_id, message.author, chat), full=True,
-                                   pictures=await self.pictures_for(message), names=self.member_words(guild_id))
+                                   pictures=await self.pictures_for(message), names=self.member_words(guild_id),
+                                   slang=await self.new_slang(guild_id))
 
     def talk_level_of(self, guild_id: int) -> int | None:
         """The server's talkativeness level, or None when it's never been set (the Railway defaults apply)."""
@@ -1154,6 +1168,25 @@ class Syke(commands.Bot):
     def edge_text(self, guild_id: int, upset_text: str = "") -> str:
         return edge_rules(self.edge_level(guild_id), upset_text)
 
+    def freaky_level(self, guild_id: int) -> int:
+        return freaky_clamp(self.storage.get_config(guild_id, FREAKY_KEY).get("level", 0))
+
+    def freaky_text(self, guild_id: int, channel, user_id: int) -> str:
+        """The freaky rules for this server, this channel (18+ or not) and this person (minor or not)."""
+        adult = bool(getattr(channel, "is_nsfw", lambda: False)()) if channel is not None else False
+        return freaky_rules(self.freaky_level(guild_id), adult, self.storage.is_minor(user_id))
+
+    def reply_rules(self, guild_id: int, upset_text: str, channel, user_id: int) -> str:
+        return "\n\n".join(r for r in (self.edge_text(guild_id, upset_text),
+                                        self.freaky_text(guild_id, channel, user_id)) if r)
+
+    def note_age(self, message) -> None:
+        """Someone saying they're under 18 is remembered everywhere: nothing freaky with them, ever."""
+        text = message.content or ""
+        if text and says_under_18(text) and not self.storage.is_minor(message.author.id):
+            self.storage.mark_minor(message.author.id, text[:200])
+            log.info("Marked %s as under 18", message.author.id)
+
     def memory_text(self, guild_id: int, author, chat: list[Turn] = ()) -> str:
         """What SYKE knows about the person he's answering and the others in the chat, for the prompt."""
         now = time.time()
@@ -1169,6 +1202,9 @@ class Syke(commands.Bot):
             main = i == 0
             facts = self.storage.memories(guild_id, uid, "fact", 6 if main else 3)
             bits = self.storage.memories(guild_id, uid, "bit", 4 if main else 2)
+            nick = self.storage.memories(guild_id, uid, "nick", 1)
+            if nick:
+                lines.append(f"Your nickname for {name}: {nick[0][0]} (use it now and then instead of their name)")
             if facts:
                 lines.append(f"About {name}: " + "; ".join(f"{t} ({ago(now - c)})" for t, c in facts))
             if bits:
@@ -1201,6 +1237,9 @@ class Syke(commands.Bot):
                                     time.time() + days * 86400 if follow else 0)
         if str(turn.get("bit") or "").strip():
             self.storage.add_memory(guild_id, uid, "bit", str(turn["bit"]))
+        nickname = " ".join(str(turn.get("nickname") or "").split())[:40]
+        if nickname and not self.storage.memories(guild_id, uid, "nick", 1):   # a nickname sticks once given
+            self.storage.add_memory(guild_id, uid, "nick", nickname)
 
     def lore_notes(self, guild_id: int) -> list[str]:
         """The server's in-jokes SYKE already worked out (from `lore`), so replies can get the references."""
@@ -1309,12 +1348,22 @@ class Syke(commands.Bot):
         text = self._text_with_emoji(guild, voice, reply)
         typo = make_typo(text) if random.random() < TYPO_CHANCE else None
         am = discord.AllowedMentions.none()
+        wrong = await self.wrong_message(message) if (message.guild is not None and not typo
+                                                      and random.random() < WRONG_REPLY) else None
         try:
-            sent = await message.reply(typo[0] if typo else text, mention_author=False, allowed_mentions=am)
+            sent = await (wrong or message).reply(typo[0] if typo else text, mention_author=False, allowed_mentions=am)
         except discord.HTTPException:
             return
         self.remember_yap(message.channel.id, reply)
         send = getattr(message.channel, "send", None)
+        if wrong is not None:   # replied to the wrong message: own it
+            await self.pause(1.5, 3.5)
+            with contextlib.suppress(discord.HTTPException):
+                await message.reply(random.choice(("mb wrong reply ⬆️", "wrong reply mb", "^ that was for you mb")),
+                                    mention_author=False, allowed_mentions=am)
+        regular = self.get_cog("Regular")
+        if regular is not None:
+            regular.asked(message.channel, message.author, second or reply)
         if typo and send is not None:
             await self.pause(1.0, 2.5)
             with contextlib.suppress(discord.HTTPException):
@@ -1332,6 +1381,14 @@ class Syke(commands.Bot):
             with contextlib.suppress(discord.HTTPException):
                 await sent.delete()
                 await send("nvm", allowed_mentions=am)
+
+    async def wrong_message(self, message):
+        """A recent message from someone else in the channel, to reply to by mistake."""
+        with contextlib.suppress(discord.HTTPException, AttributeError, TypeError):
+            async for m in message.channel.history(limit=4, before=message):
+                if m.author.id not in (message.author.id, getattr(self.user, "id", None)) and not m.author.bot:
+                    return m
+        return None
 
     async def pause(self, low: float, high: float, channel=None) -> None:
         """A human-sized gap between messages, typing if `channel` is given."""
@@ -1484,6 +1541,20 @@ class Syke(commands.Bot):
             words |= name_words(getattr(m, "display_name", "")) | name_words(getattr(m, "name", ""))
         words -= COMMON_WORDS   # names that are also everyday words ("will", "may") don't count
         self._name_words[guild_id] = (time.monotonic(), words)
+        return words
+
+    async def new_slang(self, guild_id: int) -> list[str]:
+        """Words the server just started using (checked every 6 hours), so SYKE picks them up."""
+        hit = self._slang.get(guild_id)
+        if hit and time.monotonic() - hit[0] < 6 * 3600:
+            return hit[1]
+        now = time.time()
+        skip = COMMON_WORDS | CHAT_SLANG_WORDS | self.member_words(guild_id)
+        rows = await asyncio.to_thread(self.storage.recent_texts, guild_id, now - 33 * 86400)
+        words = await asyncio.to_thread(trending_words, rows, now, skip)
+        self._slang[guild_id] = (time.monotonic(), words)
+        if words:
+            log.info("New slang in %s: %s", guild_id, ", ".join(words))
         return words
 
     def pick_yap(self, guild_id: int, exclude_id: int = 0, exclude: set[str] = frozenset(),

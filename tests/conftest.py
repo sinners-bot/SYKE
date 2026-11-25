@@ -22,7 +22,7 @@ def pytest_pyfunc_call(pyfuncitem):
 @pytest.fixture(autouse=True)
 def steady_texting(monkeypatch):
     """SYKE's random texting habits (typos, edits, 'nvm', react-only yaps) are off unless a test turns them on."""
-    for name in ("TYPO_CHANCE", "EDIT_INSTEAD", "NVM_CHANCE", "YAP_REACT_ONLY"):
+    for name in ("TYPO_CHANCE", "EDIT_INSTEAD", "NVM_CHANCE", "YAP_REACT_ONLY", "WRONG_REPLY"):
         monkeypatch.setattr(f"syke.bot.{name}", 0)
 
     async def no_pause(self, low, high, channel=None):

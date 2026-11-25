@@ -1489,7 +1489,7 @@ class Storage:
 
     # SYKE's memory of people: facts they mentioned, running bits, past conversations
 
-    MEMORY_KEEP = {"fact": 40, "bit": 8, "talk": 12}
+    MEMORY_KEEP = {"fact": 40, "bit": 8, "talk": 12, "nick": 2, "minor": 1}
 
     def add_memory(self, guild_id: int, user_id: int, kind: str, text: str, followup: str = "",
                    due: float = 0, now: float | None = None) -> int:
@@ -1619,3 +1619,18 @@ class Storage:
     def corpus_count(self, guild_id: int) -> int:
         rows = self._read("SELECT COUNT(*) FROM corpus WHERE guild_id = ?", (guild_id,))
         return rows[0][0] if rows else 0
+
+    # People who said they're under 18 (everywhere, not per server): nothing freaky with them, ever
+
+    def mark_minor(self, user_id: int, why: str) -> None:
+        self.add_memory(0, user_id, "minor", why[:200])
+
+    def is_minor(self, user_id: int) -> bool:
+        return bool(self._read("SELECT 1 FROM syke_memory WHERE guild_id = 0 AND user_id = ? AND kind = 'minor' "
+                               "LIMIT 1", (user_id,)))
+
+    def recent_texts(self, guild_id: int, since: float, limit: int = 60000) -> list[tuple[str, int, float]]:
+        """(content, author_id, created_at) of messages here since `since`, newest first."""
+        return [tuple(r) for r in self._read(
+            "SELECT content, author_id, created_at FROM corpus WHERE guild_id = ? AND created_at >= ? "
+            "ORDER BY created_at DESC LIMIT ?", (guild_id, since, limit))]

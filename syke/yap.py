@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import random
+import collections
 import re
 from collections import Counter
 from collections.abc import Iterable
@@ -567,3 +568,35 @@ def talks_to_someone_else(text: str, known: set[str], allowed: set[str] = frozen
         return True
     words = {w.casefold() for w in NAME_WORD.findall(text or "")}
     return bool((words & known) - allowed)
+
+
+SLANG_WORD = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
+
+
+def trending_words(rows, now: float, skip: set[str] = frozenset(), recent_days: float = 3, base_days: float = 30,
+                   min_people: int = 4, top: int = 5) -> list[str]:
+    """Words this server just started using: said by at least `min_people` people in the last few days and
+    at least 4x as often (per day) as in the month before. Old favourites and dead slang don't show up.
+    `rows` are (text, author_id, created_at)."""
+    recent_since, base_since = now - recent_days * 86400, now - (recent_days + base_days) * 86400
+    recent: collections.Counter = collections.Counter()
+    base: collections.Counter = collections.Counter()
+    people: dict[str, set] = collections.defaultdict(set)
+    for text, author, at in rows:
+        if at < base_since or URL.search(text or ""):
+            continue
+        words = {w.casefold() for w in SLANG_WORD.findall(text or "")} - skip
+        for w in words:
+            if at >= recent_since:
+                recent[w] += 1
+                people[w].add(author)
+            else:
+                base[w] += 1
+    scored = []
+    for w, n in recent.items():
+        if len(people[w]) < min_people or n < 6:
+            continue
+        before = base[w] / base_days * recent_days      # what it "should" be at the old rate
+        if n >= 4 * max(before, 0.5):
+            scored.append((n / (before + 1), w))
+    return [w for _, w in sorted(scored, reverse=True)[:top]]

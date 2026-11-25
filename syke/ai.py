@@ -414,13 +414,22 @@ body, weight or looks. If a picture is unclear, say so in character instead of g
 - MEMORY is what you know about the people here: facts they told the server, running bits you have with \
 them, and your past conversations. Use it like a friend would — bring something up when it fits, call back \
 to yesterday — but never recite it, and never mention having a memory.
+- Talk WITH people, not at them: about one time in four, ask something back the way a friend would ("wait \
+what happened", "who won", "why are you up at 4am", "be honest did you cry") — a real question about what \
+they said, not a customer-service "anything else?".
+- NICKNAMES: if MEMORY has your nickname for someone, use it now and then instead of their name. If the \
+TARGET just did something that deserves a nickname and you don't have one for them yet (they main Jett, \
+wear crocs to everything, always lose bets), give them one in "nickname" (2-3 words, like "jett main" or \
+"crocs king") and start using it. Never about their looks, body or identity.
+- NEW SLANG, when given, is words this server just started using: use one only when it fits naturally.
 - If the TARGET tells you something about their own life worth remembering for days (an exam on Friday, a \
 new dog, the game they main, a trip, a breakup), put it in "remember" — what it is, what a friend would \
 ask later (or ""), and in how many days to ask. If a new running joke with them comes up, put it in "bit".
 
 Reply with JSON only: {"read": "<one short line: what's going on and what they want>", \
 "reply": "<your message>", "reply2": "<optional second message or \"\">", "react": "<optional emoji or \"\">", \
-"remember": {"fact": "...", "followup": "...", "days": 3} or null, "bit": "<optional or \"\">"}"""
+"remember": {"fact": "...", "followup": "...", "days": 3} or null, "bit": "<optional or \"\">", \
+"nickname": "<optional new nickname for the TARGET or \"\">"}"""
 
 
 def _style_block(voice: Voice | None, skip: list[str] = (), rng: random.Random | None = None) -> str:
@@ -472,7 +481,7 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
                         rng: random.Random | None = None, weights: dict[str, float] | None = None,
                         state: str = "", lore: list[str] = (), edge: str = "", memory: str = "",
                         full: bool = False, dm: bool = False, pictures: list = (),
-                        names: set[str] = frozenset()):
+                        names: set[str] = frozenset(), slang: list[str] = ()):
     """The best reply to `target` in the server's words and the chat's tone. Never raises.
 
     With AI, stored messages and Markov `remixed` lines are ammunition for a new message written
@@ -488,7 +497,7 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
             return None
         out = {"reply": reply or "", "reply2": "", "react": "", "remember": None, "bit": ""}
         if data:
-            out.update({k: data.get(k) for k in ("reply2", "react", "remember", "bit") if data.get(k)})
+            out.update({k: data.get(k) for k in ("reply2", "react", "remember", "bit", "nickname") if data.get(k)})
         return out
 
     banned = {target.text} | ({said} if said else set()) | set(avoid)
@@ -526,6 +535,8 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
             prompt += f"\n\nMEMORY:\n{memory}"
         if edge:
             prompt += f"\n\n{edge}"
+        if slang:
+            prompt += "\n\nNEW SLANG here lately: " + ", ".join(slang)
         if pictures:
             prompt += "\n\nPICTURES (attached, in this order): " + "; ".join(
                 f"{i + 1}. {p.label}" for i, p in enumerate(pictures))
