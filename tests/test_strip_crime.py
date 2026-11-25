@@ -105,6 +105,19 @@ def test_arrest_bail_and_jail_work(crime):
     assert f["freed"] == V and db.econ_wallet(G, V)["jail_until"] == 0 and db.econ_wallet(G, U)["cash"] == before - f["cost"]
 
 
+def test_jailbreak_frees_or_adds_time(crime):
+    db, make, clock = crime
+    c = make(0.5)
+    with pytest.raises(CrimeError): c.escape(G, U, ok=True)
+    a = c.arrest(G, U, 10)
+    f = c.escape(G, U, ok=False, penalty=99)   # a botched break adds at most five minutes
+    assert not f["escaped"] and round((f["until"] - a["until"]) / 60) == 5
+    assert c.escape(G, U, ok=True)["escaped"] and db.econ_wallet(G, U)["jail_until"] == 0
+    db.econ_touch(G, V, 0); c.arrest(G, V, 10)
+    r = c.escape(G, U, V, ok=True)            # a friend on the outside
+    assert r["freed"] == V and db.econ_wallet(G, V)["jail_until"] == 0
+
+
 def test_illicit_sales_are_capped(crime):
     db, make, clock = crime
     c = make(0.5); start = db.econ_wallet(G, U)["cash"]; paid = 0

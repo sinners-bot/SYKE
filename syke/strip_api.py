@@ -426,6 +426,7 @@ class StripAPI:
             "crime_bail": lambda g, u, b: self.crime.bail(g, u, _id(b.get("target"))),
             "crime_bail_quote": lambda g, u, b: self.crime.bail_quote(g, u, _id(b.get("target"))),
             "crime_serve": lambda g, u, b: self.crime.serve(g, u, b.get("minutes", 2)),
+            "crime_escape": lambda g, u, b: self.crime.escape(g, u, _id(b.get("target")), bool(b.get("ok")), b.get("penalty", 0)),
             "crime_illicit": lambda g, u, b: self.crime.illicit(g, u, b.get("amount", 0), b.get("reason", "")),
             # casino (every money move carries a request id `rid` and happens exactly once)
             "casino_exchange": lambda g, u, b: c.exchange(g, u, b.get("action"), b.get("amount"), b.get("rid")),

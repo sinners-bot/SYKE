@@ -153,6 +153,23 @@ class CrimeService:
         self.db.econ_adjust(gid, uid, jail_until=until if until > now else 0)
         return {"until": until if until > now else 0}
 
+    def escape(self, gid: int, uid: int, target: int | None = None, ok: bool = False, penalty: float = 0) -> dict:
+        """A jailbreak, by the prisoner or by a friend on the outside. The game decides how it went (and puts the
+        police on whoever ran); here a clean break opens the cell and a botched one adds time, at most five minutes."""
+        who = target or uid
+        if target:
+            self.svc.guard(gid, uid)
+        t = self.db.econ_wallet(gid, who)
+        now = self.now()
+        if t.get("jail_until", 0) <= now:
+            raise CrimeError("not_jailed", "Nobody's locked up.")
+        if ok:
+            self.db.econ_adjust(gid, who, jail_until=0)
+            return {"escaped": True, "freed": who, "until": 0}
+        until = min(now + ARREST_MAX * 60, t["jail_until"] + max(0.0, min(5.0, float(penalty or 0))) * 60)
+        self.db.econ_adjust(gid, who, jail_until=until)
+        return {"escaped": False, "until": until}
+
     def illicit(self, gid: int, uid: int, amount: int, reason: str = "") -> dict:
         self._free(gid, uid)
         amount = int(amount)
