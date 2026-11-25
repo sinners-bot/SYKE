@@ -177,6 +177,7 @@ YAP_RANDOM = 40
 YAP_CONTEXT = 20
 PICK_SHOWN = 30
 COMMON_WORDS = STOPWORDS | CHAT_FILLER   # never treated as someone's name
+DIVIDER_ROLE = re.compile(r"^[\W_]{3,}|[\W_]{3,}$")   # '──── Games ────', '=== Pings ==='
 DM_COOLDOWN = 2.0           # seconds between DM replies to one person
 TYPO_CHANCE = 0.04          # a reply goes out with a typo, fixed with "*word" a second later
 EDIT_INSTEAD = 0.15         # of two-part replies: edit the first message instead of sending a second
@@ -399,6 +400,7 @@ class Syke(commands.Bot):
         self._last_dm: dict[int, float] = {}
         self._name_words: dict[int, tuple[float, set[str]]] = {}
         self._slang: dict[int, tuple[float, list[str]]] = {}
+        self._fetched_members: dict[tuple[int, int], tuple[float, object]] = {}
         self._recent_yaps: dict[int, list[str]] = {}
         self._last_ask: dict[int, float] = {}
         self._asks: dict[int, list[dict]] = {}
@@ -904,7 +906,8 @@ class Syke(commands.Bot):
                                    edge=self.reply_rules(home.id, upset, None, message.author.id),
                                    memory=self.memory_text(home.id, message.author, chat), full=True, dm=True,
                                    pictures=await self.pictures_for(message), names=self.member_words(home.id),
-                                   slang=await self.new_slang(home.id))
+                                   slang=await self.new_slang(home.id),
+                                   roles=await self.roles_text(home, message.author, chat))
         return {"reply": turn} if isinstance(turn, str) else turn
 
     async def replied_yap(self, message: discord.Message) -> str | None:
@@ -1145,7 +1148,8 @@ class Syke(commands.Bot):
                                    edge=self.reply_rules(guild_id, upset, message.channel, message.author.id),
                                    memory=self.memory_text(guild_id, message.author, chat), full=True,
                                    pictures=await self.pictures_for(message), names=self.member_words(guild_id),
-                                   slang=await self.new_slang(guild_id))
+                                   slang=await self.new_slang(guild_id),
+                                   roles=await self.roles_text(message.guild, message.author, chat))
 
     def talk_level_of(self, guild_id: int) -> int | None:
         """The server's talkativeness level, or None when it's never been set (the Railway defaults apply)."""
@@ -1222,6 +1226,61 @@ class Syke(commands.Bot):
                     lines.append(f"Your earlier talks with {name}: " +
                                  " | ".join(f"({ago(now - c)}) {t}" for t, c in reversed(talks)))
         return "\n".join(lines)
+
+    @staticmethod
+    def role_names(member, limit: int = 10) -> list[str]:
+        """The roles that say something about a person: highest first, no @everyone, bot roles, SYKE's own
+        roles or divider roles like '──── Games ────'."""
+        names = []
+        for role in sorted(getattr(member, "roles", None) or [], key=lambda r: -getattr(r, "position", 0)):
+            if role.is_default() or (getattr(role, "managed", False) and not role.is_premium_subscriber()):
+                continue
+            name = " ".join(role.name.split())
+            if not any(ch.isalnum() for ch in name) or "syke" in name.casefold() or DIVIDER_ROLE.search(name):
+                continue
+            names.append(name[:40])
+        return names[:limit]
+
+    async def roles_text(self, guild, author, chat: list[Turn] = ()) -> str:
+        """Roles of the person SYKE answers and up to three others in the chat, for the reply prompt.
+        Never fails a reply: no roles found means no ROLES section."""
+        if guild is None or not hasattr(guild, "get_member"):
+            return ""
+        try:
+            return await self._roles_text(guild, author, chat)
+        except Exception:
+            log.debug("couldn't read roles", exc_info=True)
+            return ""
+
+    async def _roles_text(self, guild, author, chat) -> str:
+        member = author if getattr(author, "roles", None) is not None and getattr(author, "guild", None) == guild \
+            else guild.get_member(author.id)
+        if member is None:   # a DM from someone missing from the member cache: ask Discord once, then cache
+            member = await self.fetch_member_cached(guild, author.id)
+        lines = []
+        mine = self.role_names(member) if member is not None else []
+        if mine:
+            lines.append(f"{self.speaker_name(author)}: {', '.join(mine)}")
+        seen = {getattr(author, "id", 0)}
+        for t in reversed(list(chat)):
+            if len(lines) >= 4 or not t.author_id or t.author_id in seen or t.author == "SYKE":
+                continue
+            seen.add(t.author_id)
+            other = guild.get_member(t.author_id)
+            theirs = self.role_names(other) if other is not None else []
+            if theirs:
+                lines.append(f"{t.author}: {', '.join(theirs)}")
+        return "\n".join(lines)
+
+    async def fetch_member_cached(self, guild, user_id: int):
+        hit = self._fetched_members.get((guild.id, user_id))
+        if hit and time.monotonic() - hit[0] < 3600:
+            return hit[1]
+        member = None
+        with contextlib.suppress(discord.HTTPException, AttributeError):
+            member = await guild.fetch_member(user_id)
+        self._fetched_members[(guild.id, user_id)] = (time.monotonic(), member)
+        return member
 
     def remember_turn(self, guild_id: int, author, their_text: str, turn: dict) -> None:
         """Keep what was said, plus any fact or running bit the AI noticed about them."""

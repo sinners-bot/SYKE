@@ -308,3 +308,62 @@ def test_full_freaky_in_dms_only_after_discords_18_check(cog):
     bot.storage.update_config(GID, "freaky", level=1)
     bot.note_age(NS(content="hi", author=NS(id=8), guild=NS(id=GID), channel=NS(id=3, is_nsfw=lambda: True)))
     assert "FREAKY 1/2" in bot.freaky_text(GID, None, 8)              # server isn't on level 2
+
+
+# Roles
+
+class Role:
+    def __init__(self, name, position, managed=False, default=False, booster=False):
+        self.name, self.position, self.managed = name, position, managed
+        self._default, self._booster = default, booster
+
+    def is_default(self):
+        return self._default
+
+    def is_premium_subscriber(self):
+        return self._booster
+
+
+async def test_reply_prompt_knows_peoples_roles(cog, monkeypatch):
+    bot = cog.bot
+    everyone = Role("@everyone", 0, default=True)
+    mo = NS(id=7, display_name="Mo", name="mo", bot=False,
+            roles=[everyone, Role("Female", 5), Role("Gamer", 3), Role("──── Games ────", 4),
+                   Role("MEE6", 9, managed=True), Role("Server Booster", 8, managed=True, booster=True),
+                   Role("SYKE · contaminated", 1)])
+    zara = NS(id=8, display_name="Zara", name="zara", bot=False, roles=[everyone, Role("Male", 2), Role("Mod", 6)])
+    guild = NS(id=GID, get_member=lambda uid: {7: mo, 8: zara}.get(uid))
+    mo.guild = guild
+    assert bot.role_names(mo) == ["Server Booster", "Female", "Gamer"]
+    text = await bot.roles_text(guild, mo, [Turn("Zara", "lol", "", 8)])
+    assert text == "Mo: Server Booster, Female, Gamer\nZara: Mod, Male"
+
+    bot.settings = replace(bot.settings, ai_provider="openai", openai_api_key="k")
+    bot._voices[GID] = (time.monotonic(), botmod.Voice(chain=None, emojis=[], gifs=[]))
+    bot.storage.add_corpus(GID, [(1, 10, 100, "who up rn"), (2, 10, 101, "this chat is cooked")])
+    seen = {}
+
+    async def fake(s, system, user, temperature=1.0, timeout=30, model=None, images=None):
+        seen.update(system=system, user=user)
+        return '{"reply": "sis what"}'
+
+    monkeypatch.setattr(ai, "_call_openai", fake)
+    m = msg(Channel(), mo, "syke what do you think")
+    m.guild = guild
+    await bot.build_yap(m, target="what do you think")
+    assert "ROLES:\nMo: Server Booster, Female, Gamer" in seen["user"]
+    assert "she/her" in seen["system"] and "Never mock anyone for a gender" in seen["system"]
+
+
+async def test_dm_roles_come_from_the_home_server(cog, monkeypatch):
+    bot = cog.bot
+    fetched = []
+
+    async def fetch_member(uid):
+        fetched.append(uid)
+        return NS(id=uid, roles=[Role("@everyone", 0, default=True), Role("Female", 3)])
+
+    guild = NS(id=GID, get_member=lambda uid: None, fetch_member=fetch_member)
+    dm_author = NS(id=7, display_name="Mo", name="mo", bot=False)
+    assert await bot.roles_text(guild, dm_author) == "Mo: Female"
+    assert await bot.roles_text(guild, dm_author) == "Mo: Female" and fetched == [7]   # asked Discord once

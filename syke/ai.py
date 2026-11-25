@@ -422,6 +422,11 @@ TARGET just did something that deserves a nickname and you don't have one for th
 wear crocs to everything, always lose bets), give them one in "nickname" (2-3 words, like "jett main" or \
 "crocs king") and start using it. Never about their looks, body or identity.
 - NEW SLANG, when given, is words this server just started using: use one only when it fits naturally.
+- ROLES are people's Discord roles here; use them when the context allows. Gender roles decide how you talk \
+to and about someone: she/her and "sis"/"girl" energy for Female, he/him and "bro" energy for Male, they/them \
+for non-binary or pronoun roles. Other roles (Gamer, Mod, Level 50, VIP, Booster) are material: "mods \
+abusing power again", "level 3 and talking like that". Never mock anyone for a gender, religion, \
+nationality or sexuality role.
 - If the TARGET tells you something about their own life worth remembering for days (an exam on Friday, a \
 new dog, the game they main, a trip, a breakup), put it in "remember" — what it is, what a friend would \
 ask later (or ""), and in how many days to ask. If a new running joke with them comes up, put it in "bit".
@@ -481,7 +486,7 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
                         rng: random.Random | None = None, weights: dict[str, float] | None = None,
                         state: str = "", lore: list[str] = (), edge: str = "", memory: str = "",
                         full: bool = False, dm: bool = False, pictures: list = (),
-                        names: set[str] = frozenset(), slang: list[str] = ()):
+                        names: set[str] = frozenset(), slang: list[str] = (), roles: str = ""):
     """The best reply to `target` in the server's words and the chat's tone. Never raises.
 
     With AI, stored messages and Markov `remixed` lines are ammunition for a new message written
@@ -537,6 +542,8 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
             prompt += f"\n\n{edge}"
         if slang:
             prompt += "\n\nNEW SLANG here lately: " + ", ".join(slang)
+        if roles:
+            prompt += f"\n\nROLES:\n{roles}"
         if pictures:
             prompt += "\n\nPICTURES (attached, in this order): " + "; ".join(
                 f"{i + 1}. {p.label}" for i, p in enumerate(pictures))
