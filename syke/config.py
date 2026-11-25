@@ -37,6 +37,7 @@ class Settings:
     web_enabled: bool = False
     web_port: int = 8080
     web_base_url: str = ""
+    contact: str = ""                # shown on the privacy and terms pages (email or Discord handle)
     web_client_id: str = ""
     web_client_secret: str = ""
     web_secret: str = ""
@@ -99,6 +100,7 @@ def load_settings() -> Settings:
         web_enabled=web_enabled,
         web_port=_int("PORT", _int("SYKE_WEB_PORT", 8080)),
         web_base_url=base_url,
+        contact=os.getenv("SYKE_CONTACT", "").strip(),
         web_client_id=client_id,
         web_client_secret=client_secret,
         web_secret=web_secret,

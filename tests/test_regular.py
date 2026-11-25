@@ -296,18 +296,15 @@ async def test_reply_prompt_asks_back_and_carries_freaky(cog, monkeypatch):
     assert "ask something back" in seen["system"] and "FREAKY 1/2" in seen["user"]
 
 
-def test_full_freaky_in_dms_only_after_discords_18_check(cog):
+def test_never_freaky_in_dms(cog):
     bot = cog.bot
     bot.storage.update_config(GID, "freaky", level=2)
-    assert "FREAKY 1/2" in bot.freaky_text(GID, None, 7)              # a DM, no 18+ check yet: level 1
-    bot.note_age(NS(content="hey", author=NS(id=7), guild=NS(id=GID), channel=NS(id=3, is_nsfw=lambda: True)))
     dm = bot.freaky_text(GID, None, 7)
-    assert "private DM" in dm and "if they're flirting" in dm and "never explicit" in dm
+    assert "OFF IN DMs" in dm and "FREAKY 2/2" not in dm and "FREAKY 1/2" not in dm
     bot.note_age(NS(content="im 16 tho", author=NS(id=7), guild=None, channel=NS(id=4)))
-    assert "UNDER 18" in bot.freaky_text(GID, None, 7)                # said they're 16: nothing, ever
-    bot.storage.update_config(GID, "freaky", level=1)
-    bot.note_age(NS(content="hi", author=NS(id=8), guild=NS(id=GID), channel=NS(id=3, is_nsfw=lambda: True)))
-    assert "FREAKY 1/2" in bot.freaky_text(GID, None, 8)              # server isn't on level 2
+    assert "UNDER 18" in bot.freaky_text(GID, None, 7)
+    assert "FREAKY 2/2" in bot.freaky_text(GID, NS(is_nsfw=lambda: True), 8)     # 18+ channels unchanged
+
 
 
 # Roles

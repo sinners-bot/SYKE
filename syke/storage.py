@@ -380,6 +380,7 @@ CREATE TABLE IF NOT EXISTS syke_memory (
     created    REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS syke_memory_user ON syke_memory (guild_id, user_id, kind, created);
+DELETE FROM syke_memory WHERE kind = 'adult';   -- no longer kept (DMs are never freaky)
 CREATE TABLE IF NOT EXISTS persona_diary (
     guild_id   INTEGER NOT NULL,
     day        TEXT NOT NULL,
@@ -1489,7 +1490,7 @@ class Storage:
 
     # SYKE's memory of people: facts they mentioned, running bits, past conversations
 
-    MEMORY_KEEP = {"fact": 40, "bit": 8, "talk": 12, "nick": 2, "minor": 1, "adult": 1}
+    MEMORY_KEEP = {"fact": 40, "bit": 8, "talk": 12, "nick": 2, "minor": 1}
 
     def add_memory(self, guild_id: int, user_id: int, kind: str, text: str, followup: str = "",
                    due: float = 0, now: float | None = None) -> int:
@@ -1605,11 +1606,6 @@ class Storage:
         return [tuple(r) for r in self._read(
             "SELECT user_id, name, first_at, last_at, messages FROM dm_contacts ORDER BY last_at DESC", ())]
 
-    def known_people(self, limit: int = 5000) -> list[int]:
-        """Everyone SYKE has seen talk anywhere, most active first (for finding older DMs)."""
-        return [r[0] for r in self._read("SELECT author_id FROM corpus GROUP BY author_id ORDER BY COUNT(*) DESC "
-                                         "LIMIT ?", (limit,))]
-
     def author_names(self, guild_id: int, limit: int = 2000) -> list[str]:
         """Names people here have had (most recent per person), for spotting names in messages."""
         return [r[0] for r in self._read(
@@ -1635,10 +1631,3 @@ class Storage:
             "SELECT content, author_id, created_at FROM corpus WHERE guild_id = ? AND created_at >= ? "
             "ORDER BY created_at DESC LIMIT ?", (guild_id, since, limit))]
 
-    def mark_adult(self, user_id: int, where: str) -> None:
-        """They chatted in an age-restricted channel, so Discord had them confirm they're 18+."""
-        self.add_memory(0, user_id, "adult", where[:200])
-
-    def is_adult(self, user_id: int) -> bool:
-        return bool(self._read("SELECT 1 FROM syke_memory WHERE guild_id = 0 AND user_id = ? AND kind = 'adult' "
-                               "LIMIT 1", (user_id,)))

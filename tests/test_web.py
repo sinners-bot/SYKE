@@ -1117,7 +1117,7 @@ async def test_dm_list_survives_restarts_and_opens_any_dm(dash, monkeypatch):
         bob = _dm_channel(8, "bob", [])
         monkeypatch.setattr(web, "_dm_channels", lambda: [bob])      # open this session
         body = await (await cl.get("/dms")).text()
-        assert "Ada" in body and "Bob" in body and "href='/dm/7'" in body and "Find older DMs" in body
+        assert "Ada" in body and "Bob" in body and "href='/dm/7'" in body and "Find older DMs" not in body
         ada_dm = _dm_channel(7, "ada", [_fake_message(1, 7, "Ada", "hey SYKE", 1_700_000_000)])
 
         async def fetch_user(uid):
@@ -1129,32 +1129,19 @@ async def test_dm_list_survives_restarts_and_opens_any_dm(dash, monkeypatch):
         assert resp.status == 200 and "hey SYKE" in await resp.text()
 
 
-async def test_finding_older_dms(dash, monkeypatch):
+def test_no_mass_dm_search(dash):
     web, bot, guild = dash
-    monkeypatch.setattr("syke.web.DM_SCAN_GAP", 0)
-    bot.storage.add_corpus(1, [(1, 10, 7, "hi", 1.0, "Ada"), (2, 10, 8, "yo", 1.0, "Bob"), (3, 10, 9, "sup", 1.0, "Cy")])
-    talks = {7: [_fake_message(2, 999, "SYKE", "later", 1_700_000_500), _fake_message(1, 7, "Ada", "first", 1_700_000_000)],
-             8: []}
-
-    async def fetch_user(uid):
-        if uid == 9:
-            raise discord.NotFound(types.SimpleNamespace(status=404, reason="gone"), "unknown user")
-        async def hist(limit=None):
-            for m in talks[uid]:
-                yield m
-        return types.SimpleNamespace(id=uid, name=f"u{uid}", global_name=None, bot=False,
-                                     dm_channel=types.SimpleNamespace(history=hist))
-
-    monkeypatch.setattr(bot, "fetch_user", fetch_user)
-    monkeypatch.setattr(bot, "get_user", lambda uid: None)
-    web._dm_scan_state = {"running": True, "checked": 0, "found": 0, "total": 0}
-    await web._scan_dms()
-    assert web._dm_scan_state == {"running": False, "done": True, "checked": 3, "found": 1, "total": 3}
-    assert bot.storage.dm_contacts() == [(7, "u7", 1_700_000_000, 1_700_000_500, 2)]
+    assert not hasattr(web, "_scan_dms") and not hasattr(web, "dms_scan")   # removed: looked like a spam bot
 
 
-async def test_dm_search_needs_csrf(dash):
+
+async def test_privacy_and_terms_are_public(dash):
     async with serving(dash) as (cl, web, bot, guild):
-        cl.session.cookie_jar.update_cookies(_session_cookie())
-        resp = await cl.post("/dms/scan", data={}, allow_redirects=False)
-        assert resp.status == 403
+        for path, words in (("/privacy", ("What SYKE collects", "optout", "OpenAI", "never in DMs")),
+                            ("/terms", ("Terms of Service", "Coins aren't money", "/privacy"))):
+            resp = await cl.get(path)                       # no login needed
+            body = await resp.text()
+            assert resp.status == 200 and all(w in body for w in words), path
+        assert "/privacy" in await (await cl.get("/")).text()
+        web.bot.settings = __import__("dataclasses").replace(web.bot.settings, contact="help@syke.gg")
+        assert "mailto:help@syke.gg" in await (await cl.get("/privacy")).text()

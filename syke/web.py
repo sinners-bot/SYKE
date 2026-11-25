@@ -60,8 +60,7 @@ def gif_label(url: str) -> str:
     return " ".join(words) or "GIF"
 
 MESSAGES_SHOWN = 60
-DM_SCAN_GAP = 0.6       # seconds between people when looking for older DMs (stays under Discord's limits)
-DM_SCAN_PEEK = 50       # messages read per person to date and count the conversation
+POLICY_DATE = "25 November 2026"
 STORED_PREVIEW = 40
 MEDIA_SCAN = 200
 BRAND = "#8B5CF6"
@@ -899,7 +898,6 @@ class WebDashboard:
         self.runner: web.AppRunner | None = None
         # channel_id -> set of live WebSocket connections watching that channel
         self._subs: dict[int, set] = defaultdict(set)
-        self._dm_scan_state: dict = {}
         self._add_routes()
         from .web_live import LiveHub
         self.live = LiveHub(self)   # gateway events -> chat view and Live page
@@ -921,6 +919,8 @@ class WebDashboard:
         a = self.app.router.add_get
         p = self.app.router.add_post
         a("/", self.home)
+        a("/privacy", self.privacy_page)
+        a("/terms", self.terms_page)
         a("/login", self.login)
         a("/callback", self.callback)
         a("/logout", self.logout)
@@ -929,7 +929,6 @@ class WebDashboard:
         a("/g/{gid}/u/{uid}", self.member_profile)
         a("/dms", self.dms_page)
         a("/dm/{uid}", self.dm_view)
-        p("/dms/scan", self.dms_scan)
         a("/g/{gid}/alts", self.alt_scan)
         a("/g/{gid}/memory", self.memory_page)
         p("/g/{gid}/memory/remove", self.memory_remove)
@@ -1059,6 +1058,105 @@ class WebDashboard:
 
     # Pages
 
+    def _contact(self) -> str:
+        contact = esc(self.bot.settings.contact)
+        if not contact:
+            return "SYKE's owners on Discord (ask in a server SYKE is in)"
+        if "@" in contact and "." in contact.split("@")[-1] and " " not in contact:
+            return f"<a href='mailto:{contact}'>{contact}</a>"
+        return contact
+
+    async def privacy_page(self, request: web.Request) -> web.Response:
+        contact = self._contact()
+        body = f"""
+<div class='prof legal'>
+<h1>SYKE privacy policy</h1>
+<p class='muted'>Last updated {POLICY_DATE}</p>
+<p>SYKE is a Discord bot. This page says what it collects, why, who can see it and how to get it deleted.</p>
+
+<h2>What SYKE collects</h2>
+<ul>
+<li><b>Messages in tracked channels.</b> Server admins choose which channels SYKE reads. From those, SYKE stores
+the message text, who sent it (Discord ID and display name), when, how many reactions it got and who it replied
+to. SYKE skips bot commands where it can.</li>
+<li><b>DMs with SYKE.</b> Messages people send SYKE in DMs, and SYKE's replies, stay in the DM on Discord. SYKE
+keeps a list of who it has DM conversations with and when.</li>
+<li><b>What SYKE remembers about people.</b> How it feels about you (from how you talk to it), things you said
+about your own life (like an exam on Friday), running jokes and nicknames, and short notes of past conversations
+with it. If you say you're under 18, SYKE remembers that so it never sends you anything freaky.</li>
+<li><b>Feature data.</b> Things you do with SYKE's features: coins and items, music likes and history, quotes,
+polls, achievements, moderation cases and similar.</li>
+<li><b>Roles and pictures.</b> When SYKE answers you it reads your server roles and any picture you sent with
+the message. Neither is stored.</li>
+</ul>
+
+<h2>What it's used for</h2>
+<p>Only to run SYKE's features: chat replies in the server's style, profiles, Wrapped, quotes, the economy, music,
+moderation and the owner dashboard. SYKE doesn't sell data, doesn't use it for ads and doesn't share it with
+anyone except the services below.</p>
+
+<h2>Services SYKE uses</h2>
+<ul>
+<li><b>OpenAI</b> (or Anthropic, if configured) receives the recent chat, your message and any picture you sent,
+to write SYKE's reply. Their API terms say this data isn't used to train their models.</li>
+<li><b>Railway</b> hosts SYKE and its database.</li>
+<li><b>Lavalink and YouTube</b> play music; they get the song searches.</li>
+</ul>
+
+<h2>Who can see it</h2>
+<p>Other members see what features show (like profiles, quotes or leaderboards). SYKE's owners can view stored
+chats and DM conversations with SYKE on a private, owner-only dashboard, to moderate and to fix problems.
+Nobody else has access.</p>
+
+<h2>Your choices</h2>
+<ul>
+<li><b>Opt out:</b> <code>optout</code> in a server makes SYKE stop reading and judging you there and deletes
+the messages and memories it stored about you in that server. <code>optin</code> undoes it.</li>
+<li><b>Delete everything:</b> ask {contact} and your data is deleted from every server, including DM records.</li>
+<li><b>Server data:</b> server admins can ask {contact} to delete a whole server's data, for example after
+removing SYKE.</li>
+</ul>
+
+<h2>How long it's kept</h2>
+<p>Until you opt out or ask for deletion, or until a server asks for its data to be deleted. Messages people
+delete on Discord may stay in SYKE's copy until then.</p>
+
+<h2>Children</h2>
+<p>SYKE follows Discord's age rules (13+). Freaky features only run in channels Discord marks age-restricted
+(18+), never in DMs, and never with anyone who has said they're under 18.</p>
+
+<h2>Contact</h2>
+<p>Questions or deletion requests: {contact}.</p>
+<p class='muted'><a href='/terms'>Terms of service</a></p>
+</div>"""
+        return layout("Privacy policy", body, user=self._user(request))
+
+    async def terms_page(self, request: web.Request) -> web.Response:
+        contact = self._contact()
+        body = f"""
+<div class='prof legal'>
+<h1>SYKE terms of service</h1>
+<p class='muted'>Last updated {POLICY_DATE}</p>
+<p>By adding SYKE to a server or using it, you agree to these terms and to
+<a href='https://discord.com/terms'>Discord's Terms of Service</a> and
+<a href='https://discord.com/guidelines'>Community Guidelines</a>.</p>
+<ul>
+<li><b>Use it fairly.</b> Don't use SYKE to harass, threaten or spam people, to get around Discord's rules, or
+to break the law. SYKE's owners can block anyone or any server from using it.</li>
+<li><b>It's a joke bot.</b> SYKE roasts, jokes and talks in the server's style, with AI. Its replies can be
+wrong, rude or dark depending on the server's settings; they aren't facts or advice. Server admins choose how
+edgy it is (<code>edge</code>, <code>freaky</code>, <code>talkative</code>) and are responsible for those
+choices in their server.</li>
+<li><b>Age.</b> You must meet Discord's minimum age. Freaky features are only for age-restricted (18+)
+channels.</li>
+<li><b>Coins aren't money.</b> SYKE's coins and items have no real-world value and can't be bought or sold.</li>
+<li><b>No guarantees.</b> SYKE is provided as is. It can go offline, lose data or change at any time.</li>
+<li><b>Privacy.</b> See the <a href='/privacy'>privacy policy</a>.</li>
+</ul>
+<p>Questions: {contact}.</p>
+</div>"""
+        return layout("Terms of service", body, user=self._user(request))
+
     async def home(self, request: web.Request) -> web.Response:
         user = self._user(request)
         if user is None:
@@ -1067,6 +1165,7 @@ class WebDashboard:
                 "<p class='muted'>Every server SYKE is in, their channels and chats, "
                 "and controls. Owners only.</p>"
                 "<p><a class='btn brand' href='/login'>Log in with Discord</a></p>"
+                "<p class='muted'><a href='/privacy'>Privacy policy</a> · <a href='/terms'>Terms of service</a></p>"
             ))
         guilds = sorted(self.bot.guilds, key=lambda g: g.member_count or 0, reverse=True)
         servers, members = self.bot.reach()
@@ -1912,74 +2011,17 @@ class WebDashboard:
             cards.append(f"<a class='dmcard' href='/dm/{uid}'>{img}"
                          f"<div><div class='dmn'>{esc(name)}</div>"
                          f"<div class='muted'>{handle}{uid}{seen}{when}</div></div></a>")
-        scan = self._dm_scan_state
-        if scan.get("running"):
-            status = (f"<div class='note'>🔎 Looking for older DMs: checked {scan['checked']:,} of {scan['total']:,} "
-                      f"people, found {scan['found']:,}. Refresh to see more.</div>")
-        elif scan.get("done"):
-            status = (f"<div class='note'>Last search checked {scan['checked']:,} people and found "
-                      f"{scan['found']:,} conversation{'s' * (scan['found'] != 1)}.</div>")
-        else:
-            status = ""
-        button = ("" if scan.get("running") else
-                  f"<form method='post' action='/dms/scan'>{self._hidden_csrf(user[0])}"
-                  "<button>Find older DMs</button></form>")
         body = (
             "<div class='prof'><h1>💬 Direct messages</h1>"
-            f"<p class='muted'>Every DM conversation with SYKE: {len(rows):,} people. SYKE keeps this list itself "
-            "because Discord doesn't let bots list their DMs. Conversations from before this list existed show up "
-            "after <b>Find older DMs</b>, which checks everyone SYKE has seen in your servers.</p>"
-            f"{status}{button}"
+            f"<p class='muted'>Every DM conversation with SYKE: {len(rows):,} people. SYKE keeps this list itself, "
+            "because Discord doesn't let bots list their DMs: anyone who DMs him (or gets a DM from him) shows up "
+            "here.</p>"
             + (f"<div class='dmgrid'>{''.join(cards)}</div>" if cards
                else "<div class='note'>No DM conversations yet.</div>")
             + "<script>document.querySelectorAll('time[data-ts]').forEach(function(e){"
               "e.textContent=new Date(+e.dataset.ts*1000).toLocaleString();});</script></div>"
         )
         return layout("Direct messages", body, user=user)
-
-    async def dms_scan(self, request: web.Request) -> web.Response:
-        user = self._user(request)
-        if user is None:
-            raise web.HTTPFound("/login")
-        data = dict(await request.post())
-        if not self._check_csrf(request, data, user[0]):
-            raise web.HTTPForbidden(text="bad or missing CSRF token")
-        if not self._dm_scan_state.get("running"):
-            self._dm_scan_state = {"running": True, "checked": 0, "found": 0, "total": 0}
-            self.bot.spawn(self._scan_dms())
-        raise self._redirect("/dms", ok="Looking for older DMs in the background. Refresh in a minute.")
-
-    async def _scan_dms(self) -> None:
-        """Open a DM channel with everyone SYKE knows and keep the ones that have messages (slowly)."""
-        state = self._dm_scan_state
-        known = {uid for uid, *_ in self.bot.storage.dm_contacts()}
-        people = [uid for uid in await asyncio.to_thread(self.bot.storage.known_people) if uid not in known]
-        me = getattr(self.bot.user, "id", None)
-        state["total"] = len(people)
-        try:
-            for uid in people:
-                state["checked"] += 1
-                if uid == me:
-                    continue
-                try:
-                    person = self.bot.get_user(uid) or await self.bot.fetch_user(uid)
-                    if person.bot:
-                        continue
-                    channel = person.dm_channel or await person.create_dm()
-                    messages = [m async for m in channel.history(limit=DM_SCAN_PEEK)]
-                except (discord.HTTPException, AttributeError):
-                    continue
-                finally:
-                    await asyncio.sleep(DM_SCAN_GAP)
-                if messages:
-                    newest, oldest = messages[0], messages[-1]
-                    name = getattr(person, "global_name", None) or person.name
-                    self.bot.storage.note_dm(uid, name, oldest.created_at.timestamp(), 0)
-                    self.bot.storage.note_dm(uid, name, newest.created_at.timestamp(), len(messages))
-                    state["found"] += 1
-        finally:
-            state["running"], state["done"] = False, True
-            log.info("DM search done: checked %s, found %s", state["checked"], state["found"])
 
     async def dm_view(self, request: web.Request) -> web.Response:
         user = self._user(request)

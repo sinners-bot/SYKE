@@ -116,9 +116,9 @@ class Human(commands.Cog, name="Human"):
                      for n, (name, about) in FREAKY_LEVELS.items()]
             await ctx.reply(embed=discord.Embed(
                 title=f"😏 SYKE's freaky level here: {current} · {FREAKY_LEVELS[current][0]}",
-                description="\n".join(lines) + "\n\nNever explicit, never aimed at someone who didn't start it, "
-                            "and never with anyone who said they're under 18. Level 2 only kicks in inside "
-                            "age-restricted channels.\n"
+                description="\n".join(lines) + "\n\nNever explicit, never in DMs, never aimed at someone who "
+                            "didn't start it, and never with anyone who said they're under 18. Level 2 only kicks "
+                            "in inside age-restricted channels.\n"
                             f"Managers: `{ctx.clean_prefix}freaky 0-2`",
                 colour=discord.Colour.magenta()), mention_author=False)
             return

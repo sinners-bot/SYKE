@@ -441,8 +441,7 @@ CATALOG: list[Category] = [
             "persona": "Managers: `persona callouts on|off` (broken-promise callouts) and `persona reactions on|off` "
                        "(the emoji SYKE adds when someone's rude 😒 or nice 🥹 to him).",
             "freaky": "How freaky SYKE gets here: `freaky` shows the level, managers set `freaky 0-2` (0 off, "
-                      "1 more innuendo and flirting back, 2 full freaky in age-restricted channels, and in DMs when someone "
-                      "who's chatted in one flirts with him). Never "
+                      "1 more innuendo and flirting back, 2 full freaky in age-restricted channels only; never in DMs). Never "
                       "explicit, and never with anyone who said they're under 18.",
             "edge": "How dark SYKE's humour runs here: `edge` shows the level, managers set `edge 0-3` "
                     "(0 normal, 1 spicy, 2 dark, 3 unhinged). No slurs at any level, and he drops the jokes "
