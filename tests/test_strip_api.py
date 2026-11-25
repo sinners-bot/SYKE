@@ -352,3 +352,19 @@ def test_activity_pay_is_capped_per_hour_and_day(env):
     assert total == sa.ACTIVITY_PER_DAY                         # (a rolling 24 hours)
     clock.t += 86401
     assert svc.activity(G, U, 100)["amount"] == 100           # a new day
+
+
+def test_admin_adjust_and_pay_event(env):
+    db, svc, clock = env
+    svc.state(G, U)
+    c0 = db.econ_wallet(G, U)["cash"]
+    assert svc.admin_adjust(G, U, 5000, "test")["amount"] == 5000
+    assert svc.admin_adjust(G, U, -10**6, "take")["amount"] == -(c0 + 5000)       # never below zero
+    assert db.econ_wallet(G, U)["cash"] == 0
+    db.econ_adjust(G, U, jail_until=clock.t + 999)
+    svc.admin_adjust(G, U, 0, "free", free=True)
+    assert not db.econ_wallet(G, U)["jail_until"]
+    with pytest.raises(StripError):
+        svc.admin_adjust(G, U, 2_000_000)
+    a = svc.work(G, U, 1.0, 1.0, shift=True, event=5)                              # clamped to x2
+    assert a["amount"] <= 620 * 2 * 1.25 * 1.15 + 1

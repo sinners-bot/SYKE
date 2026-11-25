@@ -50,6 +50,9 @@ SHIFT_COOLDOWN = 20 * 60
 # Activity pay: the game pays a little for being out and about and doing things (cooking, racing, events, parties...).
 # The game decides what was earned; SYKE caps it so no amount of activity (or scripting) prints money.
 ACTIVITY_MAX = 400
+# The owner dashboard in the game: a direct adjustment (logged) and a pay event that lifts shift pay for everyone.
+ADMIN_MAX = 1_000_000
+EVENT_BOOST = (1.0, 2.0)
 ACTIVITY_PER_HOUR = 1_500
 ACTIVITY_PER_DAY = 9_000
 SPEND_MAX = 100_000        # biggest single cosmetic purchase (motel furniture, makeovers...)
@@ -153,7 +156,7 @@ class StripService:
         row = self.db._read("SELECT at FROM strip_shift WHERE guild_id=? AND user_id=?", (gid, uid))
         return float(row[0][0]) if row else 0.0
 
-    def work(self, gid: int, uid: int, bonus: float = 1.0, rank: float = 1.0, shift: bool = False) -> dict:
+    def work(self, gid: int, uid: int, bonus: float = 1.0, rank: float = 1.0, shift: bool = False, event: float = 1.0) -> dict:
         w = self.guard(gid, uid)
         self.free(w)
         now = self.now()
@@ -174,7 +177,8 @@ class StripService:
                 perks.append(buff)
         bonus = min(max(float(bonus), WORK_BONUS[0]), WORK_BONUS[1])
         rank = min(max(float(rank), WORK_RANK[0]), WORK_RANK[1])   # the game's career rank: a promotion raises the rate
-        amount = int(base * boost * bonus * rank)
+        event = min(max(float(event or 1.0), EVENT_BOOST[0]), EVENT_BOOST[1]) if shift else 1.0   # a pay event, set by the game's owner
+        amount = int(base * boost * bonus * rank * event)
         if shift:
             self.db.econ_adjust(gid, uid, cash=amount)
             self.db._write("INSERT INTO strip_shift VALUES (?, ?, ?) ON CONFLICT(guild_id, user_id) DO UPDATE SET at=excluded.at", (gid, uid, now))
@@ -307,6 +311,24 @@ class StripService:
         return {"amount": pay, "asked": amount, "reason": str(reason)[:60], "hour_left": max(0, ACTIVITY_PER_HOUR - hour - pay),
                 "day_left": max(0, ACTIVITY_PER_DAY - day - pay)}
 
+    def admin_adjust(self, gid: int, uid: int, amount: int, reason: str = "", free: bool = False) -> dict:
+        """The game owner's dashboard: add or take cash (never below zero), or let someone out of jail. Logged."""
+        w = self.guard(gid, uid)
+        try:
+            amount = int(amount or 0)
+        except (TypeError, ValueError):
+            raise StripError("bad_amount", "That's not an amount.")
+        if abs(amount) > ADMIN_MAX:
+            raise StripError("bad_amount", f"At most {ADMIN_MAX:,} at a time.")
+        take = max(amount, -w["cash"])
+        if take:
+            self.db.econ_adjust(gid, uid, cash=take)
+        if free:
+            self.db.econ_adjust(gid, uid, jail_until=0)
+        self.db._write("CREATE TABLE IF NOT EXISTS strip_admin_log (guild_id INTEGER, user_id INTEGER, amount INTEGER, free INTEGER, reason TEXT, ts REAL)", ())
+        self.db._write("INSERT INTO strip_admin_log VALUES (?, ?, ?, ?, ?, ?)", (gid, uid, take, 1 if free else 0, str(reason)[:120], self.now()))
+        return {"amount": take, "freed": bool(free)}
+
     def grant(self, gid: int, uid: int, amount: int, reason: str = "") -> dict:
         self.guard(gid, uid)
         amount = int(amount)
@@ -386,7 +408,8 @@ class StripAPI:
         return {
             "state": lambda g, u, b: {},
             "daily": lambda g, u, b: s.daily(g, u),
-            "work": lambda g, u, b: s.work(g, u, b.get("bonus", 1.0), b.get("rank", 1.0), bool(b.get("shift"))),
+            "work": lambda g, u, b: s.work(g, u, b.get("bonus", 1.0), b.get("rank", 1.0), bool(b.get("shift")), b.get("event", 1.0)),
+            "admin_adjust": lambda g, u, b: s.admin_adjust(g, u, b.get("amount", 0), b.get("reason", ""), bool(b.get("free"))),
             "buy": lambda g, u, b: s.buy(g, u, b.get("item"), b.get("qty", 1)),
             "use": lambda g, u, b: s.use(g, u, b.get("item")),
             "pawn": lambda g, u, b: s.pawn(g, u, b.get("item"), b.get("qty", 1)),
