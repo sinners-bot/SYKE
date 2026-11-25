@@ -149,3 +149,17 @@ def test_resell_a_set_piece_by_piece(homes):
     with pytest.raises(HomeError):
         h.resell(G, U, "rid-set-1", 3, 3)
     assert h.resell(G, U, "rid-set-1", 1)["amount"] == 500          # piece count read from the purchase
+
+
+def test_sell_home_pays_seventy_percent_once(homes):
+    db, h = homes
+    start = db.econ_wallet(G, U)["cash"]
+    h.purchase(G, U, 4000, "property", "rid-prop-9")
+    r = h.sell_home(G, U, "lot-3", "rid-prop-9", 999999)   # the price passed is ignored when the purchase is on record
+    assert r["amount"] == 2800 and r["paid"] == 4000 and db.econ_wallet(G, U)["cash"] == start - 4000 + 2800
+    assert h.sell_home(G, U, "lot-3", "rid-prop-9")["replayed"] and db.econ_wallet(G, U)["cash"] == start - 1200
+    with pytest.raises(HomeError) as e:          # not your purchase, and no list price given
+        h.sell_home(G, U2, "lot-3", "rid-prop-9")
+    assert e.value.code == "not_bought"
+    legacy = h.sell_home(G, U2, "lot-4", "", 1000)  # bought before request ids were kept: the list price
+    assert legacy["amount"] == 700

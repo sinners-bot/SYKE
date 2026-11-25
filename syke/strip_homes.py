@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS strip_home_item_log (
 PURCHASE_MAX = 1_000_000          # the most expensive thing on the Strip (a penthouse)
 RESELL_RATE = 0.5                 # selling furniture back pays half what you paid
 RESELLABLE = ("furniture",)
+SELL_HOME_RATE = 0.7              # selling a home you bought pays 70% of what you paid for it
 STORE_MAX_QTY = 99
 RID = re.compile(r"^[A-Za-z0-9_:.\-]{6,80}$")
 HOME = re.compile(r"^[A-Za-z0-9_:\-]{1,60}$")
@@ -266,6 +267,39 @@ class HomeService:
                              (gid, uid, key, "resell", -amount, w["cash"], json.dumps({"of": rid, "part": part, "parts": n, "paid": row[0]}), self.now()))
                 return {"amount": amount, "paid": int(row[0] // n), "cash": w["cash"]}
             return self._once(conn, gid, uid, key, "resell", inner)
+        return self._tx(do)
+
+    def sell_home(self, gid: int, uid: int, home, rid=None, price=None) -> dict:
+        """Sell a home you bought back to the market: SELL_HOME_RATE of what you paid (found by the purchase's request id;
+        for purchases from before ids were kept, the game passes the list price), once per purchase."""
+        self.guard(gid, uid)
+        home = self._home(home)
+        rid = str(rid or "")
+        try:
+            price = None if price is None else max(0, min(PURCHASE_MAX, int(price)))
+        except (TypeError, ValueError):
+            raise HomeError("bad_args", "What price?")
+        key = ("sellhome:" + home + ":" + (rid or "legacy"))[:80]
+
+        def do(conn):
+            def inner():
+                paid = None
+                if RID.match(rid):
+                    row = conn.execute("SELECT amount FROM strip_home_ledger WHERE guild_id=? AND user_id=? AND rid=? AND kind='property' ORDER BY id LIMIT 1",
+                                       (gid, uid, rid)).fetchone()
+                    paid = row[0] if row else None
+                if paid is None:
+                    if not price:
+                        raise HomeError("not_bought", "There's no purchase to sell.")
+                    paid = price
+                amount = int(paid * SELL_HOME_RATE)
+                w = self.db._wallet_row(conn, gid, uid)
+                w["cash"] += amount
+                self.db._write_wallet(conn, gid, uid, w)
+                conn.execute("INSERT INTO strip_home_ledger (guild_id, user_id, rid, kind, amount, cash_after, detail, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                             (gid, uid, key, "sellhome", -amount, w["cash"], json.dumps({"home": home, "of": rid, "paid": paid}), self.now()))
+                return {"amount": amount, "paid": paid, "cash": w["cash"]}
+            return self._once(conn, gid, uid, key, "sellhome", inner)
         return self._tx(do)
 
     def release(self, gid: int, uid: int, home) -> dict:

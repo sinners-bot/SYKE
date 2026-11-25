@@ -438,6 +438,7 @@ class StripAPI:
             "home_take": lambda g, u, b: self.homes.take(g, u, b.get("home"), b.get("item"), b.get("qty", 1), b.get("rid")),
             "home_release": lambda g, u, b: self.homes.release(g, u, b.get("home")),
             "home_resell": lambda g, u, b: self.homes.resell(g, u, b.get("rid"), b.get("part"), b.get("parts")),
+            "home_sell": lambda g, u, b: self.homes.sell_home(g, u, b.get("home"), b.get("rid"), b.get("price")),
             "home_purchase_split": lambda g, u, b: self.homes.purchase_split(g, u, b.get("partner"), b.get("amount"), b.get("kind", ""), b.get("rid"), b.get("detail")),
             "home_transfer": lambda g, u, b: self.homes.transfer(g, u, b.get("owner"), b.get("home"), b.get("item"), b.get("qty", 1), b.get("rid")),
             "home_storage_of": lambda g, u, b: self.homes.storage_of(g, u, b.get("owner"), b.get("home")),
