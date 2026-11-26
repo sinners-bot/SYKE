@@ -300,8 +300,8 @@ CATALOG: list[Category] = [
                      "it into a black-and-white quote card with the member's avatar. Buttons switch colour on, flip "
                      "it, or delete it. Admins: `quote channel #quotes` also posts every card there.",
             "poll": "Mods: `poll` (or `/poll create`) opens a form. **Polls**: the question, options one per line, "
-                    "how long, anonymous or showing who voted, and extras (pick more than one, hide results until "
-                    "the end, vote from a list instead of buttons). Votes update live and SYKE predicts the winner, "
+                    "how long, and extras (anonymous, pick more than one, hide results until "
+                    "the end, vote from a list instead of buttons) and who to ping: @everyone, @here or a role. Votes update live and SYKE predicts the winner, "
                     "then comments on the result when it closes. **Questions** (`/poll question`): people press "
                     "**Answer** and type privately (\"Who would most likely adopt a dog?\"); only admins and mods "
                     "can read the answers, and for name questions SYKE counts who was named most. `poll list`, "

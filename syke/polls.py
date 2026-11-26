@@ -1,8 +1,8 @@
 """Polls and question boxes, made from a form.
 
 `/poll create` (or `poll` → Create a poll) opens a form: the question, options one per line, how long,
-anonymous or not, and extras (several choices, results hidden until the end, a dropdown list instead of
-buttons). The poll card shows live bars, SYKE's prediction, and buttons or a list to vote with. When it
+anonymous or not, extras (several choices, results hidden until the end, a dropdown list instead of
+buttons) and who to ping (@everyone, @here or a role). The poll card shows live bars, SYKE's prediction, and buttons or a list to vote with. When it
 ends SYKE posts the result with a comment in his own mood.
 
 `/poll question` (or `poll` → Ask a question) posts a question people answer privately in a text box
@@ -42,7 +42,8 @@ BAR = 12
 POLL_COLOUR = discord.Colour.from_str("#7F77DD")
 QUESTION_COLOUR = discord.Colour.from_str("#378ADD")
 
-EXTRA_MULTI, EXTRA_BLIND, EXTRA_LIST = "multi", "blind", "list"
+EXTRA_MULTI, EXTRA_BLIND, EXTRA_LIST, EXTRA_ANON = "multi", "blind", "list", "anon"
+PING_EVERYONE, PING_HERE = "everyone", "here"
 
 PREDICT_PROMPT = """You are SYKE, a cocky Discord bot with a personality, in the server "{server}". A poll just \
 opened. Predict which option wins, in ONE short, casual line (max 20 words, phone typing, lowercase is fine, \
@@ -273,6 +274,50 @@ class AnswersButton(discord.ui.DynamicItem[discord.ui.Button], template=r"syke:q
             await cog.show_answers(interaction, self.question)
 
 
+# Pings
+
+def ping_choice(values) -> str | None:
+    """@everyone wins over @here when a form had both ticked."""
+    values = set(values or ())
+    return PING_EVERYONE if PING_EVERYONE in values else PING_HERE if PING_HERE in values else None
+
+
+def _can_mention_everyone(channel, who) -> bool:
+    if who is None:
+        return False
+    try:
+        return bool(channel.permissions_for(who).mention_everyone)
+    except (AttributeError, TypeError):
+        perms = getattr(who, "guild_permissions", None)
+        return bool(getattr(perms, "administrator", False) or getattr(perms, "mention_everyone", False))
+
+
+def plan_ping(channel, user, me, role, everyone: str | None) -> tuple[str | None, discord.AllowedMentions, str]:
+    """What to put above the card, which pings Discord may send, and a note for the poster if something was dropped.
+
+    @everyone, @here and roles that aren't set to be mentionable need the Mention Everyone permission, from the
+    poster (SYKE's owner is always allowed) and from SYKE, or Discord won't ping anyone.
+    """
+    if role is not None and getattr(role, "is_default", lambda: False)():
+        role, everyone = None, everyone or PING_EVERYONE        # the @everyone "role" picked from the role list
+    needs = bool(everyone) or (role is not None and not getattr(role, "mentionable", False))
+    note = ""
+    if needs and not (is_owner(user) or _can_mention_everyone(channel, user)):
+        note = ("You need the **Mention Everyone** permission to ping "
+                f"{'@' + everyone if everyone else role.mention}, so I posted it without that ping.")
+        if everyone:
+            everyone = None
+        else:
+            role = None
+    elif needs and not _can_mention_everyone(channel, me):
+        note = ("I don't have **Mention Everyone** in this channel, so Discord didn't ping anyone. "
+                "Give me that permission, or make the role mentionable.")
+    parts = ([f"@{everyone}"] if everyone else []) + ([role.mention] if role is not None else [])
+    allowed = discord.AllowedMentions(everyone=bool(everyone), roles=[role] if role is not None else False,
+                                      users=False, replied_user=False)
+    return (" ".join(parts) or None), allowed, note
+
+
 # Forms
 
 class PollForm(discord.ui.Modal, title="Create a poll"):
@@ -284,29 +329,32 @@ class PollForm(discord.ui.Modal, title="Create a poll"):
                                             placeholder="Pepperoni\nMargherita\nPineapple")
         self.length = discord.ui.TextInput(placeholder="1h  (10m, 2h, 1d, or empty for no end)", required=False,
                                            max_length=12, default="1h")
-        self.who = discord.ui.Select(options=[
-            discord.SelectOption(label="Show who voted", value="public", default=True,
-                                 description="A Voters button shows who picked what"),
-            discord.SelectOption(label="Anonymous", value="anon", description="Nobody can see who voted for what"),
-        ])
-        self.extras = discord.ui.Select(min_values=0, max_values=3, required=False, options=[
+        self.extras = discord.ui.Select(min_values=0, max_values=6, required=False, options=[
+            discord.SelectOption(label="Anonymous", value=EXTRA_ANON, description="Nobody can see who voted for what"),
             discord.SelectOption(label="Let people pick more than one", value=EXTRA_MULTI),
             discord.SelectOption(label="Hide results until it ends", value=EXTRA_BLIND),
             discord.SelectOption(label="Vote from a list instead of buttons", value=EXTRA_LIST),
+            discord.SelectOption(label="Ping @everyone", value=PING_EVERYONE, emoji="📣"),
+            discord.SelectOption(label="Ping @here", value=PING_HERE, emoji="📣",
+                                 description="Only people who are online"),
         ])
+        self.role = discord.ui.RoleSelect(min_values=0, max_values=1, required=False,
+                                          placeholder="Nobody")
         self.add_item(discord.ui.Label(text="Question", component=self.question))
         self.add_item(discord.ui.Label(text="Options", description="One per line, 2 to 15",
                                        component=self.options))
         self.add_item(discord.ui.Label(text="How long", component=self.length))
-        self.add_item(discord.ui.Label(text="Voters", component=self.who))
-        self.add_item(discord.ui.Label(text="Extras", description="Optional", component=self.extras))
+        self.add_item(discord.ui.Label(text="Extras", description="Optional. Votes are public unless Anonymous",
+                                       component=self.extras))
+        self.add_item(discord.ui.Label(text="Ping a role", description="Optional", component=self.role))
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         extras = set(self.extras.values)
         await self.cog.create_poll(interaction, self.question.value, self.options.value, self.length.value,
-                                   anonymous=(self.who.values or ["public"])[0] == "anon",
+                                   anonymous=EXTRA_ANON in extras,
                                    multi=EXTRA_MULTI in extras, blind=EXTRA_BLIND in extras,
-                                   style="list" if EXTRA_LIST in extras else "buttons")
+                                   style="list" if EXTRA_LIST in extras else "buttons",
+                                   ping_role=(self.role.values or [None])[0], ping_everyone=ping_choice(extras))
 
 
 class QuestionForm(discord.ui.Modal, title="Ask a question"):
@@ -321,14 +369,23 @@ class QuestionForm(discord.ui.Modal, title="Ask a question"):
                                  description="SYKE counts who was named most"),
             discord.SelectOption(label="Anything", value="text", description="Free text answers"),
         ])
-        self.add_item(discord.ui.Label(text="Question", component=self.question))
+        self.everyone = discord.ui.Select(min_values=0, max_values=1, required=False, placeholder="Nobody", options=[
+            discord.SelectOption(label="@everyone", value=PING_EVERYONE, emoji="📣"),
+            discord.SelectOption(label="@here", value=PING_HERE, emoji="📣", description="Only people who are online"),
+        ])
+        self.role = discord.ui.RoleSelect(min_values=0, max_values=1, required=False, placeholder="Nobody")
+        self.add_item(discord.ui.Label(text="Question", description="Answers are private: only admins and mods "
+                                       "can read them", component=self.question))
         self.add_item(discord.ui.Label(text="How long", component=self.length))
         self.add_item(discord.ui.Label(text="Answers are", component=self.kind))
-        self.add_item(discord.ui.TextDisplay("Answers are private: only admins and mods can read them."))
+        self.add_item(discord.ui.Label(text="Ping everyone", description="Optional", component=self.everyone))
+        self.add_item(discord.ui.Label(text="Ping a role", description="Optional", component=self.role))
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await self.cog.create_question(interaction, self.question.value, self.length.value,
-                                       (self.kind.values or ["names"])[0])
+                                       (self.kind.values or ["names"])[0],
+                                       ping_role=(self.role.values or [None])[0],
+                                       ping_everyone=ping_choice(self.everyone.values))
 
 
 class AnswerForm(discord.ui.Modal):
@@ -562,7 +619,8 @@ class Polls(commands.Cog, name="Polls"):
     # Making polls
 
     async def create_poll(self, interaction: discord.Interaction, question: str, options_text: str,
-                          length_text: str, *, anonymous: bool, multi: bool, blind: bool, style: str) -> None:
+                          length_text: str, *, anonymous: bool, multi: bool, blind: bool, style: str,
+                          ping_role=None, ping_everyone: str | None = None) -> None:
         question = " ".join((question or "").split())
         options = parse_options(options_text)
         length, error = parse_length(length_text)
@@ -581,8 +639,11 @@ class Polls(commands.Cog, name="Polls"):
         pick, line = await self.predict(interaction.guild, question, options)
         self.storage._write("UPDATE polls SET prediction = ?, predicted = ? WHERE id = ?", (line, pick, pid))
         p = self.poll(pid)
+        ping, allowed, note = plan_ping(interaction.channel, interaction.user, getattr(interaction.guild, "me", None),
+                                        ping_role, ping_everyone)
         try:
-            sent = await interaction.channel.send(embed=self.poll_card(p, interaction.guild), view=self.poll_view(p))
+            sent = await interaction.channel.send(ping, embed=self.poll_card(p, interaction.guild),
+                                                  view=self.poll_view(p), allowed_mentions=allowed)
         except discord.HTTPException:
             self.storage._write("DELETE FROM polls WHERE id = ?", (pid,))
             await interaction.followup.send(embed=problem("Couldn't post it", "I can't send messages here."),
@@ -590,7 +651,8 @@ class Polls(commands.Cog, name="Polls"):
             return
         self.storage._write("UPDATE polls SET message_id = ? WHERE id = ?", (sent.id, pid))
         ends = f" It ends <t:{int(p.ends_at)}:R>." if p.ends_at else " End it with `/poll end`."
-        await interaction.followup.send(embed=embed("📊 Poll posted", f"Poll #{pid} is live.{ends}", OK),
+        await interaction.followup.send(embed=embed("📊 Poll posted", f"Poll #{pid} is live.{ends}"
+                                                    + (f"\n\n⚠️ {note}" if note else ""), WARN if note else OK),
                                         ephemeral=True)
 
     async def predict(self, guild, question: str, options: list[str]) -> tuple[int, str]:
@@ -766,7 +828,7 @@ class Polls(commands.Cog, name="Polls"):
     # Questions
 
     async def create_question(self, interaction: discord.Interaction, question: str, length_text: str,
-                              kind: str) -> None:
+                              kind: str, *, ping_role=None, ping_everyone: str | None = None) -> None:
         question = " ".join((question or "").split())
         length, error = parse_length(length_text)
         if error or not question:
@@ -780,9 +842,11 @@ class Polls(commands.Cog, name="Polls"):
             (interaction.guild.id, interaction.channel.id, interaction.user.id, question,
              kind if kind in ("names", "text") else "names", now, now + length if length else None))
         q = self.question(qid)
+        ping, allowed, note = plan_ping(interaction.channel, interaction.user, getattr(interaction.guild, "me", None),
+                                        ping_role, ping_everyone)
         try:
-            sent = await interaction.channel.send(embed=self.question_card(q, 0, interaction.guild),
-                                                  view=self.question_view(q))
+            sent = await interaction.channel.send(ping, embed=self.question_card(q, 0, interaction.guild),
+                                                  view=self.question_view(q), allowed_mentions=allowed)
         except discord.HTTPException:
             self.storage._write("DELETE FROM questions WHERE id = ?", (qid,))
             await interaction.response.send_message(embed=problem("Couldn't post it", "I can't send messages here."),
@@ -790,8 +854,8 @@ class Polls(commands.Cog, name="Polls"):
             return
         self.storage._write("UPDATE questions SET message_id = ? WHERE id = ?", (sent.id, qid))
         await interaction.response.send_message(
-            embed=embed("✍️ Question posted", f"Question #{qid} is live. Press **View answers** on it any time.",
-                        OK), ephemeral=True)
+            embed=embed("✍️ Question posted", f"Question #{qid} is live. Press **View answers** on it any time."
+                        + (f"\n\n⚠️ {note}" if note else ""), WARN if note else OK), ephemeral=True)
 
     async def open_answer(self, interaction: discord.Interaction, qid: int) -> None:
         q = self.question(qid)

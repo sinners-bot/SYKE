@@ -288,4 +288,53 @@ async def test_closed_questions_stop_taking_answers(world):
 
 def test_forms_fit_discord():
     cog = NS()
-    assert len(pl.PollForm(cog).children) == 5 and len(pl.QuestionForm(cog).children) == 4
+    assert len(pl.PollForm(cog).children) == 5 and len(pl.QuestionForm(cog).children) == 5
+
+
+def _role(rid=7, mentionable=True, default=False):
+    return NS(id=rid, mention=f"<@&{rid}>", mentionable=mentionable, is_default=lambda: default)
+
+
+def _pinger(uid=6, allowed=True):
+    perms = NS(administrator=False, manage_guild=False, manage_messages=True, mention_everyone=allowed)
+    return NS(id=uid, display_name="Pinger", name="pinger", bot=False, guild_permissions=perms, mention=f"<@{uid}>")
+
+
+async def test_polls_and_questions_can_ping_everyone_or_a_role(world):
+    bot, cog, guild = world
+    guild.me = _pinger(500)                                     # SYKE has Mention Everyone
+    it = Interaction(guild, _pinger())
+    await cog.create_poll(it, "Movie night?", "Yes\nNo", "1h", anonymous=False, multi=False, blind=False,
+                          style="buttons", ping_everyone="everyone", ping_role=_role())
+    sent = guild.channel.sent[-1]
+    assert sent.content == "@everyone <@&7>" and sent.allowed_mentions.everyone
+    assert [r.id for r in sent.allowed_mentions.roles] == [7] and sent.allowed_mentions.users is False
+    assert "⚠️" not in it.followups[-1][1]["embed"].description
+    q = Interaction(guild, _pinger())
+    await cog.create_question(q, "Who's the funniest?", "1d", "names", ping_everyone="here")
+    assert guild.channel.sent[-1].content == "@here" and guild.channel.sent[-1].allowed_mentions.everyone
+    await cog.create_question(Interaction(guild, _pinger()), "No ping?", "1d", "text")
+    assert guild.channel.sent[-1].content is None and not guild.channel.sent[-1].allowed_mentions.everyone
+
+
+async def test_pings_need_mention_everyone_unless_the_role_is_mentionable(world):
+    bot, cog, guild = world
+    guild.me = _pinger(500)
+    plain = Interaction(guild, _pinger(allowed=False))          # a mod without Mention Everyone
+    await cog.create_poll(plain, "Pizza?", "Yes\nNo", "", anonymous=False, multi=False, blind=False,
+                          style="buttons", ping_everyone="everyone", ping_role=_role(mentionable=True))
+    sent = guild.channel.sent[-1]
+    assert sent.content == "<@&7>" and not sent.allowed_mentions.everyone      # the role still pings, not @everyone
+    assert "Mention Everyone" in plain.followups[-1][1]["embed"].description
+    locked = Interaction(guild, _pinger(allowed=False))
+    await cog.create_question(locked, "Hm?", "1d", "text", ping_role=_role(mentionable=False))
+    assert guild.channel.sent[-1].content is None and "Mention Everyone" in locked.response.messages[-1][1]["embed"].description
+
+
+def test_picking_the_everyone_role_and_syke_missing_the_permission():
+    channel = NS()                                              # no permissions_for: falls back to server perms
+    content, allowed, note = pl.plan_ping(channel, _pinger(), _pinger(500), _role(default=True), None)
+    assert content == "@everyone" and allowed.everyone and not note
+    content, allowed, note = pl.plan_ping(channel, _pinger(), _pinger(500, allowed=False), None, "here")
+    assert content == "@here" and "I don't have" in note
+    assert pl.ping_choice(["here", "everyone"]) == "everyone" and pl.ping_choice([]) is None
