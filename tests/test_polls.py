@@ -121,7 +121,7 @@ def test_options_and_lengths_parse_like_people_type():
     assert pl.parse_options("1. Pepperoni\n- Margherita\nB) pineapple\n\npepperoni") == ["Pepperoni", "Margherita",
                                                                                             "pineapple"]
     assert pl.parse_options("a | b | c") == ["a", "b", "c"]
-    assert len(pl.parse_options("\n".join(str(i) for i in range(20)))) == 10
+    assert len(pl.parse_options("\n".join(str(i) for i in range(20)))) == 15
     assert pl.parse_length("2h") == (7200.0, None) and pl.parse_length("") == (None, None)
     assert pl.parse_length("soon")[1] and pl.parse_length("30s")[1]
 
@@ -153,6 +153,28 @@ async def test_mod_makes_a_poll_from_the_form_and_people_vote(world):
     again = Interaction(guild, guild.members[2])
     await cog.vote_button(again, p.id, 0)                                         # press again = take back
     assert "Removed" in again.response.messages[0][0] and pl.tally(p.options, cog.votes(p.id))[0] == [1, 1, 0]
+
+
+async def test_polls_hold_fifteen_options_in_a_layout_discord_accepts(world):
+    bot, cog, guild = world
+    it = Interaction(guild, guild.members[1])
+    await cog.create_poll(it, "Best number?", "\n".join(f"Option {n}" for n in range(1, 16)), "1h",
+                          anonymous=False, multi=False, blind=False, style="buttons")
+    p = cog.poll(1)
+    assert len(p.options) == 15
+    view = cog.poll_view(p)
+    rows = {}
+    for child in view.children:
+        item = getattr(child, "item", child)
+        rows.setdefault(item.row, []).append(item.label)
+    assert all(len(r) <= 5 for r in rows.values()) and max(rows) <= 4      # Discord: 5 rows of 5
+    assert rows[2][-1] == "O · Option 15" and rows[3] == ["Voters"]
+    await cog.vote_button(Interaction(guild, guild.members[2]), p.id, 14)
+    assert pl.tally(p.options, cog.votes(p.id))[0][14] == 1
+    p.style = "list"
+    select = [getattr(c, "item", c) for c in cog.poll_view(p).children
+              if isinstance(getattr(c, "item", c), discord.ui.Select)][0]
+    assert len(select.options) == 15 and select.options[-1].label == "O · Option 15"
 
 
 async def test_only_mods_can_open_the_forms(world):

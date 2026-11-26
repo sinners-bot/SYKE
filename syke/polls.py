@@ -34,8 +34,8 @@ from .moderation import OK, WARN, embed, parse_duration, problem
 
 log = logging.getLogger("syke.polls")
 
-LETTERS = "ABCDEFGHIJ"
-MAX_OPTIONS = 10
+LETTERS = "ABCDEFGHIJKLMNO"
+MAX_OPTIONS = 15
 MAX_DURATION = 30 * 86400
 REFRESH_DELAY = 1.5
 BAR = 12
@@ -104,11 +104,11 @@ class Question:
 # Pure helpers
 
 def parse_options(text: str) -> list[str]:
-    """Options from the form: one per line (or split by |), cleaned, de-duplicated, at most 10."""
+    """Options from the form: one per line (or split by |), cleaned, de-duplicated, at most 15."""
     raw = text.split("\n") if "\n" in (text or "") else (text or "").split("|")
     out: list[str] = []
     for line in raw:
-        line = re.sub(r"^\s*(?:[-•*]|\d+[.)]|[A-Ja-j][.)])\s+", "", line).strip()
+        line = re.sub(r"^\s*(?:[-•*]|\d+[.)]|[A-Oa-o][.)])\s+", "", line).strip()
         if line and line.lower() not in {o.lower() for o in out}:
             out.append(line[:80])
     return out[:MAX_OPTIONS]
@@ -295,7 +295,7 @@ class PollForm(discord.ui.Modal, title="Create a poll"):
             discord.SelectOption(label="Vote from a list instead of buttons", value=EXTRA_LIST),
         ])
         self.add_item(discord.ui.Label(text="Question", component=self.question))
-        self.add_item(discord.ui.Label(text="Options", description="One per line, 2 to 10",
+        self.add_item(discord.ui.Label(text="Options", description="One per line, 2 to 15",
                                        component=self.options))
         self.add_item(discord.ui.Label(text="How long", component=self.length))
         self.add_item(discord.ui.Label(text="Voters", component=self.who))
@@ -496,7 +496,7 @@ class Polls(commands.Cog, name="Polls"):
                 view.add_item(item)
         if not p.anonymous:
             voters = VotersButton(p.id)
-            voters.item.row = 2 if p.style != "list" else 1
+            voters.item.row = (len(p.options) - 1) // 5 + 1 if p.style != "list" else 1   # under the last row of options
             view.add_item(voters)
         return view
 
