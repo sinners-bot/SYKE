@@ -82,6 +82,10 @@ GAME_STORES = [
     Store("karaoke", "Sing Sing", (176, 120, 255), 38_000, 260, "Karaoke till 4am."),
     Store("gasmart", "Gas-N-Go", (255, 200, 60), 40_000, 275, "Gas, jerky, and the cleanest bathroom in the desert."),
     Store("jewels", "Glitter Jewelers", (255, 220, 120), 50_000, 330, "Gold, silver, pearls and ice, behind glass."),
+    Store("bigbun", "Big Bun Burgers", (48, 200, 190), 30_000, 210, "Burgers, fries and a drive-up window."),
+    Store("cluck", "Cluck Shack", (240, 140, 50), 28_000, 200, "Fried chicken by the bucket."),
+    Store("pizzarocket", "Pizza Rocket", (150, 90, 220), 30_000, 210, "Pizza, launched to your door."),
+    Store("tacocomet", "Taco Comet", (140, 220, 70), 26_000, 185, "Tacos, nachos and slushies at the speed of light."),
 ]
 ALL_STORES = STORES + GAME_STORES
 STORE_BY_KEY = {s.key: s for s in ALL_STORES}
@@ -179,10 +183,20 @@ ITEMS = [
     Item("crate", "Vinyl Crate", "📦", "records", 1_200, "Dig for a rare record — keep it or pawn it."),
     Item("jailcard", "Get-Out-of-Jail Card", "🗝️", "bail", 2_500, "Walk out of jail free (use it inside)."),
     Item("paintjob", "Paint Job", "🎨", "paint", 20_000, "Your own name colour: `use paintjob #ff3ea5`."),
+    # THE STRIP 3.22: the fast-food joints (game storefronts, ownable from the game's phone)
+    Item("wings", "Bucket of Wings", "🍗", "cluck", 160, "Crispy, saucy, a bit too many. +25% work pay for 1 hour.", "fed", 1),
+    Item("tenders", "Tender Box", "🍗", "cluck", 80, "Three tenders and a dip. Fills you up."),
+    Item("bigdouble", "Big Bun Double", "🍔", "bigbun", 140, "Two patties, too much cheese. +25% work pay for 1 hour.", "fed", 1),
+    Item("fries", "Basket of Fries", "🍟", "bigbun", 55, "Salty, hot, gone in a minute."),
+    Item("pizza", "Rocket Pizza", "🍕", "pizzarocket", 210, "A whole pie, delivered hot. +25% work pay for 2 hours.", "fed", 2),
+    Item("knots", "Garlic Knots", "🥖", "pizzarocket", 70, "Buttery, garlicky, dangerous."),
+    Item("tacos", "Taco Trio", "🌮", "tacocomet", 110, "Three tacos, one hot sauce. +25% work pay for 1 hour.", "fed", 1),
+    Item("nachos", "Comet Nachos", "🧀", "tacocomet", 85, "A mountain of chips and cheese."),
+    Item("slushie", "Comet Slushie", "🥤", "tacocomet", 50, "Brain freeze in three colours. Halves your hustle cooldown for 1 hour.", "chill", 1),
 ]
 ITEM_BY_KEY = {i.key: i for i in ITEMS}
 # Shops that exist in THE STRIP (the game) but are not ownable storefronts on the property map.
-MIDTOWN_SHOPS = {"cafe": "Blossom Café", "books": "Fifth Avenue Books"}
+MIDTOWN_SHOPS = {"cafe": "Blossom Café", "books": "Fifth Avenue Books", "cluck": "Cluck Shack", "bigbun": "Big Bun Burgers", "pizzarocket": "Pizza Rocket", "tacocomet": "Taco Comet"}
 
 BUFF_INFO = {  # buff -> (emoji, label)
     "lucky": ("🍀", "Lucky — better odds on hustles, crimes and robberies"),
