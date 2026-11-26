@@ -414,6 +414,9 @@ class Storage:
             for column, kind in WALLET_EXTRA_COLUMNS:
                 if column not in wallet_columns:
                     self._conn.execute(f"ALTER TABLE econ_wallets ADD COLUMN {column} {kind}")
+            shop_columns = {row[1] for row in self._conn.execute("PRAGMA table_info(econ_shops)")}
+            if "markup" not in shop_columns:   # THE STRIP 3.21: owners set their prices (-25%..+50%)
+                self._conn.execute("ALTER TABLE econ_shops ADD COLUMN markup REAL NOT NULL DEFAULT 0")
             corpus_columns = {row[1] for row in self._conn.execute("PRAGMA table_info(corpus)")}
             for column, kind in CORPUS_EXTRA_COLUMNS:
                 if column not in corpus_columns:
@@ -1311,7 +1314,7 @@ class Storage:
                            (guild_id, user_id, buff)) > 0
 
     # storefronts
-    _SHOP_COLS = ("shop", "owner_id", "level", "invested", "register", "collected_at")
+    _SHOP_COLS = ("shop", "owner_id", "level", "invested", "register", "collected_at", "markup")
 
     def econ_shops(self, guild_id: int) -> dict[str, dict]:
         rows = self._read(f"SELECT {', '.join(self._SHOP_COLS)} FROM econ_shops WHERE guild_id = ?", (guild_id,))
@@ -1331,13 +1334,13 @@ class Storage:
                 return False
             w["cash"] -= price
             self._write_wallet(conn, guild_id, owner_id, w)
-            conn.execute("INSERT INTO econ_shops VALUES (?, ?, ?, 1, ?, 0, ?)",
+            conn.execute("INSERT INTO econ_shops (guild_id, shop, owner_id, level, invested, register, collected_at) VALUES (?, ?, ?, 1, ?, 0, ?)",
                          (guild_id, shop, owner_id, price, now))
             conn.commit()
             return True
 
     def econ_shop_update(self, guild_id: int, shop: str, **fields) -> None:
-        bad = set(fields) - {"owner_id", "level", "invested", "register", "collected_at"}
+        bad = set(fields) - {"owner_id", "level", "invested", "register", "collected_at", "markup"}
         if bad:
             raise ValueError(f"unknown shop fields: {sorted(bad)}")
         if fields:

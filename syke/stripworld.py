@@ -61,7 +61,30 @@ STORES = [
     Store("dragon", "Golden Dragon", (255, 66, 66), 45_000, 300, "The best lo mein on the Strip."),
     Store("bail", "Bail Bonds", (255, 222, 64), 60_000, 400, "Gets you out. For a fee."),
 ]
-STORE_BY_KEY = {s.key: s for s in STORES}
+# THE STRIP 3.21: more of the game's storefronts can be owned (from the game's phone; the Discord property map keeps the
+# original eleven)
+GAME_STORES = [
+    Store("laundro", "Spin Cycle", (120, 200, 255), 9_500, 68, "Coin laundry. One machine eats quarters on purpose."),
+    Store("quikstop", "Quik Stop", (255, 150, 60), 10_000, 72, "Corner store. Lottery, smokes, and a cat on the counter."),
+    Store("thrift", "Second Hand", (210, 170, 120), 11_000, 80, "Vintage, used, and some of it still warm."),
+    Store("books", "Fifth Avenue Books", (170, 130, 90), 15_000, 108, "New, used and badly shelved."),
+    Store("liquor", "Liquor Barn", (200, 80, 80), 16_000, 115, "Open 24 hours. Judges you 24 hours."),
+    Store("tattoo", "Ink & Regret", (150, 90, 200), 19_000, 135, "Walk-ins welcome. Spell-check not included."),
+    Store("gym", "Iron Lung Gym", (230, 90, 70), 21_000, 150, "Smells like effort."),
+    Store("shades", "Specs", (90, 200, 220), 22_000, 155, "Shades, tints and frames."),
+    Store("carwash", "Suds Car Wash", (80, 170, 255), 22_000, 155, "Hand wash, wax, and no questions about the stains."),
+    Store("hats", "Mad Hatter", (230, 120, 60), 24_000, 170, "Berets, top hats, trappers and caps."),
+    Store("masks", "Face Value", (120, 220, 140), 24_000, 170, "Masks and costumes."),
+    Store("cafe", "Blossom Café", (255, 170, 200), 26_000, 180, "Flat whites and warm croissants."),
+    Store("lastcall", "Last Call", (200, 60, 90), 27_000, 190, "Dive bar. The jukebox only plays sad songs."),
+    Store("threads", "Threads", (240, 70, 140), 28_000, 195, "Jackets, shirts, trousers and everything in between."),
+    Store("diner", "Rattlesnake Diner", (240, 200, 80), 32_000, 220, "Pie, coffee and truckers."),
+    Store("karaoke", "Sing Sing", (176, 120, 255), 38_000, 260, "Karaoke till 4am."),
+    Store("gasmart", "Gas-N-Go", (255, 200, 60), 40_000, 275, "Gas, jerky, and the cleanest bathroom in the desert."),
+    Store("jewels", "Glitter Jewelers", (255, 220, 120), 50_000, 330, "Gold, silver, pearls and ice, behind glass."),
+]
+ALL_STORES = STORES + GAME_STORES
+STORE_BY_KEY = {s.key: s for s in ALL_STORES}
 
 MAX_LEVEL = 5
 REGISTER_CAP_HOURS = 24        # a register holds a day's takings; collect or it stops filling
@@ -83,10 +106,19 @@ def upgrade_cost(store: Store, level: int) -> int:
     return int(store.price * 0.6 * level)
 
 
+MARKUP_RANGE = (-0.25, 0.5)    # owners set their prices: 25% off up to 50% over
+
+
+def demand(markup: float) -> float:
+    """Walk-in trade at a price level: a sale brings more people in, a markup sends some away."""
+    m = max(MARKUP_RANGE[0], min(MARKUP_RANGE[1], float(markup or 0)))
+    return 1 - 0.8 * m
+
+
 def pending(row: dict, store: Store, now: float) -> int:
-    """Cash waiting in a storefront's register: tips plus hourly income (capped at a day)."""
+    """Cash waiting in a storefront's register: tips plus hourly income (capped at a day), scaled by its prices."""
     hours = max(0.0, min(REGISTER_CAP_HOURS, (now - row["collected_at"]) / HOUR))
-    return int(row["register"] + shop_income(store, row["level"]) * hours)
+    return int(row["register"] + shop_income(store, row["level"]) * demand(row.get("markup", 0)) * hours)
 
 
 def _norm(text: str) -> str:

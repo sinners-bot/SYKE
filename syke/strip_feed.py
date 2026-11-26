@@ -9,6 +9,9 @@ at most one every 90 seconds and 25 a day per server. Nothing is stored about th
 """
 from __future__ import annotations
 
+import base64
+import binascii
+import io
 import logging
 import os
 import time
@@ -25,6 +28,10 @@ FEED_KEY = "strip_feed"
 GAP = 90            # seconds between posts in one server
 PER_DAY = 25        # posts per server per UTC day
 GOLD = discord.Colour.from_str("#F5C542")
+PINK = discord.Colour.from_str("#F04491")
+PHOTO_GAP = 60          # THE STRIP 3.21 outfit photos: their own pace, apart from highlights
+PHOTO_PER_DAY = 40
+PHOTO_MAX_BYTES = 600_000
 KINDS = {
     "record": ("🥇 New arcade record", "**{name}** just set the all-time record on **{game}** at Pixel Palace: **{score}**. Think you can beat it?"),
     "jackpot": ("🎰 Big win at the casino", "**{name}** {won} Who's next?"),
@@ -106,6 +113,8 @@ class StripFeed(commands.Cog, name="StripFeed"):
         kind = str(body.get("kind") or "")
         if kind == "online":
             return {"ok": True}
+        if kind == "photo":
+            return await self.photo(body)
         if kind not in KINDS:
             return {"ok": False, "error": "bad_kind"}
         try:
@@ -139,6 +148,57 @@ class StripFeed(commands.Cog, name="StripFeed"):
         sent.append(now)
         self._sent[gid] = sent
         return {"ok": True, "posted": True}
+
+    async def photo(self, body: dict) -> dict:
+        """An outfit photo from the game's photo studio: a PNG the game server drew itself from the player's saved look
+        (never an upload), posted in the player's own server where its admins chose a channel and didn't mute photos."""
+        try:
+            gid = int(body.get("guild_id") or 0)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "bad_ids"}
+        data = body.get("data") if isinstance(body.get("data"), dict) else {}
+        try:
+            png = base64.b64decode(str(data.get("image") or ""), validate=True)
+        except (binascii.Error, ValueError):
+            return {"ok": False, "error": "bad_image"}
+        if not png.startswith(b"\x89PNG\r\n\x1a\n") or len(png) > PHOTO_MAX_BYTES:
+            return {"ok": False, "error": "bad_image"}
+        guild = self.bot.get_guild(gid) if gid else None
+        if guild is None:
+            return {"ok": True, "posted": False, "why": "not_here"}
+        cfg = self.bot.storage.get_config(gid, FEED_KEY)
+        channel = guild.get_channel(int(cfg.get("channel") or 0)) if cfg.get("channel") else None
+        if channel is None or cfg.get("off"):
+            return {"ok": True, "posted": False, "why": "no_channel"}
+        if "photo" in set(cfg.get("mute") or []):
+            return {"ok": True, "posted": False, "why": "muted_kind"}
+        now, key = time.time(), -gid
+        sent = [t for t in self._sent.get(key, []) if now - t < 86400]
+        if (sent and now - sent[-1] < PHOTO_GAP) or len(sent) >= PHOTO_PER_DAY:
+            self._sent[key] = sent
+            return {"ok": True, "posted": False, "why": "rate", "retry": int(PHOTO_GAP - (now - sent[-1])) if sent else 0}
+        me = guild.me
+        perms = channel.permissions_for(me) if me else None
+        if not perms or not (perms.send_messages and perms.embed_links and perms.attach_files):
+            return {"ok": True, "posted": False, "why": "no_perms"}
+        player = body.get("player") if isinstance(body.get("player"), dict) else {}
+        clip = lambda v, n=40: discord.utils.escape_markdown(str(v or "")[:n])
+        outfit = [clip(x, 32) for x in (data.get("outfit") or [])[:8] if str(x or "").strip()]
+        e = embed("📸 Fit check on the Strip", f"**{clip(player.get('name')) or 'Someone'}** stepped into the photo studio.", PINK)
+        if outfit:
+            e.add_field(name="Wearing", value=" · ".join(outfit), inline=False)
+        e.set_image(url="attachment://fit.png")
+        online = self.online
+        e.set_footer(text=f"THE STRIP · {online:,} playing now" if online else "THE STRIP · one world for all of Discord")
+        try:
+            await channel.send(embed=e, file=discord.File(io.BytesIO(png), filename="fit.png"), view=play_view(self.app_id),
+                               allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException as ex:
+            log.info("Strip photo post failed in %s: %s", gid, ex)
+            return {"ok": True, "posted": False, "why": "discord"}
+        sent.append(now)
+        self._sent[key] = sent
+        return {"ok": True, "posted": True, "channel": channel.name}
 
     def highlight_embed(self, kind: str, body: dict) -> discord.Embed:
         title, text = KINDS[kind]
@@ -228,7 +288,8 @@ class StripFeed(commands.Cog, name="StripFeed"):
                                         (f"Highlights go to {cur.mention}." if cur else "Highlights are off.")
                                         + f"\n\n`{p}stripfeed #channel` posts new arcade records, big casino wins, weddings, weekly cup "
                                         "champions, promotions and new arrivals from **this server's** players, each with a Play button "
-                                        f"(at most one every {GAP} s, {PER_DAY} a day). `{p}stripfeed off` stops it.", BRAND), mention_author=False)
+                                        f"(at most one every {GAP} s, {PER_DAY} a day). `{p}stripfeed off` stops it.\n\n"
+                                        f"📸 Outfit photos from the game's photo studio go to the same channel. `{p}stripphotos off` turns just those off.", BRAND), mention_author=False)
             return
         me = ctx.guild.me
         perms = channel.permissions_for(me)
@@ -242,6 +303,27 @@ class StripFeed(commands.Cog, name="StripFeed"):
             await channel.send(embed=self.play_embed(ctx.guild), view=play_view(self.app_id), **({"file": f} if f else {}))
         except discord.HTTPException:
             pass
+
+
+    @commands.hybrid_command(name="stripphotos", with_app_command=False, description="Turn outfit photos from THE STRIP on or off in the feed channel")
+    @commands.guild_only()
+    async def stripphotos(self, ctx: commands.Context, setting: str | None = None) -> None:
+        from .bot import is_admin
+        if not is_admin(self.bot, ctx.author):
+            raise commands.MissingPermissions(["manage_guild"])
+        cfg = self.bot.storage.get_config(ctx.guild.id, FEED_KEY)
+        mute = set(cfg.get("mute") or [])
+        if setting and setting.lower() in ("off", "stop", "disable", "no"):
+            mute.add("photo")
+        elif setting and setting.lower() in ("on", "start", "enable", "yes"):
+            mute.discard("photo")
+        else:
+            await ctx.reply(embed=embed("📸 Strip photos", ("Off" if "photo" in mute else "On") + " in this server's Strip feed channel. "
+                                        f"`{self.bot.display_prefix(ctx.guild.id)}stripphotos on|off`", BRAND), mention_author=False)
+            return
+        self.bot.storage.update_config(ctx.guild.id, FEED_KEY, mute=sorted(mute))
+        await ctx.reply(embed=embed("📸 Strip photos " + ("off" if "photo" in mute else "on"),
+                                    "Outfit photos won't be posted here." if "photo" in mute else "Outfit photos from this server's players will be posted in the feed channel.", OK), mention_author=False)
 
 
 class ShowcaseView(discord.ui.View):

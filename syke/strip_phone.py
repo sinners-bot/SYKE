@@ -56,7 +56,8 @@ class PhoneService:
         self.guard(gid, uid)
         now, owned = self.now(), self.db.econ_shops(gid)
         out = []
-        for s in sw.STORES:
+        game_only = {g.key for g in sw.GAME_STORES}
+        for s in sw.ALL_STORES:
             row = owned.get(s.key)
             lvl = row["level"] if row else 0
             out.append({
@@ -67,6 +68,7 @@ class PhoneService:
                 "register": sw.pending(row, s, now) if row and row["owner_id"] == uid else None,
                 "full_in": max(0, int(row["collected_at"] + sw.REGISTER_CAP_HOURS * 3600 - now)) if row and row["owner_id"] == uid else None,
                 "sell_value": int(row["invested"] * sw.SELL_BACK) if row and row["owner_id"] == uid else None,
+                "markup": round(float(row.get("markup") or 0), 2) if row else 0, "game_only": s.key in game_only,
             })
         return {"stores": out, "max_level": sw.MAX_LEVEL, "cap_hours": sw.REGISTER_CAP_HOURS}
 
@@ -122,6 +124,10 @@ class PhoneService:
         value = int(row["invested"] * sw.SELL_BACK) + sw.pending(row, s, self.now())
         if not self.db.econ_shop_release(gid, s.key):
             raise PhoneError("gone", "That storefront changed hands.")
+        try:   # 3.21 the staff go with it (strip_biz.py)
+            self.db._write("DELETE FROM strip_biz_staff WHERE guild_id=? AND store=?", (gid, s.key))
+        except Exception:
+            pass
         self.db.econ_adjust(gid, uid, cash=value)
         return {"store": s.key, "value": value}
 

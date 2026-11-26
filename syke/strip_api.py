@@ -36,6 +36,7 @@ from .strip_casino import CasinoError, CasinoService
 from .strip_homes import HomeError, HomeService
 from .strip_life import LifeError, LifeService
 from .strip_phone import PhoneError, PhoneService
+from .strip_biz import BizService
 from .strip_kitchen import KitchenError, KitchenService
 from .strip_crime import CrimeError, CrimeService
 
@@ -124,6 +125,7 @@ class StripService:
             "buffs": self.db.econ_buffs(gid, uid, now),
             "jail_until": jail if jail > now else 0,
             "daily_ready_at": w["daily_at"] + eco.DAILY_COOLDOWN if w["daily_at"] else 0,
+            "markups": self.biz.markups(gid) if getattr(self, "biz", None) else {},
             "work_ready_at": w["work_at"] + eco.WORK_COOLDOWN if w["work_at"] else 0,
             "shift_ready_at": (lambda t: t + SHIFT_COOLDOWN if t else 0)(self._shift_at(gid, uid)),
             "happy": self.happy(gid),
@@ -156,7 +158,7 @@ class StripService:
         row = self.db._read("SELECT at FROM strip_shift WHERE guild_id=? AND user_id=?", (gid, uid))
         return float(row[0][0]) if row else 0.0
 
-    def work(self, gid: int, uid: int, bonus: float = 1.0, rank: float = 1.0, shift: bool = False, event: float = 1.0) -> dict:
+    def work(self, gid: int, uid: int, bonus: float = 1.0, rank: float = 1.0, shift: bool = False, event: float = 1.0, store=None) -> dict:
         w = self.guard(gid, uid)
         self.free(w)
         now = self.now()
@@ -184,8 +186,9 @@ class StripService:
             self.db._write("INSERT INTO strip_shift VALUES (?, ?, ?) ON CONFLICT(guild_id, user_id) DO UPDATE SET at=excluded.at", (gid, uid, now))
         else:
             self.db.econ_adjust(gid, uid, cash=amount, work_at=now)
+        staff = self.biz.shift(gid, uid, store, amount) if (shift and store and getattr(self, "biz", None)) else None
         return {"amount": amount, "did": did.replace("**", ""), "boost": round(boost, 2), "bonus": round(bonus, 2), "rank": round(rank, 2),
-                "perks": perks}
+                "perks": perks, "staff": staff}
 
     # -- shops (mirror StripWorld.buy / use / pawn) --
     def buy(self, gid: int, uid: int, item: str, qty: int = 1) -> dict:
@@ -194,11 +197,15 @@ class StripService:
         if it is None:
             raise StripError("unknown_item", "Never heard of it.")
         qty = max(1, min(int(qty), 50))
-        total = it.price * qty
+        biz = getattr(self, "biz", None)
+        total, cut = biz.sale(gid, uid, it.store, it.price * qty) if biz else (it.price * qty, int(it.price * qty * sw.OWNER_CUT))
         if not self.db.econ_spend(gid, uid, total):
             raise StripError("broke", f"{qty}x {it.name} costs {total:,}. You don't have that on you.")
         self.db.econ_item_add(gid, uid, it.key, qty)
-        self.tip_store(gid, it.store, int(total * sw.OWNER_CUT))
+        if biz:
+            biz.record_sale(gid, it.store, cut)
+        else:
+            self.tip_store(gid, it.store, cut)
         return {"item": it.key, "qty": qty, "total": total}
 
     def use(self, gid: int, uid: int, item: str) -> dict:
@@ -267,14 +274,34 @@ class StripService:
         return {"item": key, "qty": qty, "total": total}
 
     # -- game-only money (cosmetics out, small finds in) --
-    def spend(self, gid: int, uid: int, amount: int, reason: str = "") -> dict:
+    def spend(self, gid: int, uid: int, amount: int, reason: str = "", store=None) -> dict:
+        """A purchase in the game. With `store`, `amount` is the list price: the owner's prices apply and they get their cut."""
         self.guard(gid, uid)
         amount = int(amount)
         if amount <= 0 or amount > SPEND_MAX:
             raise StripError("bad_amount", "That's not a price.")
-        if not self.db.econ_spend(gid, uid, amount):
-            raise StripError("broke", f"That costs {amount:,}. You don't have that on you.")
-        return {"amount": amount, "reason": str(reason)[:40]}
+        biz = getattr(self, "biz", None)
+        price, cut = biz.sale(gid, uid, store, amount) if (biz and store) else (amount, 0)
+        if not self.db.econ_spend(gid, uid, price):
+            raise StripError("broke", f"That costs {price:,}. You don't have that on you.")
+        if biz and store:
+            biz.record_sale(gid, store, cut)
+        return {"amount": price, "list": amount, "reason": str(reason)[:40]}
+
+    def wear_trade(self, gid: int, uid: int, seller, price, fee: float = 0.1) -> dict:
+        """A player buys a limited piece from another (THE STRIP 3.21 resale): the price moves buyer -> seller, less a 10% fee
+        that leaves the economy."""
+        self.guard(gid, uid)
+        try:
+            sid, price = int(seller), int(price)
+        except (TypeError, ValueError):
+            raise StripError("bad_args", "That's not a sale.")
+        if sid == uid or price < 10 or price > 10_000_000:
+            raise StripError("bad_amount", "That's not a price.")
+        tax = max(1, int(price * min(0.25, max(0.0, float(fee)))))
+        if not self.db.econ_transfer(gid, uid, sid, price, tax=tax):
+            raise StripError("broke", f"That costs {price:,}. You don't have that on you.")
+        return {"price": price, "fee": tax, "seller": str(sid), "payout": price - tax}
 
     def bank(self, gid: int, uid: int, action: str, amount: int) -> dict:
         """ATM: the same as !deposit / !withdraw (no fee)."""
@@ -372,6 +399,8 @@ class StripAPI:
         self.homes = HomeService(storage, self.svc.guard)
         self.life = LifeService(storage, self.svc.guard)
         self.phone = PhoneService(storage, self.svc.guard)
+        self.biz = BizService(storage, self.svc.guard)
+        self.svc.biz = self.biz
         self.kitchen = KitchenService(storage, self.svc.guard)
         self.secret = secret
 
@@ -408,12 +437,12 @@ class StripAPI:
         return {
             "state": lambda g, u, b: {},
             "daily": lambda g, u, b: s.daily(g, u),
-            "work": lambda g, u, b: s.work(g, u, b.get("bonus", 1.0), b.get("rank", 1.0), bool(b.get("shift")), b.get("event", 1.0)),
+            "work": lambda g, u, b: s.work(g, u, b.get("bonus", 1.0), b.get("rank", 1.0), bool(b.get("shift")), b.get("event", 1.0), b.get("store")),
             "admin_adjust": lambda g, u, b: s.admin_adjust(g, u, b.get("amount", 0), b.get("reason", ""), bool(b.get("free"))),
             "buy": lambda g, u, b: s.buy(g, u, b.get("item"), b.get("qty", 1)),
             "use": lambda g, u, b: s.use(g, u, b.get("item")),
             "pawn": lambda g, u, b: s.pawn(g, u, b.get("item"), b.get("qty", 1)),
-            "spend": lambda g, u, b: s.spend(g, u, b.get("amount", 0), b.get("reason", "")),
+            "spend": lambda g, u, b: s.spend(g, u, b.get("amount", 0), b.get("reason", ""), b.get("store")),
             "grant": lambda g, u, b: s.grant(g, u, b.get("amount", 0), b.get("reason", "")),
             "activity": lambda g, u, b: s.activity(g, u, b.get("amount", 0), b.get("reason", "")),
             "goal_reward": lambda g, u, b: s.goal_reward(g, u),
@@ -449,6 +478,16 @@ class StripAPI:
             "biz_upgrade": lambda g, u, b: self.phone.biz_upgrade(g, u, b.get("store")),
             "biz_collect": lambda g, u, b: self.phone.biz_collect(g, u),
             "biz_sell": lambda g, u, b: self.phone.biz_sell(g, u, b.get("store")),
+            # 3.21 running a storefront: prices, staff and wages (strip_biz.py); the resale of limited pieces
+            "biz_manage": lambda g, u, b: self.biz.manage(g, u, b.get("store")),
+            "biz_set": lambda g, u, b: self.biz.set_prices(g, u, b.get("store"), b.get("markup"), b.get("wage")),
+            "biz_hire": lambda g, u, b: self.biz.hire(g, u, b.get("store"), b.get("target")),
+            "biz_fire": lambda g, u, b: self.biz.fire(g, u, b.get("store"), b.get("target")),
+            "biz_jobs": lambda g, u, b: self.biz.jobs(g, u),
+            "biz_accept": lambda g, u, b: self.biz.accept(g, u, b.get("store")),
+            "biz_decline": lambda g, u, b: self.biz.decline(g, u, b.get("store")),
+            "biz_quit": lambda g, u, b: self.biz.quit(g, u),
+            "wear_trade": lambda g, u, b: s.wear_trade(g, u, b.get("seller"), b.get("price")),
             "market_browse": lambda g, u, b: self.phone.market_browse(g, u, b.get("item")),
             "market_mine": lambda g, u, b: self.phone.market_mine(g, u),
             "market_post": lambda g, u, b: self.phone.market_post(g, u, b.get("item"), b.get("qty", 1), b.get("price")),
