@@ -330,7 +330,7 @@ CATALOG: list[Category] = [
         "Play songs in voice from YouTube, Spotify, SoundCloud, Apple Music, Deezer and more.",
         ["play", "playnext", "skip", "queue", "nowplaying", "pause", "resume", "stop", "leave", "join", "volume",
          "loop", "shuffle", "remove", "move", "seek", "clearqueue", "autoplay", "247", "fx", "search", "music",
-         "radio", "songquiz", "topsongs", "like", "liked", "blend", "party"],
+         "radio", "story", "songquiz", "topsongs", "like", "liked", "blend", "party"],
         {
             "play": "`play <song name or link>`: YouTube, YouTube Music, Spotify (songs, albums, playlists), "
                     "SoundCloud, Apple Music, Deezer, Bandcamp, Twitch, Vimeo, TikTok, Mixcloud, radio streams and "
@@ -345,7 +345,11 @@ CATALOG: list[Category] = [
             "music": "The music commands as slash commands (`/music pause`, `/music loop`…), plus "
                      "`music dj @role` to let only a DJ role control playback.",
             "autoplay": "When the queue runs out, keep playing songs like the last one.",
-            "radio": "Endless music from 45 stations, picked to fit each one (the right upload of the right song, "
+            "story": "SYKE reads you a story in voice: `story` lists the genres (horror, mystery, sci-fi, fantasy, kids, "
+                     "fairy tales…), `story horror` picks one, `story the raven` finds a title. Public-domain "
+                     "audiobooks from LibriVox; skip, pause and leave work like music. You can also just ask him: "
+                     "\"syke tell us a scary story\".",
+            "radio": "Endless music from 75 stations, picked to fit each one (the right upload of the right song, "
                      "never covers, sped-up edits or hour-long mixes): rap (`drill`, `uk`, `deutschrap`, `phonk`), pop (`kpop`, "
                      "`latin`, `afro`, `anime`), `russian`, `french`, `italian`, `brazilian`, `persian`, `rock`, `metal`, `indie`, `country`, `reggae`, dance (`house`, "
                      "`techno`, `dnb`, `amapiano`, `jerseyclub`, `disco`), `balkan`, `turkish`, `arabic`, "
@@ -368,7 +372,7 @@ CATALOG: list[Category] = [
             "topsongs": "The server's most played songs and biggest DJs: `topsongs`, `topsongs djs month`. "
                         "Also `top songs` and `top djs`.",
         },
-        sections=[("Play", ["play", "playnext", "search", "queue", "nowplaying", "radio"]),
+        sections=[("Play", ["play", "playnext", "search", "queue", "nowplaying", "radio", "story"]),
                   ("Your library", ["like", "liked", "blend", "party"]),
                   ("Fun", ["songquiz", "topsongs"]),
                   ("Control", ["skip", "pause", "resume", "stop", "seek", "volume", "loop", "shuffle", "fx"]),
@@ -551,7 +555,7 @@ BRIEF = {
     "collect": "Read older history", "prefix": "Change the prefix", "timezone": "Server timezone",
     "dashboard": "Every setting, with buttons", "demo": "Add fake test members", "sample": "A demo member's report",
     "daily": "Daily cash and streak", "weekly": "Weekly cash and streak", "jobs": "Pick a job",
-    "job": "Work a mini-game shift", "stocks": "Server stock market", "radio": "Endless music by genre",
+    "job": "Work a mini-game shift", "stocks": "Server stock market", "radio": "Endless music by genre", "story": "Audiobook stories by genre",
     "songquiz": "Name that song", "topsongs": "Most played and top DJs", "like": "Like the current song", "liked": "Your Liked songs", "blend": "Blend with a friend", "party": "Listening party", "beef": "Rivalry scoreboard", "afk": "Go away politely",
     "birthday": "Birthdays", "wrapped": "Your year in review", "vibe": "Channel mood check",
     "catchup": "What you missed", "timemachine": "A year ago today", "quotebook": "Best quotes book", "lore": "Inside jokes", "mood": "How SYKE feels", "bond": "How SYKE feels about you", "favourites": "SYKE's favourites and grudges", "diary": "SYKE's nightly diary", "promises": "Promises SYKE remembers", "kept": "Keep a promise", "forgive": "Make SYKE drop a grudge", "achievements": "Your badges", "persona": "Persona settings", "edge": "How dark SYKE gets", "freaky": "How freaky SYKE gets", "racist": "Slur counter", "work": "Clock a shift", "hustle": "Risky quick cash", "pay": "Send cash",

@@ -24,6 +24,7 @@ from discord.ext import commands
 from . import vision
 from .human import Human
 from .regular import Regular
+from .stories import Stories
 from .lexicon import CHAT_FILLER, STOPWORDS
 from .lexicon import CHAT_SLANG as CHAT_SLANG_WORDS
 from .isolation import Isolation
@@ -178,6 +179,19 @@ YAP_CONTEXT = 20
 PICK_SHOWN = 30
 COMMON_WORDS = STOPWORDS | CHAT_FILLER   # never treated as someone's name
 DIVIDER_ROLE = re.compile(r"^[\W_]{3,}|[\W_]{3,}$")   # '──── Games ────', '=== Pings ==='
+ACTION_HINTS = {   # an action only runs when what they said actually asks for it
+    "join": re.compile(r"\b(?:vc|voice|call|join|hop|come|pull up|get in)\b", re.I),
+    "leave": re.compile(r"\b(?:leave|dc|disconnect|get out|bounce|go away|kick yourself|stop)\b", re.I),
+    "play": re.compile(r"\b(?:play|put on|queue|bump|spin|throw on)\b", re.I),
+    "radio": re.compile(r"\b(?:radio|station|play|put on)\b", re.I),
+    "story": re.compile(r"\b(?:story|stories|audiobook|audio book|read (?:me|us)|tell (?:me|us) a|bedtime)\b", re.I),
+    "skip": re.compile(r"\b(?:skip|next|change (?:the )?song)\b", re.I),
+    "pause": re.compile(r"\b(?:pause|hold up|wait)\b", re.I),
+    "resume": re.compile(r"\b(?:resume|unpause|continue|keep going|play again)\b", re.I),
+    "stop": re.compile(r"\b(?:stop|shut (?:it|up)|turn (?:it )?off|enough)\b", re.I),
+    "dm": re.compile(r"\b(?:dm|dms|pm|message|text|inbox|slide)\b", re.I),
+}
+DM_REQUEST_GAP = 300        # seconds between DMs SYKE sends someone because they asked
 DM_COOLDOWN = 2.0           # seconds between DM replies to one person
 TYPO_CHANCE = 0.04          # a reply goes out with a typo, fixed with "*word" a second later
 EDIT_INSTEAD = 0.15         # of two-part replies: edit the first message instead of sending a second
@@ -401,6 +415,7 @@ class Syke(commands.Bot):
         self._name_words: dict[int, tuple[float, set[str]]] = {}
         self._slang: dict[int, tuple[float, list[str]]] = {}
         self._fetched_members: dict[tuple[int, int], tuple[float, object]] = {}
+        self._dm_requests: dict[int, float] = {}
         self._recent_yaps: dict[int, list[str]] = {}
         self._last_ask: dict[int, float] = {}
         self._asks: dict[int, list[dict]] = {}
@@ -452,6 +467,7 @@ class Syke(commands.Bot):
         await self.add_cog(Lore(self))
         await self.add_cog(Human(self))
         await self.add_cog(Regular(self))
+        await self.add_cog(Stories(self))
         log.info("Owners pass the permission checks of %d commands", bypass_checks(self))
         if self.settings.web_enabled:
             try:
@@ -874,6 +890,7 @@ class Syke(commands.Bot):
             return True
         await self.deliver_turn(message, turn, home)
         self.remember_turn(home.id, message.author, message.content, turn)
+        await self.run_action(message, turn.get("action"), message.content or "")
         return True
 
     async def pictures_for(self, message) -> list:
@@ -1392,6 +1409,7 @@ class Syke(commands.Bot):
         if turn:
             await self.deliver_turn(message, turn)
             self.remember_turn(message.guild.id, message.author, prompt, turn)
+            await self.run_action(message, turn.get("action"), prompt)
 
     async def deliver_turn(self, message: discord.Message, turn: dict, guild=None) -> None:
         """Answer like a person texting: maybe a reaction, the reply (now and then with a typo and a *fix),
@@ -1441,6 +1459,74 @@ class Syke(commands.Bot):
             with contextlib.suppress(discord.HTTPException):
                 await sent.delete()
                 await send("nvm", allowed_mentions=am)
+
+    # Doing things people ask for in conversation ("hop in vc", "play some drake", "dm me that")
+
+    async def run_action(self, message, action, said: str) -> str | None:
+        """Carry out what the person talking to SYKE asked for. Returns what was done (or None).
+
+        Two guards keep the AI from doing things nobody asked for: the action must match words in what they
+        actually said, and it only ever acts for the person who asked — a DM goes to them and nobody else."""
+        if not isinstance(action, dict):
+            return None
+        do = str(action.get("do") or "").strip().lower()
+        what = " ".join(str(action.get("what") or "").split())[:300]
+        hint = ACTION_HINTS.get(do)
+        if hint is None or not hint.search(said or ""):
+            if do:
+                log.info("Ignored action %r: %r doesn't ask for it", do, (said or "")[:80])
+            return None
+        if do == "dm":
+            return await self.dm_on_request(message, what)
+        if message.guild is None:
+            return None   # voice needs a server
+        try:
+            ctx = await self.get_context(message)
+        except Exception:
+            log.exception("couldn't build a context for an action")
+            return None
+        music, stories = self.get_cog("Music"), self.get_cog("Stories")
+        try:
+            if do == "story" and stories is not None:
+                await stories.play_story(ctx, what or None)
+            elif music is None:
+                return None
+            elif do == "join":
+                await music.do_join(ctx)
+            elif do == "leave":
+                await music.do_leave(ctx)
+            elif do == "play" and what:
+                await music.play_query(ctx, what)
+            elif do == "radio":
+                await music.do_radio(ctx, what or None)
+            elif do in ("skip", "pause", "resume", "stop"):
+                await getattr(music, f"do_{do}")(ctx)
+            else:
+                return None
+        except Exception:
+            log.exception("action %s failed", do)
+            return None
+        log.info("Did %s%s for %s in %s", do, f" ({what[:60]})" if what else "", message.author.id,
+                 getattr(message.guild, "id", "DM"))
+        return do
+
+    async def dm_on_request(self, message, text: str) -> str | None:
+        """DM the person who asked for it (only them), at most once every few minutes."""
+        if not text:
+            return None
+        now = time.monotonic()
+        if now - self._dm_requests.get(message.author.id, -1e9) < DM_REQUEST_GAP:
+            return None
+        self._dm_requests[message.author.id] = now
+        try:
+            await message.author.send(text[:1900], allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException:
+            if message.guild is not None:
+                with contextlib.suppress(discord.HTTPException):
+                    await message.reply("your dms are closed 💀", mention_author=False,
+                                        allowed_mentions=discord.AllowedMentions.none())
+            return None
+        return "dm"
 
     async def wrong_message(self, message):
         """A recent message from someone else in the channel, to reply to by mistake."""

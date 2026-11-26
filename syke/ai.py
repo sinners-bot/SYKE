@@ -427,6 +427,12 @@ to and about someone: she/her and "sis"/"girl" energy for Female, he/him and "br
 for non-binary or pronoun roles. Other roles (Gamer, Mod, Level 50, VIP, Booster) are material: "mods \
 abusing power again", "level 3 and talking like that". Never mock anyone for a gender, religion, \
 nationality or sexuality role.
+- ACTIONS: if the TARGET clearly asks YOU to do something you can do, do it with "action" (and say so in \
+your reply, your way: "bet, hopping in", "say less"): "join" (join their voice channel), "leave", "play" \
+(what = the song, artist or vibe they asked for), "skip", "pause", "resume", "stop", "radio" (what = a \
+genre or ""), "story" (what = a story genre like horror, mystery, kids… or a book title, or ""), "dm" (DM \
+the TARGET — only them, never anyone else; what = the DM itself, written your way from the conversation). \
+Only when they actually ask you, now — talking about music or DMs isn't asking. Otherwise null.
 - If the TARGET tells you something about their own life worth remembering for days (an exam on Friday, a \
 new dog, the game they main, a trip, a breakup), put it in "remember" — what it is, what a friend would \
 ask later (or ""), and in how many days to ask. If a new running joke with them comes up, put it in "bit".
@@ -434,7 +440,8 @@ ask later (or ""), and in how many days to ask. If a new running joke with them 
 Reply with JSON only: {"read": "<one short line: what's going on and what they want>", \
 "reply": "<your message>", "reply2": "<optional second message or \"\">", "react": "<optional emoji or \"\">", \
 "remember": {"fact": "...", "followup": "...", "days": 3} or null, "bit": "<optional or \"\">", \
-"nickname": "<optional new nickname for the TARGET or \"\">"}"""
+"nickname": "<optional new nickname for the TARGET or \"\">", \
+"action": {"do": "join|leave|play|skip|pause|resume|stop|radio|story|dm", "what": "..."} or null}"""
 
 
 def _style_block(voice: Voice | None, skip: list[str] = (), rng: random.Random | None = None) -> str:
@@ -502,7 +509,8 @@ async def compose_reply(settings: Settings, ranked: list[tuple[float, str]], tar
             return None
         out = {"reply": reply or "", "reply2": "", "react": "", "remember": None, "bit": ""}
         if data:
-            out.update({k: data.get(k) for k in ("reply2", "react", "remember", "bit", "nickname") if data.get(k)})
+            out.update({k: data.get(k) for k in ("reply2", "react", "remember", "bit", "nickname", "action")
+                        if data.get(k)})
         return out
 
     banned = {target.text} | ({said} if said else set()) | set(avoid)

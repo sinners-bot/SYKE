@@ -942,6 +942,8 @@ class Music(commands.Cog):
             if found:
                 self._take(track, ll_track(found[0]))
                 return track.encoded
+            if track.source == "librivox":   # a story chapter is that exact file: never search for something else
+                raise LookupError(f"Couldn't load **{track.title[:100]}**.")
         if not track.fallback and track.query:
             hit = await self._best_upload(track)
             if hit is not None:
