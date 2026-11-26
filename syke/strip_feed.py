@@ -184,7 +184,11 @@ class StripFeed(commands.Cog, name="StripFeed"):
         player = body.get("player") if isinstance(body.get("player"), dict) else {}
         clip = lambda v, n=40: discord.utils.escape_markdown(str(v or "")[:n])
         outfit = [clip(x, 32) for x in (data.get("outfit") or [])[:8] if str(x or "").strip()]
-        e = embed("📸 Fit check on the Strip", f"**{clip(player.get('name')) or 'Someone'}** stepped into the photo studio.", PINK)
+        others = [clip(x, 32) for x in (data.get("with") or [])[:3] if str(x or "").strip()]
+        who = clip(player.get('name')) or 'Someone'
+        lead = f"**{who}** and **{'**, **'.join(others)}** stepped into the photo studio." if others else f"**{who}** stepped into the photo studio."
+        caption = clip(data.get("caption"), 120).strip()
+        e = embed("📸 Group shot on the Strip" if others else "📸 Fit check on the Strip", lead + (f"\n> {caption}" if caption else ""), PINK)
         if outfit:
             e.add_field(name="Wearing", value=" · ".join(outfit), inline=False)
         e.set_image(url="attachment://fit.png")
