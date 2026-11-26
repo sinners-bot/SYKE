@@ -11,6 +11,7 @@ import logging
 import random
 import re
 import time
+from urllib.parse import quote
 from dataclasses import dataclass
 
 import discord
@@ -22,13 +23,19 @@ from .music_sources import Track
 log = logging.getLogger("syke.stories")
 
 API = "https://librivox.org/api/feed/audiobooks/"
+# Every LibriVox recording also lives on archive.org (collection "librivoxaudio"). Its search is the reliable way
+# to browse by genre: LibriVox's own `genre=` filter has answered with a server error for years.
+IA_SEARCH = "https://archive.org/advancedsearch.php"
+IA_META = "https://archive.org/metadata/"
+IA_FILES = "https://archive.org/download/"
+MP3_FORMATS = ("64Kbps MP3", "VBR MP3", "128Kbps MP3", "MP3")
 TIMEOUT = 20
 CACHE_SECONDS = 6 * 3600
 MAX_CHAPTERS = 40
 STORY_SECONDS = (8 * 60, 4 * 3600)      # what counts as a "story": 8 minutes to 4 hours
 HEADERS = {"User-Agent": "SYKE Discord bot (audiobooks from LibriVox)"}
 
-# key -> (label, LibriVox genre to search, what it is)
+# key -> (label, LibriVox genre, what it is); IA_SUBJECTS has the archive.org subject words for each
 GENRES: dict[str, tuple[str, str, str]] = {
     "horror": ("👻 Horror", "Horror", "ghosts, monsters and things in the dark"),
     "mystery": ("🔎 Mystery", "Mystery", "detectives, crimes and whodunits"),
@@ -43,6 +50,21 @@ GENRES: dict[str, tuple[str, str, str]] = {
     "classics": ("📚 Classics", "Literary Fiction", "classic literature"),
     "poetry": ("🪶 Poetry", "Poetry", "poems read aloud"),
     "history": ("🏛️ History", "History", "true history"),
+}
+IA_SUBJECTS: dict[str, tuple[str, ...]] = {
+    "horror": ("horror", "ghost stories", "ghost", "supernatural", "gothic"),
+    "mystery": ("mystery", "detective", "detective fiction", "crime"),
+    "scifi": ("science fiction", "sci-fi"),
+    "fantasy": ("fantasy", "fantastic fiction"),
+    "adventure": ("adventure", "action & adventure", "sea stories"),
+    "romance": ("romance", "love stories"),
+    "comedy": ("humor", "humour", "comedy", "satire"),
+    "kids": ("children", "children's fiction", "juvenile fiction"),
+    "fairytales": ("fairy tales", "fables", "folk tales", "folklore"),
+    "myths": ("myths", "mythology", "legends"),
+    "classics": ("literary fiction", "classics", "short stories"),
+    "poetry": ("poetry", "poems"),
+    "history": ("history",),
 }
 ALIASES = {"scary": "horror", "spooky": "horror", "ghost": "horror", "crime": "mystery", "detective": "mystery",
            "sci-fi": "scifi", "science fiction": "scifi", "space": "scifi", "magic": "fantasy", "funny": "comedy",
@@ -61,6 +83,7 @@ class Book:
     chapters: list[dict]
     rss: str = ""
     language: str = ""
+    ia: str = ""          # archive.org identifier, when the book came from there
 
 
 def genre_key(text: str) -> str | None:
@@ -117,6 +140,74 @@ def rss_chapters(xml: str) -> list[dict]:
     return chapters
 
 
+def _text(value) -> str:
+    """archive.org fields are a string or a list of strings."""
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value if v)
+    return str(value or "")
+
+
+def _length(value) -> int:
+    """archive.org file length: '754.32' (seconds) or '12:34'."""
+    text = _text(value).strip()
+    try:
+        return int(float(text))
+    except ValueError:
+        return _seconds(text)
+
+
+def _quote(term: str) -> str:
+    return '"' + term.replace('"', " ").replace("\\", " ").strip() + '"'
+
+
+def ia_query(genre: str | None = None, title: str | None = None) -> str:
+    parts = ["collection:(librivoxaudio)", "mediatype:(audio)"]
+    if genre:
+        parts.append("subject:(" + " OR ".join(_quote(t) for t in IA_SUBJECTS[genre]) + ")")
+    if title:
+        words = re.sub(r"[^\w\s'-]", " ", title).split()
+        parts.append("title:(" + " AND ".join(_quote(w) for w in words[:12]) + ")" if words else "title:(*)")
+    return " AND ".join(parts)
+
+
+def parse_ia_search(data) -> list[Book]:
+    books = []
+    for doc in ((data or {}).get("response") or {}).get("docs") or []:
+        ident = _text(doc.get("identifier"))
+        if not ident:
+            continue
+        language = _text(doc.get("language"))
+        if language.lower() in ("eng", "en"):
+            language = "English"
+        books.append(Book(ident, _text(doc.get("title")) or "Untitled", _text(doc.get("creator")) or "Unknown author",
+                          _seconds(_text(doc.get("runtime"))), f"https://archive.org/details/{ident}", [],
+                          language=language, ia=ident))
+    return books
+
+
+def ia_chapters(ident: str, data) -> list[dict]:
+    """The chapter mp3s of one archive.org item, in order: one bitrate only, the lightest there is."""
+    files = [f for f in (data or {}).get("files") or [] if isinstance(f, dict) and str(f.get("name", "")).endswith(".mp3")]
+    for fmt in MP3_FORMATS:
+        chosen = [f for f in files if _text(f.get("format")) == fmt]
+        if chosen:
+            break
+    else:
+        chosen = files
+
+    def order(f):
+        track = re.match(r"\d+", _text(f.get("track")))
+        return (int(track.group()) if track else 10 ** 6, f.get("name", ""))
+
+    chapters = []
+    for i, f in enumerate(sorted(chosen, key=order)):
+        name = str(f["name"])
+        chapters.append({"n": i + 1, "title": _text(f.get("title")) or f"Part {i + 1}",
+                         "url": IA_FILES + quote(ident) + "/" + quote(name), "seconds": _length(f.get("length")),
+                         "reader": _text(f.get("artist") or f.get("creator"))})
+    return chapters
+
+
 def pick_story(books: list[Book], rng: random.Random | None = None) -> Book | None:
     """An English book of story length if there is one, else any English book, else anything."""
     rng = rng or random
@@ -142,7 +233,8 @@ class Stories(commands.Cog, name="Stories"):
         self._cache: dict[str, tuple[float, list[Book]]] = {}
 
     async def fetch(self, **params) -> list[Book]:
-        query = {"format": "json", "extended": "1", "limit": "50", **{k: str(v) for k, v in params.items()}}
+        """LibriVox's own API: fine for an id or a title; its genre filter is broken on their side."""
+        query = {"format": "json", "extended": "1", "limit": "20", **{k: str(v) for k, v in params.items()}}
         async with httpx.AsyncClient(timeout=TIMEOUT, headers=HEADERS, follow_redirects=True) as client:
             resp = await client.get(API, params=query)
             if resp.status_code == 404:      # LibriVox answers 404 when nothing matches
@@ -150,40 +242,80 @@ class Stories(commands.Cog, name="Stories"):
             resp.raise_for_status()
             return parse_books(resp.json())
 
+    async def ia_search(self, *, genre: str | None = None, title: str | None = None) -> list[Book]:
+        params = [("q", ia_query(genre, title)), ("fl[]", "identifier"), ("fl[]", "title"), ("fl[]", "creator"),
+                  ("fl[]", "runtime"), ("fl[]", "language"), ("rows", "100"), ("output", "json")]
+        if genre:      # a different slice of the most-listened each time, so the same book doesn't keep coming up
+            params += [("sort[]", "downloads desc"), ("page", str(random.choice((1, 1, 2, 3))))]
+        async with httpx.AsyncClient(timeout=TIMEOUT, headers=HEADERS, follow_redirects=True) as client:
+            resp = await client.get(IA_SEARCH, params=params)
+            resp.raise_for_status()
+            books = parse_ia_search(resp.json())
+            if not books and genre:          # that page was past the end: go back to the first
+                resp = await client.get(IA_SEARCH, params=[p for p in params if p[0] != "page"])
+                resp.raise_for_status()
+                books = parse_ia_search(resp.json())
+            return books
+
     async def books_in(self, genre: str) -> list[Book]:
         hit = self._cache.get(genre)
         if hit and time.time() - hit[0] < CACHE_SECONDS:
             return hit[1]
-        term = GENRES[genre][1]
-        books = await self.fetch(genre=term, offset=random.choice((0, 0, 50, 100, 150)))
-        if not books:
-            books = await self.fetch(genre=term)
-        self._cache[genre] = (time.time(), books)
+        books = await self.ia_search(genre=genre)
+        if books:
+            self._cache[genre] = (time.time(), books)
         return books
 
     async def with_chapters(self, book: Book) -> Book:
-        if book.chapters or not book.rss:
+        if book.chapters:
             return book
         async with httpx.AsyncClient(timeout=TIMEOUT, headers=HEADERS, follow_redirects=True) as client:
-            resp = await client.get(book.rss)
-            if resp.status_code < 400:
-                book.chapters = rss_chapters(resp.text)
+            if book.ia:
+                resp = await client.get(IA_META + quote(book.ia))
+                if resp.status_code < 400:
+                    book.chapters = ia_chapters(book.ia, resp.json())
+            elif book.rss:
+                resp = await client.get(book.rss)
+                if resp.status_code < 400:
+                    book.chapters = rss_chapters(resp.text)
         return book
 
     async def find(self, what: str | None) -> Book | None:
+        """A book with its chapters. Tries each source in turn; raises only when every one of them failed."""
         key = genre_key(what or "") if what else random.choice(list(GENRES))
-        if key is not None:
-            return pick_story(await self.books_in(key))
         title = " ".join((what or "").split())[:80]
-        books = await self.fetch(title=f"^{title}") or await self.fetch(title=title)
-        return pick_story(books) if books else None
+        if key is not None:
+            sources = [lambda: self.books_in(key)]
+        else:
+            sources = [lambda: self.ia_search(title=title),
+                       lambda: self.fetch(title=f"^{title}"), lambda: self.fetch(title=title)]
+        errors = []
+        for source in sources:
+            try:
+                books = await source()
+                tried = set()
+                for _ in range(3):        # an item can come back without playable files: try another
+                    pool = [b for b in books if b.id not in tried]
+                    book = pick_story(pool)
+                    if book is None:
+                        break
+                    tried.add(book.id)
+                    book = await self.with_chapters(book)
+                    if book.chapters:
+                        return book
+            except (httpx.HTTPError, ValueError) as error:
+                log.warning("Story source failed: %s", error)
+                errors.append(error)
+        if errors and len(errors) == len(sources):
+            raise errors[-1]
+        return None
 
     def genre_card(self, prefix: str) -> discord.Embed:
         lines = [f"**{label}** · `{prefix}story {key}` · {about}" for key, (label, _, about) in GENRES.items()]
         card = discord.Embed(title="📖 Stories SYKE can read you", colour=discord.Colour.dark_teal(),
                              description="\n".join(lines) + f"\n\nOr ask for a title: `{prefix}story the raven`. "
                                          "Join a voice channel first. Skip, pause and leave work like music.")
-        card.set_footer(text="Public-domain audiobooks read by LibriVox volunteers")
+        card.set_footer(text="Public-domain audiobooks read by LibriVox volunteers, via archive.org")
         return card
 
     async def play_story(self, ctx: commands.Context, what: str | None) -> bool:
@@ -196,10 +328,8 @@ class Stories(commands.Cog, name="Stories"):
             return False
         try:
             book = await self.find(what)
-            if book is not None:
-                book = await self.with_chapters(book)
         except (httpx.HTTPError, ValueError) as error:
-            log.warning("LibriVox lookup failed: %s", error)
+            log.warning("Every story source failed: %s", error)
             await ctx.reply("The story library isn't answering right now. Try again in a bit.", mention_author=False)
             return False
         if book is None or not book.chapters:
