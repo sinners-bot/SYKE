@@ -485,7 +485,8 @@ class Storage:
 
     def optouts(self, guild_id: int) -> set[int]:
         rows = self._read("SELECT user_id FROM optouts WHERE guild_id = ?", (guild_id,))
-        return {r[0] for r in rows}
+        from .blacklist import blocked_ids      # the blacklisted are never read, judged or repeated either
+        return {r[0] for r in rows} | blocked_ids()
 
     def timezone(self, guild_id: int) -> str | None:
         rows = self._read("SELECT timezone FROM guild_settings WHERE guild_id = ?", (guild_id,))

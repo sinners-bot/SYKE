@@ -28,6 +28,7 @@ from .stories import Stories
 from .lexicon import CHAT_FILLER, STOPWORDS
 from .lexicon import CHAT_SLANG as CHAT_SLANG_WORDS
 from .isolation import Isolation
+from . import blacklist
 from .owners import bypass_checks, is_owner, set_owners
 from .edge import EDGE_KEY, edge_rules
 from .freaky import FREAKY_KEY, freaky_rules, says_under_18
@@ -142,6 +143,8 @@ from .yap import (
 )
 
 log = logging.getLogger("syke")
+# Blacklisted the first time this runs (the owner can lift it with `blacklist remove`).
+BLACKLIST_SEED = (1413573321798455386,)
 URL_GIF = re.compile(r"tenor\.com/|giphy\.com/|klipy\.com/|\.gif\b", re.IGNORECASE)
 
 BRAND = discord.Colour.from_str("#8B5CF6")
@@ -401,6 +404,8 @@ class Syke(commands.Bot):
         self.settings = settings
         set_owners(settings.owner_ids)
         self.storage = Storage(settings.db_path)
+        blacklist.load(self.storage, seed=BLACKLIST_SEED)
+        blacklist.guard_interactions(self)
         self.scanner = Scanner(settings.scan_limit, settings.cache_minutes)
         self._prefixes: dict[int, str] = {}
         self._analyses: dict[int, tuple[tuple, ServerAnalysis]] = {}
@@ -434,7 +439,18 @@ class Syke(commands.Bot):
         self._strip_runner = None
         self.add_check(self.channel_check)
 
+    def dispatch(self, event_name: str, /, *args, **kwargs) -> None:
+        """Blacklisted users never reach SYKE's listeners or commands; only moderation still sees them."""
+        if blacklist.is_blocked(blacklist.event_user(event_name, args)):
+            method = "on_" + event_name
+            for listener in self.extra_events.get(method, []):
+                if blacklist.moderation_only(listener):
+                    self._schedule_event(listener, method, *args, **kwargs)
+            return
+        super().dispatch(event_name, *args, **kwargs)
+
     async def setup_hook(self) -> None:
+        await self.add_cog(blacklist.Blacklist(self))
         await self.add_cog(SykeCommands(self))
         await self.add_cog(Moderation(self))
         await self.add_cog(Isolation(self))
@@ -1361,6 +1377,8 @@ class Syke(commands.Bot):
     @staticmethod
     def turn_text(m) -> str:
         """What a message says, with what it carries ([image], [gif], [sticker: wave]) so the AI can follow."""
+        if blacklist.is_blocked(getattr(m, "author", None)):
+            return ""                          # blacklisted: left out of every chat SYKE reads
         parts = [m.content or ""]
         for a in getattr(m, "attachments", None) or []:
             kind = (getattr(a, "content_type", "") or "").split("/")[0]
@@ -1532,7 +1550,8 @@ class Syke(commands.Bot):
         """A recent message from someone else in the channel, to reply to by mistake."""
         with contextlib.suppress(discord.HTTPException, AttributeError, TypeError):
             async for m in message.channel.history(limit=4, before=message):
-                if m.author.id not in (message.author.id, getattr(self.user, "id", None)) and not m.author.bot:
+                if m.author.id not in (message.author.id, getattr(self.user, "id", None)) and not m.author.bot \
+                        and not blacklist.is_blocked(m.author):
                     return m
         return None
 
