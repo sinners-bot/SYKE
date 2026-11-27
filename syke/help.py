@@ -351,8 +351,7 @@ CATALOG: list[Category] = [
                      "audiobooks from LibriVox; skip, pause and leave work like music. You can also just ask him: "
                      "\"syke tell us a scary story\".",
             "radio": "Endless music from 75 stations, picked to fit each one (the right upload of the right song, "
-                     "never covers, sped-up edits or hour-long mixes): rap (`drill`, `uk`, `deutschrap`, `phonk`), pop (`kpop`, "
-                     "`latin`, `afro`, `anime`), `russian`, `french`, `italian`, `brazilian`, `persian`, `rock`, `metal`, `indie`, `country`, `reggae`, dance (`house`, "
+                     "never covers, sped-up edits or hour-long mixes): rap (`drill`, `uk`, `deutschrap`, `phonk`), pop (`latin`, `afro`, `anime`), `french`, `italian`, `brazilian`, `persian`, `rock`, `metal`, `indie`, `country`, `reggae`, dance (`house`, "
                      "`techno`, `dnb`, `amapiano`, `jerseyclub`, `disco`), `balkan`, `turkish`, `arabic`, "
                      "`bollywood`, `jazz`, `classical` and moods (`chill`, `lofi`, `sad`, `gym`, `party`, `gaming`, "
                      "`sleep`, `christmas`). `radio` alone lists them all; `radio off` stops it.",

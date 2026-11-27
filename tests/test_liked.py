@@ -77,7 +77,7 @@ def test_library_has_a_limit(liked):
 
 
 async def test_anyone_can_like_whats_playing_from_the_card(rig, liked):
-    rig.player.current = song(1, radio="kpop", query="NewJeans - Super Shy")
+    rig.player.current = song(1, radio="pop", query="NewJeans - Super Shy")
     view = music.Controls(rig.cog, 1)
     like = [c for c in view.children if isinstance(c, LikeButton)]
     assert like and like[0].item.custom_id == "syke:like:1"

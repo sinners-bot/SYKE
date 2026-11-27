@@ -91,12 +91,6 @@ GENRES: dict[str, list[tuple[str, str]]] = {
         ("Rauw Alejandro", "Todo de Ti"), ("Feid", "Normal"), ("Eslabon Armado & Peso Pluma", "Ella Baila Sola"),
         ("Shakira", "Hips Don't Lie"), ("DJ Snake", "Taki Taki"),
     ],
-    "kpop": [
-        ("BTS", "Dynamite"), ("BTS", "Butter"), ("BLACKPINK", "How You Like That"), ("BLACKPINK", "DDU-DU DDU-DU"),
-        ("NewJeans", "Super Shy"), ("NewJeans", "Ditto"), ("Stray Kids", "S-Class"), ("TWICE", "Fancy"),
-        ("aespa", "Supernova"), ("Jung Kook", "Seven"), ("PSY", "Gangnam Style"), ("IVE", "Love Dive"),
-        ("LE SSERAFIM", "Antifragile"), ("ROSÉ & Bruno Mars", "APT."), ("(G)I-DLE", "Queencard"),
-    ],
     "uk": [
         ("Stormzy", "Shut Up"), ("Stormzy", "Vossi Bop"), ("Skepta", "Shutdown"), ("Dave", "Location"),
         ("Dave", "Funky Friday"), ("AJ Tracey", "Ladbroke Grove"), ("Aitch", "Taste (Make It Shake)"),
@@ -156,13 +150,6 @@ GENRES: dict[str, list[tuple[str, str]]] = {
         ("Tchaikovsky", "Swan Lake"), ("Pachelbel", "Canon in D"), ("Grieg", "In the Hall of the Mountain King"),
         ("Chopin", "Nocturne Op. 9 No. 2"), ("Satie", "Gymnopédie No. 1"), ("Carl Orff", "O Fortuna"),
         ("Johann Strauss II", "The Blue Danube"), ("Rossini", "William Tell Overture"),
-    ],
-    "russian": [
-        ("JONY", "Комета"), ("Miyagi & Andy Panda", "Kosandra"), ("Little Big", "Skibidi"), ("Little Big", "Uno"),
-        ("t.A.T.u.", "All the Things She Said"), ("t.A.T.u.", "Нас не догонят"), ("Zivert", "Life"),
-        ("Morgenshtern & Элджей", "Cadillac"), ("Кино", "Группа крови"), ("Кино", "Кукушка"), ("Грибы", "Тает лёд"),
-        ("Rauf & Faik", "Детство"), ("HammAli & Navai", "Девочка-война"), ("Artik & Asti", "Под гипнозом"),
-        ("Руки Вверх", "Он тебя целует"),
     ],
 }
 
@@ -236,7 +223,7 @@ RADIO_SEARCHES: dict[str, list[str]] = {
 STATION_BRIEFS: dict[str, str] = {
     "rap": "mainstream US hip-hop hits and classics", "drill": "UK and US drill (Chicago, NY, UK drill)",
     "uk": "UK rap and grime", "deutschrap": "German-language rap (Deutschrap)", "phonk": "phonk and drift phonk",
-    "pop": "global pop hits", "rnb": "R&B, old and new", "kpop": "Korean pop (K-pop) idol groups and soloists",
+    "pop": "global pop hits", "rnb": "R&B, old and new",
     "latin": "reggaeton, Latin trap and Latin pop", "afro": "Afrobeats and Afropop", "anime": "anime openings, "
     "endings and J-pop/J-rock used in anime", "rock": "rock classics and modern rock", "metal": "heavy metal, "
     "nu metal, metalcore", "indie": "indie and alternative", "country": "country, old and new",
@@ -245,8 +232,7 @@ STATION_BRIEFS: dict[str, str] = {
     "amapiano": "amapiano from South Africa", "jerseyclub": "Jersey club", "disco": "disco and funk",
     "synthwave": "synthwave and retrowave", "nightcore": "nightcore and sped-up versions of popular songs",
     "balkan": "Balkan pop and rap (ex-Yugoslav, Albanian, Bulgarian)", "turkish": "Turkish pop and rap",
-    "arabic": "Arabic pop and rap", "bollywood": "Bollywood and Punjabi songs", "russian": "Russian-language "
-    "pop, rap and rock", "french": "French rap and pop (rap français, variété)", "italian": "Italian pop and "
+    "arabic": "Arabic pop and rap", "bollywood": "Bollywood and Punjabi songs", "french": "French rap and pop (rap français, variété)", "italian": "Italian pop and "
     "rap", "brazilian": "Brazilian funk, sertanejo, MPB and Brazilian pop", "persian": "Persian (Iranian) pop and "
     "rap", "throwback": "2000s and 2010s hits everyone knows", "jazz": "jazz standards and modern jazz",
     "classical": "classical music: well-known pieces", "chill": "chill, laid-back songs (indie, R&B, acoustic)",
@@ -273,8 +259,7 @@ GENRE_ALIASES = {"uk drill": "drill", "ukdrill": "drill", "german": "deutschrap"
                  "deutsch": "deutschrap", "hiphop": "rap", "hip-hop": "rap", "hip hop": "rap", "r&b": "rnb",
                  "randb": "rnb", "old": "throwback", "oldies": "throwback", "classics": "throwback", "90s": "90s",
                  "00s": "2000s", "afrobeats": "afro", "dance": "edm", "electronic": "edm", "lo-fi": "lofi",
-                 "study": "lofi", "reggaeton": "latin", "espanol": "spanish", "k-pop": "kpop", "korean": "kpop",
-                 "grime": "uk", "uk rap": "uk", "ukrap": "uk", "british": "uk", "alternative": "indie", "alt": "indie",
+                 "study": "lofi", "reggaeton": "latin", "espanol": "spanish", "grime": "uk", "uk rap": "uk", "ukrap": "uk", "british": "uk", "alternative": "indie", "alt": "indie",
                  "heavy metal": "metal", "rockmetal": "metal", "dancehall": "reggae", "70s funk": "funk", "seventies": "70s",
                  "eighties": "80s", "bluesrock": "blues", "japanese": "jpop", "j pop": "jpop", "j-pop": "jpop",
                  "orchestra": "classical", "piano": "classical", "workout": "gym", "training": "gym",
@@ -284,8 +269,7 @@ GENRE_ALIASES = {"uk drill": "drill", "ukdrill": "drill", "german": "deutschrap"
                  "hindi": "bollywood", "punjabi": "bollywood", "desi": "bollywood", "retrowave": "synthwave",
                  "sped up": "nightcore", "spedup": "nightcore", "games": "gaming", "game": "gaming",
                  "ost": "gaming", "ambient": "sleep", "xmas": "christmas", "weihnachten": "christmas",
-                 "russia": "russian", "ru": "russian", "rus": "russian", "русский": "russian", "русская": "russian",
-                 "russian rap": "russian", "france": "french", "francais": "french", "français": "french",
+                 "france": "french", "francais": "french", "français": "french",
                  "rap fr": "french", "fr": "french", "italy": "italian", "italiano": "italian", "brazil": "brazilian",
                  "brasil": "brazilian", "funk brasileiro": "brazilian", "baile funk": "brazilian",
                  "iranian": "persian", "farsi": "persian", "iran": "persian",
@@ -316,13 +300,13 @@ def all_genres() -> list[str]:
 # How the station list is shown: (heading, stations).
 STATION_GROUPS: list[tuple[str, list[str]]] = [
     ("🎤 Rap", ["rap", "trap", "drill", "uk", "deutschrap", "phonk", "oldschool", "emorap"]),
-    ("🎧 Pop & R&B", ["pop", "rnb", "kpop", "jpop", "cpop", "latin", "afro", "anime", "hyperpop", "tiktok"]),
+    ("🎧 Pop & R&B", ["pop", "rnb", "jpop", "cpop", "latin", "afro", "anime", "hyperpop", "tiktok"]),
     ("🎸 Rock & more", ["rock", "metal", "punk", "emo", "grunge", "indie", "country", "reggae"]),
     ("🪩 Dance", ["edm", "house", "techno", "dnb", "hardstyle", "dubstep", "trance", "ukgarage", "amapiano",
                  "jerseyclub", "disco", "synthwave", "nightcore"]),
     ("🎷 Soul & classics", ["soul", "funk", "blues", "jazz", "classical", "throwback"]),
     ("📅 Decades", ["70s", "80s", "90s", "2000s", "2010s"]),
-    ("🌍 Around the world", ["russian", "balkan", "turkish", "arabic", "persian", "bollywood", "french", "italian",
+    ("🌍 Around the world", ["balkan", "turkish", "arabic", "persian", "bollywood", "french", "italian",
                             "spanish", "brazilian", "polish", "greek", "dutch"]),
     ("✨ Moods", ["chill", "lofi", "sad", "love", "gym", "party", "summer", "roadtrip", "gaming", "sleep",
                  "halloween", "christmas"]),

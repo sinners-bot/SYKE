@@ -37,7 +37,7 @@ async def test_resolver_picks_the_clean_upload_and_keeps_backups(rig):
         upload("NewJeans - Super Shy (sped up)", "edits", 120, encoded="enc-sped"),
         upload("NewJeans (뉴진스) 'Super Shy' Official MV", "HYBE LABELS", 200, encoded="enc-mv"),
         upload("Super Shy 10 hours", "loops", 36000, encoded="enc-loop")]}
-    track = Track(title="Super Shy — NewJeans", query="NewJeans - Super Shy", radio="kpop")
+    track = Track(title="Super Shy — NewJeans", query="NewJeans - Super Shy", radio="pop")
     assert await cog.ll_resolve(track) == "enc-topic"
     assert track.alternates == ["enc-mv"]                          # no sped-up edit, no loop
 
@@ -51,7 +51,7 @@ async def test_a_blocked_upload_is_swapped_for_another_at_the_same_second(rig, m
     node.loads["ytmsearch:NewJeans Super Shy"] = {"loadType": "search", "data": [
         upload("Super Shy", "NewJeans - Topic", 155, encoded="enc-topic"),
         upload("Super Shy (Official Audio)", "NewJeans", 155, encoded="enc-audio")]}
-    p.queue.append(Track(title="Super Shy — NewJeans", query="NewJeans - Super Shy", radio="kpop", duration=155))
+    p.queue.append(Track(title="Super Shy — NewJeans", query="NewJeans - Super Shy", radio="pop", duration=155))
     await p.start_or_queue()
     assert node.updates[-1][1]["track"] == {"encoded": "enc-topic"}
     p.base, p.t0 = 40.0, time.monotonic()
@@ -70,18 +70,18 @@ async def test_radio_mixes_hand_picked_and_ai_picked_songs_for_the_station(rig, 
 
     async def ai(settings, system, user, temperature, timeout):
         asked.append(user)
-        return {"songs": [{"artist": "Ваня Дмитриенко", "title": "Венера-Юпитер"},
-                          {"artist": "Macan", "title": "ASPHALT 8"}, {"artist": "Zivert", "title": "Beverly Hills"},
-                          {"artist": "Miyagi & Andy Panda", "title": "Kosandra"}]}
+        return {"songs": [{"artist": "Myke Towers", "title": "LALA"},
+                          {"artist": "Ozuna", "title": "Taki Taki Remix"}, {"artist": "Anuel AA", "title": "China"},
+                          {"artist": "Bad Bunny", "title": "Monaco"}]}
     monkeypatch.setattr(music.ai, "_complete", ai)
-    p.radio = "russian"
+    p.radio = "latin"
     await cog.radio_fill(p, 6)
     await settle()
     titles = [t.title for t in p.queue]
-    assert len(titles) == 6 and all(t.radio == "russian" and t.source == "Radio" for t in p.queue)
-    hand = {f"{t} — {a}" for a, t in lists.GENRES["russian"]}
+    assert len(titles) == 6 and all(t.radio == "latin" and t.source == "Radio" for t in p.queue)
+    hand = {f"{t} — {a}" for a, t in lists.GENRES["latin"]}
     assert 3 <= sum(t in hand for t in titles) <= 4 and len(set(titles)) == 6   # half from the list, no repeats
-    assert "Russian-language" in asked[0] and "Station: russian" in asked[0]
+    assert "reggaeton" in asked[0] and "Station: latin" in asked[0]
 
 
 async def test_mood_stations_use_ai_picks_not_random_searches(rig, monkeypatch):
@@ -110,4 +110,4 @@ async def test_without_ai_searches_skip_mixes_and_hour_long_videos(rig):
 def test_every_station_has_a_brief_and_fits_discord():
     assert len(lists.GENRES) <= 25
     assert all(g in lists.STATION_BRIEFS for g in lists.all_genres())
-    assert lists.resolve_genre("русский") == "russian" and lists.resolve_genre("baile funk") == "brazilian"
+    assert lists.resolve_genre("русский") is None and lists.resolve_genre("k-pop") is None and lists.resolve_genre("baile funk") == "brazilian"
