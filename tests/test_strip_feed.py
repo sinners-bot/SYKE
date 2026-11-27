@@ -89,3 +89,41 @@ def test_showcase_pages_have_screenshots_and_a_play_link():
     assert any("9" in fld.value for fld in f.play_embed(None, 0).fields)
     v = F.ShowcaseView(f, 0)
     assert any(getattr(c, "url", None) == "https://discord.com/activities/123456" for c in v.children)
+
+
+def test_live_post_links_the_voice_channel_and_can_be_muted():
+    """3.25: "Ava is playing THE STRIP in 🔊 Lounge (3 in the call)", only where opted in, and !striplive off mutes it."""
+    f, posted, pres, cfg = _setup()
+    class FakeVC(discord.VoiceChannel):   # a voice channel with three people in it (no gateway needed)
+        def __init__(self):
+            pass
+        mention = property(lambda self: "<#42>")
+        members = property(lambda self: [1, 2, 3])
+
+    vc = FakeVC()
+    orig = f.bot.get_guild
+
+    def guild_with_vc(g):
+        gd = orig(g)
+        if gd is None:
+            return None
+        base = gd.get_channel
+        gd.get_channel = lambda i: vc if i == 42 else base(i)
+        return gd
+
+    f.bot.get_guild = guild_with_vc
+
+    async def go():
+        cfg[77] = {"channel": 5}
+        r = await f.handle({"kind": "live", "guild_id": "77", "player": {"name": "Ava"}, "data": {"channel": "42", "here": 1}})
+        assert r["posted"]
+        e, v = posted[-1]
+        assert "Ava" in e.description and "<#42>" in e.description and "3 in the call" in e.description
+        f._sent.clear()
+        r = await f.handle({"kind": "live", "guild_id": "77", "player": {"name": "Ben"}, "data": {"channel": "999"}})
+        assert r["posted"] and "right now" in posted[-1][0].description
+        f._sent.clear()
+        cfg[77] = {"channel": 5, "mute": ["live"]}
+        assert (await f.handle({"kind": "live", "guild_id": "77", "player": {"name": "Cy"}, "data": {"channel": "42"}}))["why"] == "muted_kind"
+
+    asyncio.run(go())

@@ -39,6 +39,7 @@ KINDS = {
     "cup": ("🏆 Weekly cup champion", "**{name}** won this week's **{game}** cup at Pixel Palace."),
     "promotion": ("💼 Promotion", "**{name}** is now **{title}** ({job}, level {level})."),
     "newplayer": ("🌆 New arrival", "**{name}** from this server just moved to THE STRIP. Come say hi!"),
+    "live": ("🔴 Live on THE STRIP", "**{name}** is playing THE STRIP {where}. Hop in and play together!"),
     "pet": ("🐾 New best friend", "**{name}** just adopted **{pet}**, a {breed}, on THE STRIP. Come say hi (pats welcome)!"),
 }
 
@@ -139,6 +140,17 @@ class StripFeed(commands.Cog, name="StripFeed"):
         perms = channel.permissions_for(me) if me else None
         if not perms or not (perms.send_messages and perms.embed_links):
             return {"ok": True, "posted": False, "why": "no_perms"}
+        if kind == "live":   # 3.25 name the voice channel it's running in (a clickable link), and how many are in the call
+            data = body.get("data") if isinstance(body.get("data"), dict) else {}
+            where = "right now"
+            try:
+                vc = guild.get_channel(int(data.get("channel") or 0))
+            except (TypeError, ValueError):
+                vc = None
+            if isinstance(vc, (discord.VoiceChannel, discord.StageChannel)):
+                n = len(vc.members)
+                where = f"in {vc.mention}" + (f" ({n} in the call)" if n > 1 else "")
+            body = {**body, "data": {**data, "where": where}}
         try:
             await channel.send(embed=self.highlight_embed(kind, body), view=play_view(self.app_id),
                                allowed_mentions=discord.AllowedMentions.none())
@@ -211,14 +223,15 @@ class StripFeed(commands.Cog, name="StripFeed"):
         clip = lambda v, n=40: discord.utils.escape_markdown(str(v or "")[:n]) or "someone"
         fields = {"name": clip(player.get("name")), "game": clip(data.get("game")), "score": clip(data.get("score")),
                   "partner": clip(data.get("partner")), "title": clip(data.get("title")), "job": clip(data.get("job")),
-                  "level": clip(data.get("level"), 4), "pet": clip(data.get("pet"), 20), "breed": clip(data.get("breed"), 30)}
+                  "level": clip(data.get("level"), 4), "pet": clip(data.get("pet"), 20), "breed": clip(data.get("breed"), 30),
+                  "where": str(data.get("where") or "right now")[:80]}
         if kind == "jackpot":
             net = data.get("net")
             amount = f"{int(net):,}" if isinstance(net, (int, float)) else "a pile of"
             jp = data.get("jackpot")
             fields["won"] = (f"hit the **{clip(jp)}** jackpot for **{amount}** chips!" if jp
                              else f"just won **{amount}** chips at {clip(data.get('game'))}!")
-        e = embed(title, text.format(**fields), GOLD if kind in ("record", "jackpot", "cup") else BRAND)
+        e = embed(title, text.format(**fields), GOLD if kind in ("record", "jackpot", "cup") else PINK if kind == "live" else BRAND)
         online = self.online
         e.set_footer(text=f"THE STRIP · {online:,} playing now · one world for all of Discord" if online else "THE STRIP · one world for all of Discord")
         return e
@@ -293,7 +306,8 @@ class StripFeed(commands.Cog, name="StripFeed"):
                                         + f"\n\n`{p}stripfeed #channel` posts new arcade records, big casino wins, weddings, weekly cup "
                                         "champions, promotions and new arrivals from **this server's** players, each with a Play button "
                                         f"(at most one every {GAP} s, {PER_DAY} a day). `{p}stripfeed off` stops it.\n\n"
-                                        f"📸 Outfit photos from the game's photo studio go to the same channel. `{p}stripphotos off` turns just those off.", BRAND), mention_author=False)
+                                        f"📸 Outfit photos from the game's photo studio go to the same channel. `{p}stripphotos off` turns just those off.\n"
+                                        f"🔴 When someone starts playing in one of your voice channels, a \"come join\" post links that channel (at most every 3 hours). `{p}striplive off` turns just those off.", BRAND), mention_author=False)
             return
         me = ctx.guild.me
         perms = channel.permissions_for(me)
@@ -328,6 +342,28 @@ class StripFeed(commands.Cog, name="StripFeed"):
         self.bot.storage.update_config(ctx.guild.id, FEED_KEY, mute=sorted(mute))
         await ctx.reply(embed=embed("📸 Strip photos " + ("off" if "photo" in mute else "on"),
                                     "Outfit photos won't be posted here." if "photo" in mute else "Outfit photos from this server's players will be posted in the feed channel.", OK), mention_author=False)
+
+    @commands.hybrid_command(name="striplive", with_app_command=False, description="Turn THE STRIP's 'come join' posts on or off in the feed channel")
+    @commands.guild_only()
+    async def striplive(self, ctx: commands.Context, setting: str | None = None) -> None:
+        """3.25: "Ava is playing THE STRIP in 🔊 Lounge" posts, at most one every 3 hours per server."""
+        from .bot import is_admin
+        if not is_admin(self.bot, ctx.author):
+            raise commands.MissingPermissions(["manage_guild"])
+        cfg = self.bot.storage.get_config(ctx.guild.id, FEED_KEY)
+        mute = set(cfg.get("mute") or [])
+        if setting and setting.lower() in ("off", "stop", "disable", "no"):
+            mute.add("live")
+        elif setting and setting.lower() in ("on", "start", "enable", "yes"):
+            mute.discard("live")
+        else:
+            await ctx.reply(embed=embed("🔴 Strip live posts", ("Off" if "live" in mute else "On") + " in this server's Strip feed channel: when someone starts "
+                                        "playing in a voice channel here, a post links that channel so others can hop in (at most every 3 hours). "
+                                        f"`{self.bot.display_prefix(ctx.guild.id)}striplive on|off`", BRAND), mention_author=False)
+            return
+        self.bot.storage.update_config(ctx.guild.id, FEED_KEY, mute=sorted(mute))
+        await ctx.reply(embed=embed("🔴 Strip live posts " + ("off" if "live" in mute else "on"),
+                                    "No more \"come join\" posts here." if "live" in mute else "When someone starts playing in a voice channel here, I'll post a link to it in the feed channel.", OK), mention_author=False)
 
 
 class ShowcaseView(discord.ui.View):

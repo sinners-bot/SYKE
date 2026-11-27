@@ -253,7 +253,8 @@ CATALOG: list[Category] = [
                     "the game. Also `/strip play`. (`play` itself is the music player now.)",
             "stripfeed": "Admins: `stripfeed #channel` posts highlights from this server's players (arcade records, big "
                          "casino wins, weddings, cup champions, promotions, new arrivals) with a Play button. "
-                         "`stripfeed off` stops it. Also `/strip feed`.",
+                         "`stripfeed off` stops it. Also `/strip feed`. When someone starts playing in one of your voice "
+                         "channels, a \"come join\" post links it (at most every 3 hours; `striplive off` stops just those).",
             "economy": "SYKE's owners only: `economy on`/`off` opens or closes the Strip, plus `give`/`take`/`reset` "
                        "wallets.",
             "house": "SYKE owners: run the economy in any server — `give`/`take`/`set`/`peek`/`reset` wallets, "
