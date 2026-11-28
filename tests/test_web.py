@@ -1145,3 +1145,89 @@ async def test_privacy_and_terms_are_public(dash):
         assert "/privacy" in await (await cl.get("/")).text()
         web.bot.settings = __import__("dataclasses").replace(web.bot.settings, contact="help@syke.gg")
         assert "mailto:help@syke.gg" in await (await cl.get("/privacy")).text()
+
+
+# The chat viewer: markdown, message actions, replies as SYKE and the DM view.
+
+def test_render_content_does_discord_markdown_safely():
+    from syke.web import render_content as r
+    out = r("**b** *i* __u__ ~~s~~ ||sp|| `c *x*` snake_case_word", None)
+    assert ("<strong>b</strong>" in out and "<em>i</em>" in out and "<u>u</u>" in out and "<s>s</s>" in out
+            and "class='spoiler'" in out and "<code class='ic'>c *x*</code>" in out and "snake_case_word" in out)
+    assert r("> one\n> two\nafter", None) == "<div class='bq'>one\ntwo</div>after"
+    assert "class='h1'" in r("# Title", None) and "class='subtext'" in r("-# small", None)
+    assert "class='li'" in r("- item", None)
+    block = r("```py\n<b>x</b>\n```\nok", None)
+    assert "<pre class='cb' data-lang='py'><code>&lt;b&gt;x&lt;/b&gt;</code></pre>ok" == block
+    links = r("see https://a.com/x_y. and [site](https://b.com) <https://c.com>", None)
+    assert links.count("<a class='lnk'") == 3 and "href='https://a.com/x_y'" in links and ">site</a>" in links
+    assert "data-dts='1700000000' data-f='R'" in r("<t:1700000000:R>", None)
+    assert r("<img src=x onerror=alert(1)> & 'q'", None) == "&lt;img src=x onerror=alert(1)&gt; &amp; &#x27;q&#x27;"
+    assert "<a" not in r("[x](javascript:alert(1))", None)          # only http(s) links become links
+    one_line = r("> quoted\n```\ncode\n```", None, inline=True)
+    assert "<div" not in one_line and "<pre" not in one_line and "<code class='ic'>code</code>" in one_line
+
+
+def test_messages_carry_actions_and_grouped_times(dash):
+    web, bot, guild = dash
+    a = _fake_message(1, 7, "Ada", "first", 1_700_000_000)
+    b = _fake_message(2, 7, "Ada", "second", 1_700_000_030)
+    a.channel = b.channel = types.SimpleNamespace(id=10)
+    first, second = web._one_message(a, None), web._one_message(b, a)
+    assert "data-act='reply'" in first and "data-act='id'" in first and "data-uid='7'" in first
+    assert "discord.com/channels/@me/10/1" in first                    # no guild: a DM link
+    assert "class='m grouped'" in second and "class='gts'" in second and "<img" not in second.split("acts")[0]
+
+
+async def test_channel_page_has_reply_box_jump_pill_and_shared_script(dash):
+    async with serving(dash) as (cl, web, bot, guild):
+        guild.get_channel(10)._history = [_fake_message(100, 7, "Ada", "hi", 1_700_000_000)]
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        page = await (await cl.get(f"/g/{guild.id}/c/10")).text()
+        assert "id='sayform'" in page and "name='reply_to'" in page and "id='replybar'" in page
+        assert "id='jumpnow'" in page and "function seps()" in page and "data-act" in page
+        assert "Members — " not in page or page.count("Members — ") == 1
+
+
+async def test_reply_as_syke_sends_a_reference(dash):
+    async with serving(dash) as (cl, web, bot, guild):
+        cl.session.cookie_jar.update_cookies(_session_cookie())
+        token = auth.csrf_token(SECRET, 42)
+        await cl.post(f"/g/{guild.id}/c/10/say", data={"content": "fr", "csrf": token, "reply_to": "555",
+                                                       "ping": "1"}, allow_redirects=False)
+        kw = guild.get_channel(10).sent_kwargs[-1]
+        assert kw["reference"].message_id == 555 and kw["allowed_mentions"].replied_user is True
+        await cl.post(f"/g/{guild.id}/c/10/say", data={"content": "plain", "csrf": token, "reply_to": ""},
+                      allow_redirects=False)
+        kw = guild.get_channel(10).sent_kwargs[-1]
+        assert kw["reference"] is None and kw["allowed_mentions"].replied_user is False
+
+
+async def test_dm_view_pages_back_and_polls_forward(dash):
+    history = [_fake_message(i, 7 if i % 2 else 999, "Ada" if i % 2 else "SYKE", f"line {i}",
+                             1_700_000_000 + i * 60) for i in range(1, 9)]
+
+    async def hist(limit=50, before=None, after=None):
+        msgs = list(history)
+        if before is not None:
+            msgs = [m for m in msgs if m.id < before.id]
+        if after is not None:
+            msgs = [m for m in msgs if m.id > after.id]
+        for m in sorted(msgs, key=lambda m: m.id, reverse=True)[:limit]:
+            yield m
+    ch = _dm_channel(7, "ada", history)
+    ch.history = hist
+    async with serving(dash) as (cl, web, bot, guild):
+        type(bot).private_channels = property(lambda self: [ch])
+        try:
+            assert (await cl.get("/dm/7/messages?before=5", allow_redirects=False)).status == 302   # login first
+            cl.session.cookie_jar.update_cookies(_session_cookie())
+            page = await (await cl.get("/dm/7")).text()
+            assert "line 8" in page and "id='jumpnow'" in page and "messages?after=" in page
+            older = await (await cl.get("/dm/7/messages?before=5")).text()
+            assert "line 4" in older and "line 5" not in older
+            newer = await (await cl.get("/dm/7/messages?after=6")).text()
+            assert "line 7" in newer and "line 6" not in newer
+            assert (await cl.get("/dm/7/messages")).status == 400
+        finally:
+            del type(bot).private_channels

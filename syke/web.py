@@ -23,6 +23,7 @@ import discord
 import httpx
 from aiohttp import web
 
+from . import blacklist
 from . import web_auth as auth
 from .moderation import KINDS, human_duration, parse_duration
 from .yap import gif_keywords
@@ -75,6 +76,73 @@ SIDEBAR_JS = (
     "document.querySelectorAll('#chlist .dc-cat').forEach(function(c){var n=c.nextElementSibling,a=false;"
     "while(n&&!n.classList.contains('dc-cat')){if(n.classList.contains('dc-ch')&&n.style.display!=='none')a=true;"
     "n=n.nextElementSibling;}c.style.display=a?'':'none';});});}"
+)
+
+# Shared by the channel and DM views: timestamps (and Discord <t:…> stamps), day separators, spoilers, the hover
+# actions on each message (reply as SYKE, copy text, copy ID) and a stand-in for avatars that no longer load.
+CHAT_JS = (
+    "function fmt(s){var d=new Date(s*1000),n=new Date(),"
+    "t=d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),"
+    "y=new Date(n.getTime()-864e5);"
+    "if(d.toDateString()===n.toDateString())return'Today at '+t;"
+    "if(d.toDateString()===y.toDateString())return'Yesterday at '+t;"
+    "return d.toLocaleDateString()+' '+t;}"
+    "function rel(d){var s=(d-Date.now())/1000,a=Math.abs(s),u=[[60,'second'],[3600,'minute'],[86400,'hour'],"
+    "[2592000,'day'],[31536000,'month'],[1/0,'year']],p=1;"
+    "for(var i=0;i<u.length;i++){if(a<u[i][0]){var r=new Intl.RelativeTimeFormat([],{numeric:'auto'});"
+    "return r.format(Math.round(s/p),u[i][1]);}p=u[i][0];}}"
+    "function dts(e){var d=new Date(+e.dataset.dts*1000),f=e.dataset.f,o={"
+    "t:{hour:'2-digit',minute:'2-digit'},T:{hour:'2-digit',minute:'2-digit',second:'2-digit'},"
+    "d:{day:'2-digit',month:'2-digit',year:'numeric'},D:{day:'numeric',month:'long',year:'numeric'},"
+    "f:{day:'numeric',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'},"
+    "F:{weekday:'long',day:'numeric',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'}};"
+    "if(isNaN(d))return;e.textContent=f==='R'?rel(d):d.toLocaleString([],o[f]||o.f);e.title=d.toLocaleString();}"
+    "function seps(){var p=document.getElementById('messages');if(!p)return;"
+    "p.querySelectorAll('.daysep').forEach(function(x){x.remove();});var last=null;"
+    "p.querySelectorAll('.m[data-mid]').forEach(function(m){if(m.parentNode!==p)return;"
+    "var t=m.querySelector('time[data-ts]');if(!t)return;var d=new Date(+t.dataset.ts*1000),k=d.toDateString();"
+    "if(k!==last){if(last!==null||m.previousElementSibling){var s=document.createElement('div');s.className='daysep';"
+    "s.textContent=d.toLocaleDateString([],{day:'numeric',month:'long',year:'numeric'});m.before(s);}last=k;}});}"
+    "function stamp(r){r.querySelectorAll('time[data-ts]').forEach(function(e){var t=+e.dataset.ts;"
+    "e.textContent=e.classList.contains('gts')?new Date(t*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):fmt(t);"
+    "e.title=new Date(t*1000).toLocaleString();});r.querySelectorAll('time.dts').forEach(dts);seps();}"
+    "function toast(t){var x=document.createElement('div');x.className='toast';x.textContent=t;"
+    "document.body.appendChild(x);setTimeout(function(){x.remove();},1400);}"
+    "function copy(t,what){if(navigator.clipboard)navigator.clipboard.writeText(t).then(function(){toast(what+' copied');},"
+    "function(){toast(\"Couldn't copy\");});}"
+    "document.addEventListener('click',function(e){var sp=e.target.closest('.spoiler');"
+    "if(sp&&!sp.classList.contains('shown')){sp.classList.add('shown');e.preventDefault();return;}"
+    "var b=e.target.closest('.acts button');if(!b)return;var m=b.closest('.m'),a=b.dataset.act;"
+    "if(a==='id')copy(m.dataset.mid,'Message ID');"
+    "else if(a==='copy'){var t=m.querySelector('.content > .text');copy(t?t.innerText.replace(/ ?\\(edited\\)$/,''):'','Text');}"
+    "else if(a==='reply'){var f=document.getElementById('sayform');if(!f)return;"
+    "f.querySelector('[name=reply_to]').value=m.dataset.mid;var rb=document.getElementById('replybar');"
+    "rb.hidden=false;rb.querySelector('b').textContent=b.parentNode.dataset.name;f.querySelector('textarea').focus();}});"
+    "document.addEventListener('error',function(e){var t=e.target;if(t.tagName==='IMG'&&!t.dataset.fb&&"
+    "t.closest('.av,.rav,.mrow,.dmhead,.dmcard')){t.dataset.fb=1;t.src='https://cdn.discordapp.com/embed/avatars/0.png';}},true);"
+)
+
+# The DM view: scroll up for older messages, new ones arrive every few seconds, and a jump-to-present pill.
+DM_JS = (
+    "var pane=document.getElementById('messages'),jb=document.getElementById('jumpnow'),unseen=0,loading=false,"
+    "noMore=false;stamp(document);pane.scrollTop=pane.scrollHeight;"
+    "function far(){return pane.scrollHeight-pane.scrollTop-pane.clientHeight;}"
+    "function label(){jb.textContent=unseen?unseen+' new message'+(unseen>1?'s':'')+' · Jump to present':'Jump to present';}"
+    "jb.onclick=function(){pane.scrollTop=pane.scrollHeight;unseen=0;jb.hidden=true;};"
+    "async function older(){if(loading||noMore)return;var f=pane.querySelector('.m[data-mid]');if(!f)return;"
+    "loading=true;try{var r=await fetch(location.pathname+'/messages?before='+f.dataset.mid);"
+    "if(r.ok){var h=await r.text();if(h.indexOf('data-mid')===-1)noMore=true;else{var b=pane.scrollHeight;"
+    "f.insertAdjacentHTML('beforebegin',h);stamp(pane);pane.scrollTop+=pane.scrollHeight-b;}}}catch(e){}loading=false;}"
+    "pane.addEventListener('scroll',function(){if(pane.scrollTop<150)older();"
+    "if(far()<100){unseen=0;jb.hidden=true;}else if(far()>600){label();jb.hidden=false;}});"
+    "setInterval(async function(){if(document.hidden)return;var all=pane.querySelectorAll('.m[data-mid]');"
+    "if(!all.length)return;var at=far()<100;"
+    "try{var r=await fetch(location.pathname+'/messages?after='+all[all.length-1].dataset.mid);if(!r.ok)return;"
+    "var t=document.createElement('div');t.innerHTML=await r.text();var n=0;"
+    "Array.from(t.children).forEach(function(x){if(x.dataset&&x.dataset.mid&&"
+    "!pane.querySelector(\".m[data-mid='\"+x.dataset.mid+\"']\")){pane.appendChild(x);n++;}});"
+    "if(!n)return;var e=pane.querySelector('.dc-empty');if(e)e.remove();stamp(pane);"
+    "if(at)pane.scrollTop=pane.scrollHeight;else{unseen+=n;label();jb.hidden=false;}}catch(e){}},5000);"
 )
 
 
@@ -142,22 +210,132 @@ def _token_html(token: str, guild, names: dict) -> str:
     return esc(token)
 
 
-def render_content(content: str, guild, names: dict | None = None) -> str:
-    """Escape message text and render custom emojis as images and mentions as chips, Discord-style.
+_CODE_BLOCK = re.compile(r"```(?:([\w+#.-]{1,20})\n)?(.*?)```", re.DOTALL)
+_INLINE_CODE = re.compile(r"(`{1,2})([^`]|[^`].*?[^`])\1", re.DOTALL)
+_DTS = re.compile(r"<t:(-?\d{1,13})(?::([tTdDfFR]))?>")
+_MASKED = re.compile(r"\[([^\[\]\n]{1,200})\]\(<?(https?://[^\s)<>]+)>?\)")
+_URL = re.compile(r"<(https?://[^\s>]+)>|https?://[^\s<]+[^\s<.,:;\"')\]!?*_~|]")
+_ATOM = re.compile("|".join(f"(?:{p.pattern})" for p in (_DTS, _TOKEN, _MASKED, _URL)))
+_EMPHASIS = (
+    (re.compile(r"\|\|(.+?)\|\|", re.DOTALL), "<span class='spoiler' title='Spoiler: click to show'>{}</span>"),
+    (re.compile(r"\*\*\*(?!\s)(.+?)(?<!\s)\*\*\*", re.DOTALL), "<strong><em>{}</em></strong>"),
+    (re.compile(r"\*\*(?!\s)(.+?)(?<!\s)\*\*", re.DOTALL), "<strong>{}</strong>"),
+    (re.compile(r"__(?!\s)(.+?)(?<!\s)__", re.DOTALL), "<u>{}</u>"),
+    (re.compile(r"(?<![*\w])\*(?![\s*])(.+?)(?<![\s*])\*(?![*\w])", re.DOTALL), "<em>{}</em>"),
+    (re.compile(r"(?<![\w_])_(?![\s_])(.+?)(?<![\s_])_(?![\w_])", re.DOTALL), "<em>{}</em>"),
+    (re.compile(r"~~(?!\s)(.+?)(?<!\s)~~", re.DOTALL), "<s>{}</s>"),
+)
+_HOLD = re.compile("\x00(\\d+)\x00")
 
-    `names` maps ('u'|'c'|'r', id) -> display name, built from the message's own mention lists so
-    usernames resolve even when SYKE doesn't have the Server Members intent.
+
+def _link(url: str, text: str | None = None) -> str:
+    shown = esc(text) if text is not None else esc(url)
+    return f"<a class='lnk' href='{esc(url)}' target='_blank' rel='noopener noreferrer nofollow'>{shown}</a>"
+
+
+def _inline(text: str, guild, names: dict, held: list) -> str:
+    """Mentions, emoji, timestamps and links, then **bold** / *italic* / __underline__ / ~~strike~~ / ||spoiler||."""
+    out, last = [], 0
+    for mo in _ATOM.finditer(text):
+        out.append(esc(text[last:mo.start()]))
+        tok = mo.group(0)
+        dts, masked = _DTS.fullmatch(tok), _MASKED.fullmatch(tok)
+        if dts:
+            html_ = (f"<time class='dts' data-dts='{dts.group(1)}' data-f='{dts.group(2) or 'f'}'>"
+                     f"{esc(tok)}</time>")
+        elif masked:
+            html_ = _link(masked.group(2), masked.group(1))
+        elif tok.startswith("http") or tok.startswith("<http"):
+            html_ = _link(tok.strip("<>"))
+        else:
+            html_ = _token_html(tok, guild, names)
+        held.append(html_)
+        out.append(f"\x00{len(held) - 1}\x00")
+        last = mo.end()
+    out.append(esc(text[last:]))
+    rendered = "".join(out)
+    for pattern, wrap in _EMPHASIS:
+        rendered = pattern.sub(lambda m, w=wrap: w.format(m.group(1)), rendered)
+    return rendered
+
+
+def _blocks(text: str, guild, names: dict, held: list) -> str:
+    """Line-level markdown: > quotes (and >>> for the rest), # headings, -# subtext and - lists."""
+    lines = text.split("\n")
+    out: list[str] = []
+    quote: list[str] = []
+    rest_quoted = False
+
+    def flush():
+        if quote:
+            out.append("<div class='bq'>" + "\n".join(quote) + "</div>")
+            quote.clear()
+
+    for i, line in enumerate(lines):
+        if rest_quoted:
+            quote.append(_inline(line, guild, names, held))
+            continue
+        if line.startswith(">>> "):
+            rest_quoted = True
+            quote.append(_inline(line[4:], guild, names, held))
+            continue
+        if line.startswith("> ") or line == ">":
+            quote.append(_inline(line[2:], guild, names, held))
+            continue
+        flush()
+        heading = re.match(r"(#{1,3}) (\S.*)", line)
+        if heading:
+            out.append(f"<div class='h{len(heading.group(1))}'>{_inline(heading.group(2), guild, names, held)}</div>")
+        elif line.startswith("-# ") and line[3:].strip():
+            out.append(f"<div class='subtext'>{_inline(line[3:], guild, names, held)}</div>")
+        elif re.match(r"\s{0,3}[-*] \S", line):
+            depth = len(line) - len(line.lstrip())
+            out.append(f"<div class='li' style='margin-left:{8 + depth * 8}px'>"
+                       f"{_inline(line.lstrip()[2:], guild, names, held)}</div>")
+        else:
+            solo = _HOLD.fullmatch(line.strip())
+            block = solo is not None and held[int(solo.group(1))].startswith("<pre")
+            out.append(_inline(line, guild, names, held) + ("\n" if i < len(lines) - 1 and not block else ""))
+    flush()
+    return "".join(out)
+
+
+def render_content(content: str, guild, names: dict | None = None, inline: bool = False) -> str:
+    """Message text as Discord shows it: markdown, code, spoilers, links, timestamps, custom emoji as images and
+    mentions as chips. Everything is escaped first; only the markup made here is HTML.
+
+    `names` maps ('u'|'c'|'r', id) -> display name, built from the message's own mention lists so usernames resolve
+    even when SYKE doesn't have the Server Members intent. `inline` is for one-line previews (reply snippets): no
+    quotes, headings or code blocks.
     """
     if not content:
         return ""
     names = names or {}
-    out, last = [], 0
-    for mo in _TOKEN.finditer(content):
-        out.append(esc(content[last:mo.start()]))
-        out.append(_token_html(mo.group(0), guild, names))
-        last = mo.end()
-    out.append(esc(content[last:]))
-    return "".join(out)
+    held: list[str] = []
+
+    def code_block(mo):
+        if inline:
+            held.append(f"<code class='ic'>{esc(' '.join(mo.group(2).split()))}</code>")
+        else:
+            lang = f" data-lang='{esc(mo.group(1))}'" if mo.group(1) else ""
+            held.append(f"<pre class='cb'{lang}><code>{esc(mo.group(2).strip(chr(10)))}</code></pre>")
+        return f"\x00{len(held) - 1}\x00"
+
+    def inline_code(mo):
+        held.append(f"<code class='ic'>{esc(mo.group(2))}</code>")
+        return f"\x00{len(held) - 1}\x00"
+
+    text = _CODE_BLOCK.sub(code_block, content)
+    text = _INLINE_CODE.sub(inline_code, text)
+    if inline:
+        rendered = _inline(" ".join(text.split()), guild, names, held)
+    else:
+        rendered = _blocks(text, guild, names, held)
+    for _ in range(3):              # held pieces can hold others (a link inside a quote inside a spoiler)
+        if "\x00" not in rendered:
+            break
+        rendered = _HOLD.sub(lambda m: held[int(m.group(1))], rendered)
+    return rendered
 
 
 def _mention_names(message) -> dict:
@@ -556,7 +734,57 @@ h1{font-size:22px;margin:0 0 4px;}h2{font-size:17px;margin:22px 0 10px;}
 .m:hover{background:#1e1e26;}
 .m .av{width:40px;flex:0 0 40px;}
 .m .av img{width:40px;height:40px;border-radius:50%;display:block;}
-.m.grouped .av{visibility:hidden;height:0;}
+.m.grouped .av{height:0;overflow:visible;}
+.m.grouped .av img{display:none;}
+.m{position:relative;}
+.gts{display:block;visibility:hidden;font-size:10px;color:var(--muted);text-align:right;line-height:22px;white-space:nowrap;}
+.m:hover .gts{visibility:visible;}
+.m .acts{position:absolute;top:-14px;right:12px;display:none;gap:2px;background:#24242e;border:1px solid var(--line);
+border-radius:8px;padding:2px;box-shadow:0 4px 12px rgba(0,0,0,.35);z-index:2;}
+.m:hover .acts,.m .acts:focus-within{display:flex;}
+.m .acts button,.m .acts a{background:none;border:0;color:#b5bac1;width:28px;height:26px;border-radius:6px;
+font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;}
+.m .acts button:hover,.m .acts a:hover{background:#34343f;color:#fff;text-decoration:none;}
+.no-reply .m .acts [data-act=reply]{display:none;}
+.m .text strong{color:#f2f3f5;}
+.m .text .lnk,.emb .lnk,.cv-text .lnk{color:#00a8fc;}
+.ic{background:#2b2d31;border:1px solid #1f2023;border-radius:4px;padding:0 .25em;font-size:.86em;
+font-family:ui-monospace,SFMono-Regular,Consolas,monospace;}
+.cb{background:#2b2d31;border:1px solid #1f2023;border-radius:6px;padding:8px 10px;margin:4px 0;max-width:720px;
+overflow-x:auto;white-space:pre;font-size:13px;line-height:1.45;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;}
+.cb code{background:none;border:0;padding:0;}
+.bq{border-left:4px solid #4e5058;padding-left:10px;margin:2px 0;}
+.h1,.h2,.h3{font-weight:700;color:#f2f3f5;line-height:1.3;margin:6px 0 2px;}
+.h1{font-size:1.5em;}.h2{font-size:1.25em;}.h3{font-size:1.1em;}
+.subtext{font-size:12px;color:var(--muted);}
+.li::before{content:'•';margin-right:8px;color:var(--muted);}
+.spoiler{background:#1e1f22;color:transparent;border-radius:3px;cursor:pointer;transition:background .1s;}
+.spoiler *{visibility:hidden;}
+.spoiler.shown{background:#ffffff1a;color:inherit;cursor:auto;}
+.spoiler.shown *{visibility:visible;}
+.dts{background:#ffffff14;border-radius:3px;padding:0 2px;}
+.dm-wrap{position:relative;}
+.dmfind{width:100%;max-width:420px;margin:4px 0 12px;background:#0f0f14;border:1px solid var(--line);border-radius:8px;
+color:var(--text);font-size:14px;padding:8px 10px;}
+.dmflag{margin-left:6px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#f87171;
+border:1px solid #f8717166;border-radius:4px;padding:0 4px;vertical-align:middle;}
+.daysep{display:flex;align-items:center;gap:8px;margin:18px 8px 2px;color:var(--muted);font-size:12px;font-weight:600;}
+.daysep::before,.daysep::after{content:'';flex:1;border-top:1px solid var(--line);}
+.jumpwrap{position:relative;height:0;}
+.jumpnow{position:absolute;left:50%;transform:translateX(-50%);bottom:12px;z-index:5;background:var(--brand);color:#fff;
+border:0;border-radius:999px;padding:6px 14px;font-size:13px;font-weight:600;box-shadow:0 4px 14px rgba(0,0,0,.4);
+cursor:pointer;}
+.jumpnow[hidden]{display:none;}
+.replybar{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);background:#1e1e26;
+border-radius:8px 8px 0 0;padding:6px 10px;margin-bottom:-4px;}
+.replybar[hidden]{display:none;}
+.replybar b{color:var(--text);}
+.dc-head .topic{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto;}
+.ch-tabs a,#hidedel{white-space:nowrap;}
+.replybar label{margin-left:auto;display:flex;gap:4px;align-items:center;cursor:pointer;}
+.replybar .x{background:none;border:0;color:var(--muted);font-size:16px;cursor:pointer;}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#111118;color:#fff;
+border:1px solid var(--line);border-radius:8px;padding:6px 12px;font-size:13px;z-index:50;}
 .m .content{min-width:0;flex:1;}
 .m .head{display:flex;align-items:baseline;gap:8px;line-height:1.3;}
 .m .name{font-weight:600;color:#f2f3f5;}
@@ -664,7 +892,7 @@ color:#fff;text-shadow:0 1px 4px #000;pointer-events:none;}
 .tile.file{aspect-ratio:auto;background:#2b2d31;padding:10px;color:var(--text);font-size:13px;}
 .ch-search{margin-left:auto;}
 .ch-search input{background:#0f0f14;border:1px solid var(--line);border-radius:6px;color:var(--text);
-font-size:13px;padding:5px 8px;width:200px;}
+font-size:13px;padding:5px 8px;width:clamp(170px,20vw,300px);}
 .sr-head{color:var(--muted);font-size:13px;padding:4px 2px 10px;border-bottom:1px solid var(--line);margin-bottom:8px;
 display:flex;justify-content:space-between;align-items:center;}
 .sr{padding:8px;border-radius:6px;margin-bottom:2px;}
@@ -753,6 +981,7 @@ padding:8px 12px;min-width:0;}
 .fav{width:20px;height:20px;border-radius:50%;flex:none;}
 .frx .ie{width:1.3em;height:1.3em;}
 .fi .m{padding:2px 0;background:none;}
+.fi .m .acts{display:none!important;}
 .fi .m:hover{background:none;}
 .fi .rx{pointer-events:none;}
 /* Server overview */
@@ -929,6 +1158,7 @@ class WebDashboard:
         a("/g/{gid}/u/{uid}", self.member_profile)
         a("/dms", self.dms_page)
         a("/dm/{uid}", self.dm_view)
+        a("/dm/{uid}/messages", self.dm_messages)
         a("/g/{gid}/alts", self.alt_scan)
         a("/g/{gid}/memory", self.memory_page)
         p("/g/{gid}/memory/remove", self.memory_remove)
@@ -1650,7 +1880,7 @@ channels.</li>
                 ref_name = getattr(ref.author, "display_name", "someone")
                 snippet_txt = " ".join((ref.content or "").split())
                 if snippet_txt:
-                    snippet = render_content(snippet_txt[:120], guild, _mention_names(ref))
+                    snippet = render_content(snippet_txt[:120], guild, _mention_names(ref), inline=True)
                 elif getattr(ref, "attachments", None):
                     snippet = "<span class='rmeta'>📎 attachment</span>"
                 elif getattr(ref, "embeds", None) or getattr(ref, "stickers", None):
@@ -1701,8 +1931,16 @@ channels.</li>
                 f"<div class='head'><a class='name' href='{profile}'{name_style}>{esc(author.display_name)}{app}</a>"
                 f"<time class='ts' data-ts='{ts}'></time></div>")
 
-        av = f"<a class='av' href='{profile}'><img src='{esc(avatar)}' alt='' loading='lazy'></a>"
-        return (f"<div class='m{' grouped' if same else ''}' data-mid='{m.id}'>{av}"
+        av = (f"<div class='av'><time class='gts' data-ts='{ts}'></time></div>" if same else
+              f"<a class='av' href='{profile}'><img src='{esc(avatar)}' alt='' loading='lazy'></a>")
+        where = getattr(guild, "id", None) or "@me"
+        link = f"https://discord.com/channels/{where}/{getattr(getattr(m, 'channel', None), 'id', 0)}/{m.id}"
+        acts = (f"<div class='acts' data-name='{esc(author.display_name)}'>"
+                "<button type='button' data-act='reply' title='Reply as SYKE'>↩</button>"
+                "<button type='button' data-act='copy' title='Copy text'>⧉</button>"
+                "<button type='button' data-act='id' title='Copy message ID'>#</button>"
+                f"<a href='{esc(link)}' target='_blank' rel='noopener' title='Open in Discord'>↗</a></div>")
+        return (f"<div class='m{' grouped' if same else ''}' data-mid='{m.id}' data-uid='{author.id}'>{av}{acts}"
                 f"<div class='content'>{reply}{head}{body}{''.join(stickers)}"
                 f"{''.join(atts)}{''.join(embeds)}{components_html}{forward_html}{reactions}</div></div>")
 
@@ -1819,28 +2057,30 @@ channels.</li>
         csrf = self._hidden_csrf(user[0])
         head = self._channel_header(guild, channel, "chat", query)
         if can_send:
-            inp = (f"<form class='dc-input' method='post' action='/g/{guild.id}/c/{channel.id}/say'>{csrf}"
+            inp = (f"<form class='dc-input' id='sayform' method='post' action='/g/{guild.id}/c/{channel.id}/say'>{csrf}"
+                   "<input type='hidden' name='reply_to' value=''>"
+                   "<div class='replybar' id='replybar' hidden>Replying to <b></b>"
+                   "<label title='Ping them, like Discord does by default'><input type='checkbox' name='ping' "
+                   "value='1' checked> @mention</label>"
+                   "<button class='x' type='button' title='Cancel reply' onclick=\"var f=this.form;"
+                   "f.reply_to.value='';this.parentNode.hidden=true;\">×</button></div>"
                    f"<textarea name='content' rows='2' maxlength='2000' required "
                    f"placeholder='Message #{esc(channel.name)} as SYKE…'></textarea>"
                    f"<div class='ir'><span class='muted'>Posts as SYKE</span>"
                    f"<button class='btn brand'>Send</button></div></form>")
         else:
-            inp = "<div class='dc-input'><div class='note'>SYKE can't send messages in this channel.</div></div>"
+            inp = ("<div class='dc-input'><div class='note'>SYKE can't send messages in this channel.</div></div>"
+                   "<style>.m .acts [data-act=reply]{display:none;}</style>")
         flash_html = flash(request)
         members = self._member_list(guild)
         body = (
             f"<div class='dc'>{sidebar}"
             "<div class='dc-backdrop' onclick=\"this.closest('.dc').classList.remove('show-side')\"></div>"
             f"<div class='dc-main'>{head}"
-            f"<div class='dc-msgs' id='messages'>{flash_html}{messages}</div>{inp}</div>{members}</div>"
-            "<script>"
-            "function fmt(s){var d=new Date(s*1000),n=new Date(),"
-            "t=d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),"
-            "y=new Date(n.getTime()-864e5);"
-            "if(d.toDateString()===n.toDateString())return'Today at '+t;"
-            "if(d.toDateString()===y.toDateString())return'Yesterday at '+t;"
-            "return d.toLocaleDateString()+' '+t;}"
-            "function stamp(r){r.querySelectorAll('time[data-ts]').forEach(function(e){e.textContent=fmt(+e.dataset.ts);});}"
+            f"<div class='dc-msgs' id='messages'>{flash_html}{messages}</div>"
+            "<div class='jumpwrap'><button id='jumpnow' class='jumpnow' type='button' hidden>Jump to present</button></div>"
+            f"{inp}</div>{members}</div>"
+            "<script>" + CHAT_JS +
             "var pane=document.getElementById('messages');"
             f"var JUMP={jump_to if jump_to else 'null'};"
             "function bot(){return pane.scrollHeight-pane.scrollTop-pane.clientHeight<100;}"
@@ -1866,9 +2106,17 @@ channels.</li>
                "else{pane.scrollTop=pane.scrollHeight;}"
                # Live updates over a WebSocket — instant, no flicker, like a real client.
                "function nodeOf(h){var t=document.createElement('div');t.innerHTML=h;return t.firstElementChild;}"
+               "var jb=document.getElementById('jumpnow'),unseen=0;"
+               "function jumpLabel(){jb.textContent=unseen?unseen+' new message'+(unseen>1?'s':'')+' · Jump to present'"
+               ":'Jump to present';}"
+               "jb.onclick=function(){if(JUMP){location.href=location.pathname;return;}"
+               "pane.scrollTop=pane.scrollHeight;unseen=0;jb.hidden=true;};"
+               "pane.addEventListener('scroll',function(){var far=pane.scrollHeight-pane.scrollTop-pane.clientHeight;"
+               "if(far<100&&!JUMP){unseen=0;jb.hidden=true;}else if(far>600||JUMP){jumpLabel();jb.hidden=false;}});"
                "function append(h){var b=bot(),n=nodeOf(h);if(!n)return;"
                "if(pane.querySelector(\".m[data-mid='\"+n.dataset.mid+\"']\"))return;"
-               "pane.appendChild(n);stamp(n);if(b)pane.scrollTop=pane.scrollHeight;}"
+               "pane.appendChild(n);stamp(n);if(b&&!JUMP)pane.scrollTop=pane.scrollHeight;"
+               "else{unseen++;jumpLabel();jb.hidden=false;}}"
                "function mOf(id){return pane.querySelector(\".m[data-mid='\"+id+\"']\");}"
                # Edits keep what it said before, one click away.
                "function editM(id,h,was){var e=mOf(id),n=nodeOf(h);if(!e||!n)return;"
@@ -1943,7 +2191,7 @@ channels.</li>
                 groups[label] = []
                 order.append(label)
             groups[label].append(m)
-        rows = [f"<div class='dc-members'><div class='mcat'>Members — {len(members)}</div>"]
+        rows = ["<div class='dc-members'>"]       # one header per group, like Discord (no total above them)
         for label in order:
             rows.append(f"<div class='mcat'>{esc(label)} — {len(groups[label])}</div>")
             for m in groups[label]:
@@ -2008,24 +2256,30 @@ channels.</li>
             when = (f" · last <time data-ts='{int(last)}'></time>" if last else "")
             seen = f" · {count:,} message{'s' * (count != 1)}" if count else ""
             img = f"<img src='{esc(av)}' alt='' loading='lazy'>" if av else "<div class='dmav'>💬</div>"
-            cards.append(f"<a class='dmcard' href='/dm/{uid}'>{img}"
-                         f"<div><div class='dmn'>{esc(name)}</div>"
+            flag = "<span class='dmflag' title='On the blacklist: SYKE ignores them'>blacklisted</span>" \
+                if blacklist.is_blocked(uid) else ""
+            cards.append(f"<a class='dmcard' href='/dm/{uid}' data-k='{esc((name + ' ' + str(uid) + ' ' + getattr(u, 'name', '')).lower())}'>{img}"
+                         f"<div><div class='dmn'>{esc(name)}{flag}</div>"
                          f"<div class='muted'>{handle}{uid}{seen}{when}</div></div></a>")
         body = (
             "<div class='prof'><h1>💬 Direct messages</h1>"
             f"<p class='muted'>Every DM conversation with SYKE: {len(rows):,} people. SYKE keeps this list itself, "
             "because Discord doesn't let bots list their DMs: anyone who DMs him (or gets a DM from him) shows up "
             "here.</p>"
-            + (f"<div class='dmgrid'>{''.join(cards)}</div>" if cards
+            + ("<input id='dmfind' class='dmfind' type='search' autocomplete='off' "
+               "placeholder='Filter by name, @username or ID'>" if len(cards) > 6 else "")
+            + (f"<div class='dmgrid' id='dmgrid'>{''.join(cards)}</div>" if cards
                else "<div class='note'>No DM conversations yet.</div>")
-            + "<script>document.querySelectorAll('time[data-ts]').forEach(function(e){"
-              "e.textContent=new Date(+e.dataset.ts*1000).toLocaleString();});</script></div>"
+            + "<script>" + CHAT_JS +
+              "stamp(document);var f=document.getElementById('dmfind');if(f)f.oninput=function(){var q=f.value.trim()"
+              ".toLowerCase().replace(/^@/,'');document.querySelectorAll('#dmgrid .dmcard').forEach(function(c){"
+              "c.style.display=c.dataset.k.indexOf(q)>-1?'':'none';});};</script></div>"
         )
         return layout("Direct messages", body, user=user)
 
-    async def dm_view(self, request: web.Request) -> web.Response:
-        user = self._user(request)
-        if user is None:
+    async def _dm_channel(self, request: web.Request):
+        """The DM channel with /dm/{uid}'s user, opening it if this session hasn't yet."""
+        if self._user(request) is None:
             raise web.HTTPFound("/login")
         try:
             uid = int(request.match_info["uid"])
@@ -2038,6 +2292,14 @@ channels.</li>
                 channel = member.dm_channel or await member.create_dm()
         if channel is None:
             raise web.HTTPNotFound(text="No DM with that user")
+        return channel
+
+    async def dm_view(self, request: web.Request) -> web.Response:
+        user = self._user(request)
+        if user is None:
+            raise web.HTTPFound("/login")
+        channel = await self._dm_channel(request)
+        uid = channel.recipient.id
         u = channel.recipient
         name = getattr(u, "global_name", None) or getattr(u, "name", None) or f"User {uid}"
         av = getattr(getattr(u, "display_avatar", None), "url", "")
@@ -2046,27 +2308,49 @@ channels.</li>
             f"<div class='dmhead'><a class='btn sm' href='/dms'>← DMs</a>"
             f"<img src='{esc(av)}' alt=''><div><div class='dmn'>{esc(name)}</div>"
             f"<div class='muted'>@{esc(getattr(u, 'name', ''))} · {uid}</div></div></div>"
+            "<div class='dm-wrap'>"
             f"<div class='dc-msgs dm-pane' id='messages'>{messages}</div>"
-            "<script>document.querySelectorAll('time[data-ts]').forEach(function(e){"
-            "var d=new Date(+e.dataset.ts*1000);e.textContent=d.toLocaleDateString()+' '+"
-            "d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});});"
-            "var p=document.getElementById('messages');if(p)p.scrollTop=p.scrollHeight;</script>"
+            "<div class='jumpwrap'><button id='jumpnow' class='jumpnow' type='button' hidden>Jump to present</button>"
+            "</div></div>"
+            "<style>.m .acts [data-act=reply]{display:none;}</style>"
+            "<script>" + CHAT_JS + DM_JS + "</script>"
         )
         return layout(f"DM · {name}", body, user=user, wide=True)
 
-    async def _dm_messages_html(self, channel) -> str:
+    async def _dm_messages_html(self, channel, before: int | None = None, after: int | None = None) -> str:
+        """A page of a DM: the newest, older than `before` (scroll-back) or newer than `after` (live)."""
+        kwargs = {"limit": MESSAGES_SHOWN}
+        if before is not None:
+            kwargs["before"] = discord.Object(id=before)
+        elif after is not None:
+            kwargs["after"] = discord.Object(id=after)
         try:
-            msgs = [m async for m in channel.history(limit=MESSAGES_SHOWN)]
+            msgs = [m async for m in channel.history(**kwargs)]
         except (discord.HTTPException, AttributeError):
-            return "<div class='dc-empty'>Couldn't load this conversation.</div>"
-        msgs.reverse()
+            return "" if (before or after) is not None else \
+                "<div class='dc-empty'>Couldn't load this conversation.</div>"
+        msgs.sort(key=lambda m: m.id)
         if not msgs:
-            return "<div class='dc-empty'>No messages in this DM.</div>"
+            return "" if (before or after) is not None else "<div class='dc-empty'>No messages in this DM.</div>"
+        refs, deleted = await self._resolve_refs(channel, msgs)
         html, prev = [], None
         for m in msgs:
-            html.append(self._one_message(m, prev))
+            html.append(self._one_message(m, prev, refs, deleted))
             prev = m
         return "".join(html)
+
+    async def dm_messages(self, request: web.Request) -> web.Response:
+        """Older (?before=) or newer (?after=) messages of a DM, as HTML for the DM view."""
+        channel = await self._dm_channel(request)
+
+        def num(key):
+            raw = request.query.get(key) or ""
+            return int(raw) if raw.isdigit() else None
+        before, after = num("before"), num("after")
+        if before is None and after is None:
+            raise web.HTTPBadRequest(text="before or after")
+        return web.Response(text=await self._dm_messages_html(channel, before=before, after=after),
+                            content_type="text/html")
 
     async def memory_page(self, request: web.Request) -> web.Response:
         user = self._user(request)
@@ -2949,8 +3233,12 @@ channels.</li>
         back = f"/g/{guild.id}/c/{cid}"
         if channel is None or not hasattr(channel, "send") or not content:
             raise self._redirect(back, err="Nothing to send.")
+        reply_to = (data.get("reply_to") or "").strip()
+        reference = (discord.MessageReference(message_id=int(reply_to), channel_id=cid, guild_id=guild.id,
+                                              fail_if_not_exists=False) if reply_to.isdigit() else None)
+        allowed = discord.AllowedMentions(everyone=False, roles=False, replied_user=bool(data.get("ping")))
         try:
-            await channel.send(content[:2000], allowed_mentions=discord.AllowedMentions(everyone=False, roles=False))
+            await channel.send(content[:2000], reference=reference, allowed_mentions=allowed)
         except discord.HTTPException:
             raise self._redirect(back, err="Discord refused to send that.")
         log.info("Owner sent a message as SYKE in %s/#%s", guild.id, getattr(channel, "name", cid))
