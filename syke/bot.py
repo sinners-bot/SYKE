@@ -442,6 +442,8 @@ class Syke(commands.Bot):
     def dispatch(self, event_name: str, /, *args, **kwargs) -> None:
         """Blacklisted users never reach SYKE's listeners or commands; only moderation still sees them."""
         if blacklist.is_blocked(blacklist.event_user(event_name, args)):
+            if event_name == "message" and getattr(args[0], "guild", 1) is None:
+                self.note_dm(args[0])          # SYKE won't answer, but the owner's DM list still shows them
             method = "on_" + event_name
             for listener in self.extra_events.get(method, []):
                 if blacklist.moderation_only(listener):

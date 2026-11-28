@@ -109,3 +109,23 @@ async def test_only_owners_can_manage_it(bot):
     assert "can't be blacklisted" in replies[-1] and not bl.is_blocked(OWNER)
     await cog.remove.callback(cog, owner, who=str(OK))
     assert not bl.is_blocked(OK) and bot.storage.get_config(0, "blacklist")["ids"] == [BAD]
+
+
+async def test_the_owner_dashboard_still_sees_everything_they_say(bot):
+    from syke.web_live import LiveHub
+    await bot._async_setup_hook()
+    assert LiveHub.sees_blacklisted
+    heard = []
+
+    class Watcher:                       # like the dashboard's live feed
+        sees_blacklisted = True
+
+        async def on_message(self, message):
+            heard.append(message.author.id)
+    bot.add_listener(Watcher().on_message, "on_message")
+    noted = []
+    bot.note_dm = lambda message: noted.append(message.author.id)
+    bot.dispatch("message", NS(author=NS(id=BAD), guild=NS(id=1)))
+    bot.dispatch("message", NS(author=NS(id=BAD), guild=None))          # a DM to SYKE
+    await asyncio.sleep(0.05)
+    assert heard == [BAD, BAD] and noted == [BAD]                        # seen by the owner, never answered

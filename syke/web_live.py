@@ -58,6 +58,8 @@ def snippet(text: str, limit: int = 160) -> str:
 
 
 class LiveHub:
+    sees_blacklisted = True     # the owner sees everything, blacklisted users included (see blacklist.py)
+
     def __init__(self, dash) -> None:
         self.dash = dash
         self.bot = dash.bot

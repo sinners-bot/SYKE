@@ -3,7 +3,8 @@
 A blacklisted user can't use any command (prefix, slash, buttons, menus or forms), and SYKE never replies to,
 reacts to, yaps about, repeats or answers them: their messages never reach his listeners, and they're left out of
 every chat he reads for context. Moderation still sees them, so the word filter, spam protection, raid
-protection and mod logs keep working on them. Owners can't be blacklisted.
+protection and mod logs keep working on them, and so does the owner dashboard: its chat view, live feed and DM
+list show everything they say. Owners can't be blacklisted.
 
 `blacklist add <user>`, `blacklist remove <user>` and `blacklist` (the list) are for SYKE's owners only.
 """
@@ -95,8 +96,10 @@ def event_user(event: str, args: tuple) -> int | None:
 
 
 def moderation_only(listener) -> bool:
-    cog = getattr(listener, "__self__", None)
-    return getattr(cog, "qualified_name", None) in MODERATION_COGS
+    """Listeners that still get a blacklisted user's events: moderation, and watchers that only observe for the
+    owner (the dashboard's live feed marks itself with `sees_blacklisted = True`)."""
+    owner = getattr(listener, "__self__", None)
+    return getattr(owner, "qualified_name", None) in MODERATION_COGS or getattr(owner, "sees_blacklisted", False)
 
 
 def interaction_user(data: dict) -> int | None:
